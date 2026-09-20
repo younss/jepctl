@@ -1,0 +1,46 @@
+name: Bug report
+description: Something is broken or behaves unexpectedly.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. jepa pull facebook/dinov2-small
+        2. jepa serve --no-auth
+        3. POST /api/gestures ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: jepa version / commit
+      placeholder: "jepa --version"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: OS, hardware and backend
+      placeholder: "macOS 15 / M2 / metal — Ubuntu 24.04 / RTX 4070 / cuda — CPU"
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      placeholder: "facebook/ijepa_vith14_1k"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Run with `RUST_LOG=debug jepa serve` and paste the relevant lines. The `weights` field of `GET /api/status` is useful too.
+      render: shell

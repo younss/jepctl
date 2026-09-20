@@ -1,0 +1,21 @@
+name: Model support request
+description: Ask for a Hugging Face checkpoint to be added to the verified catalog.
+labels: ["model"]
+body:
+  - type: input
+    id: repo
+    attributes:
+      label: Hugging Face repo
+      placeholder: "facebook/dinov2-large"
+    validations:
+      required: true
+  - type: textarea
+    id: layout
+    attributes:
+      label: Checkpoint layout
+      description: Paste the first block's tensor names and shapes (see CONTRIBUTING.md → "Adding a model").
+      render: text
+  - type: textarea
+    id: why
+    attributes:
+      label: Why this model?

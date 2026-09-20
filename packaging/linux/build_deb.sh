@@ -2,13 +2,13 @@
 set -euo pipefail
 
 # Linux Debian (.deb) Package and Tarball Generator for JEPA
-VERSION="0.1.0"
+VERSION="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
 ARCH="$(dpkg --print-architecture 2>/dev/null || echo "amd64")"
 PKG_NAME="jepa_${VERSION}_${ARCH}"
 BUILD_DIR="target/packaging_linux/${PKG_NAME}"
 
 echo "Building release binary for Linux..."
-cargo build --release
+cargo build --release ${JEPA_FEATURES:+--features "$JEPA_FEATURES"}
 
 rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}/DEBIAN"

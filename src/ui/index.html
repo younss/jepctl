@@ -13,7 +13,7 @@
             <div class="brand">
                 <span class="logo-symbol">&#9670;</span>
                 <span class="logo-title">JEPA</span>
-                <span class="version-tag">v0.1.0</span>
+                <span class="version-tag" id="app-version">v—</span>
             </div>
             <div class="status-indicator">
                 <span class="pulse-dot" id="status-dot"></span>
@@ -167,7 +167,7 @@
                         <div class="quick-actions-row">
                             <button class="btn btn-primary" id="btn-quick-camera">Launch Camera Playground</button>
                             <button class="btn btn-secondary" id="btn-quick-pull-ijepa">Pull I-JEPA (ViT-H/14)</button>
-                            <button class="btn btn-secondary" id="btn-quick-pull-vjepa">Pull V-JEPA (ViT-L/16)</button>
+                            <button class="btn btn-secondary" id="btn-quick-pull-dinov2">Pull DINOv2 (ViT-S/14)</button>
                         </div>
                     </div>
                 </div>
@@ -202,115 +202,9 @@
                 <!-- Verified Remote Catalog -->
                 <div class="card">
                     <h3>Verified Catalog Browser</h3>
-                    <p>One-click installation for tested Vision Transformers and Joint-Embedding Predictive Architectures.</p>
-                    <div class="verified-grid">
-                        <div class="verified-card">
-                            <div class="badge-row">
-                                <span class="badge badge-image">Google</span>
-                                <span class="badge badge-dim">768 Dims</span>
-                            </div>
-                            <h4>google/vit-base-patch16-224</h4>
-                            <p>Google Vision Transformer Base (ViT-B/16). 86M parameters. Standard ImageNet-21k pre-trained architecture.</p>
-                            <div class="card-action">
-                                <button class="btn btn-sm btn-primary" data-pull="google/vit-base-patch16-224">Pull Checkpoint</button>
-                            </div>
-                        </div>
-
-                        <div class="verified-card">
-                            <div class="badge-row">
-                                <span class="badge badge-image">Google</span>
-                                <span class="badge badge-dim">768 Dims</span>
-                            </div>
-                            <h4>google/siglip-base-patch16-224</h4>
-                            <p>Google SigLIP Base (ViT-B/16). 86M parameters. Sigmoid loss multimodal vision encoder.</p>
-                            <div class="card-action">
-                                <button class="btn btn-sm btn-primary" data-pull="google/siglip-base-patch16-224">Pull Checkpoint</button>
-                            </div>
-                        </div>
-
-                        <div class="verified-card">
-                            <div class="badge-row">
-                                <span class="badge badge-image">Microsoft</span>
-                                <span class="badge badge-dim">768 Dims</span>
-                            </div>
-                            <h4>microsoft/beit-base-patch16-224</h4>
-                            <p>Microsoft BEiT Base (ViT-B/16). 86M parameters. Self-supervised masked image modeling representation.</p>
-                            <div class="card-action">
-                                <button class="btn btn-sm btn-primary" data-pull="microsoft/beit-base-patch16-224">Pull Checkpoint</button>
-                            </div>
-                        </div>
-
-                        <div class="verified-card">
-                            <div class="badge-row">
-                                <span class="badge badge-image">TIMM</span>
-                                <span class="badge badge-dim">768 Dims</span>
-                            </div>
-                            <h4>timm/vit_base_patch16_224.augreg_in21k</h4>
-                            <p>TIMM Vision Transformer Base AugReg (ViT-B/16). 86M parameters. Augmented regularization checkpoint.</p>
-                            <div class="card-action">
-                                <button class="btn btn-sm btn-primary" data-pull="timm/vit_base_patch16_224.augreg_in21k">Pull Checkpoint</button>
-                            </div>
-                        </div>
-
-                        <div class="verified-card">
-                            <div class="badge-row">
-                                <span class="badge badge-image">Meta</span>
-                                <span class="badge badge-dim">384 Dims</span>
-                            </div>
-                            <h4>facebook/dinov2-small</h4>
-                            <p>Meta DINOv2 Small (ViT-S/14). 22M parameters. Ultra-fast self-supervised vision features with 14x14 patches.</p>
-                            <div class="card-action">
-                                <button class="btn btn-sm btn-primary" data-pull="facebook/dinov2-small">Pull Checkpoint</button>
-                            </div>
-                        </div>
-
-                        <div class="verified-card">
-                            <div class="badge-row">
-                                <span class="badge badge-image">Meta</span>
-                                <span class="badge badge-dim">768 Dims</span>
-                            </div>
-                            <h4>facebook/dinov2-base</h4>
-                            <p>Meta DINOv2 Base (ViT-B/14). 86M parameters. High-accuracy self-supervised representations with 14x14 patches.</p>
-                            <div class="card-action">
-                                <button class="btn btn-sm btn-primary" data-pull="facebook/dinov2-base">Pull Checkpoint</button>
-                            </div>
-                        </div>
-
-                        <div class="verified-card">
-                            <div class="badge-row">
-                                <span class="badge badge-image">Meta</span>
-                                <span class="badge badge-dim">768 Dims</span>
-                            </div>
-                            <h4>facebook/ijepa_vitb16_1k</h4>
-                            <p>I-JEPA Vision Transformer Base (ViT-B/16). 86M parameters. Lightweight local predictive testing checkpoint.</p>
-                            <div class="card-action">
-                                <button class="btn btn-sm btn-primary" data-pull="facebook/ijepa_vitb16_1k">Pull Checkpoint</button>
-                            </div>
-                        </div>
-
-                        <div class="verified-card">
-                            <div class="badge-row">
-                                <span class="badge badge-image">Meta</span>
-                                <span class="badge badge-dim">1280 Dims</span>
-                            </div>
-                            <h4>facebook/ijepa_vith14_1k</h4>
-                            <p>I-JEPA Vision Transformer Huge (ViT-H/14). 632M parameters. 14x14 patch resolution.</p>
-                            <div class="card-action">
-                                <button class="btn btn-sm btn-primary" data-pull="facebook/ijepa_vith14_1k">Pull Checkpoint</button>
-                            </div>
-                        </div>
-
-                        <div class="verified-card">
-                            <div class="badge-row">
-                                <span class="badge badge-video">Meta</span>
-                                <span class="badge badge-dim">1024 Dims</span>
-                            </div>
-                            <h4>facebookresearch/jepa:vjepa_vitl16</h4>
-                            <p>V-JEPA Spatio-Temporal Video Transformer Large (ViT-L/16). 307M parameters. 16-frame sliding tubelets.</p>
-                            <div class="card-action">
-                                <button class="btn btn-sm btn-primary" data-pull="facebookresearch/jepa:vjepa_vitl16">Pull Checkpoint</button>
-                            </div>
-                        </div>
+                    <p>Every entry loads with 100% checkpoint coverage. Anything else goes through a custom Jepafile.</p>
+                    <div class="verified-grid" id="verified-grid">
+                        <p class="reasoning-empty">Chargement du catalogue...</p>
                     </div>
                 </div>
 

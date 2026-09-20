@@ -1,8 +1,8 @@
 //! V-JEPA Spatio-Temporal Video Encoder for representation learning over [B, C, T, H, W].
 
+use candle_core::{Device, Module, Tensor};
 use std::path::Path;
 use std::time::Instant;
-use candle_core::{Device, Module, Tensor};
 
 use crate::engine::vit::VitBackbone;
 use crate::engine::{build_backbone, load_checkpoint_strict};
@@ -24,13 +24,7 @@ impl VJepaModel {
         let temporal_frames = manifest.frames.unwrap_or(crate::config::VJEPA_TEMPORAL_FRAMES);
         let (varmap, mut backbone) = build_backbone(&manifest, &device)?;
         let weights = load_checkpoint_strict(&varmap, &mut backbone, weights_path, &device, &manifest.name)?;
-        Ok(Self {
-            manifest,
-            backbone,
-            device,
-            temporal_frames,
-            weights,
-        })
+        Ok(Self { manifest, backbone, device, temporal_frames, weights })
     }
 
     /// Forward pass over spatio-temporal video tensor [B, C, T, H, W]
@@ -47,11 +41,9 @@ impl VJepaModel {
         let flat_frames = permuted.reshape((b * t, c, h, w))?;
 
         // Extract spatial patch tokens: [B * T, num_patches, D]
-        let mut spatial_tokens = self.backbone.patch_embed.forward(&flat_frames)?;
+        let spatial_tokens = self.backbone.patch_embed.forward(&flat_frames)?;
         // Every frame shares the same 2D positional embedding (spatial position only).
-        if let Some(pos) = &self.backbone.pos_embed {
-            spatial_tokens = spatial_tokens.broadcast_add(pos)?;
-        }
+        let spatial_tokens = spatial_tokens.broadcast_add(&self.backbone.pos_embed)?;
         let num_patches = spatial_tokens.dim(1)?;
         let d = spatial_tokens.dim(2)?;
 

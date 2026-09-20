@@ -16,18 +16,18 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
 use crate::auth::AuthManager;
-use crate::config::{MAX_IMAGE_PAYLOAD_SIZE, MAX_VIDEO_PAYLOAD_SIZE, RuntimeConfig};
+use crate::config::{RuntimeConfig, MAX_IMAGE_PAYLOAD_SIZE, MAX_VIDEO_PAYLOAD_SIZE};
 use crate::engine::EngineManager;
+use crate::gestures::{match_gestures, GestureStore, DEFAULT_MARGIN, DEFAULT_THRESHOLD};
 use crate::hub::manifest::JepafileConfig;
 use crate::hub::ModelCatalog;
-use crate::gestures::{match_gestures, GestureStore, DEFAULT_MARGIN, DEFAULT_THRESHOLD};
 use crate::media::capture::{list_camera_devices, CameraSupervisor};
 use crate::media::image::{preprocess_image_bytes, sniff_media_format};
-use crate::media::ring_buffer::{SharedRingBuffer, MODEL_VIEW_SIZE};
+use crate::media::ring_buffer::SharedRingBuffer;
 use crate::server::middleware::{authenticate_request, SharedAuditLog};
 use crate::types::{
-    CreateKeyRequest, EmbedResponse, EnergyRequest, EnergyResponse, JepaError, ModelModality,
-    Role, SettingsDto, StatusResponse, StreamEvent,
+    CreateKeyRequest, EmbedResponse, EnergyRequest, EnergyResponse, JepaError, ModelModality, Role, SettingsDto,
+    StatusResponse, StreamEvent,
 };
 
 /// Global application state shared across HTTP route handlers
@@ -108,6 +108,7 @@ pub struct CurrentViewEmbedding {
 pub async fn embed_current_view(state: &AppState) -> Result<CurrentViewEmbedding, ApiError> {
     let model = ensure_model_loaded(state).await?;
     let modality = state.engine.get_active_modality().await.unwrap_or(ModelModality::Image);
+    let prep = state.engine.preprocessing().await;
 
     let (tensor, frame_sequence, frame_jpeg) = {
         let rb = state.ring_buffer.read().await;
@@ -117,8 +118,8 @@ pub async fn embed_current_view(state: &AppState) -> Result<CurrentViewEmbedding
         let seq = latest.sequence;
         let jpeg = latest.model_view_jpeg.clone();
         let tensor = match modality {
-            ModelModality::Image => rb.latest_image_tensor(MODEL_VIEW_SIZE, MODEL_VIEW_SIZE, &state.engine.device),
-            _ => rb.to_video_tensor(MODEL_VIEW_SIZE, MODEL_VIEW_SIZE, &state.engine.device),
+            ModelModality::Image => rb.latest_image_tensor(&prep, &state.engine.device),
+            _ => rb.to_video_tensor(&prep, &state.engine.device),
         }
         .map_err(engine_error)?;
         (tensor, seq, jpeg)
@@ -136,14 +137,7 @@ pub async fn embed_current_view(state: &AppState) -> Result<CurrentViewEmbedding
     };
     state.embeddings_total.fetch_add(1, Ordering::Relaxed);
 
-    Ok(CurrentViewEmbedding {
-        model,
-        embedding,
-        patches,
-        latency_ms,
-        frame_sequence,
-        frame_jpeg,
-    })
+    Ok(CurrentViewEmbedding { model, embedding, patches, latency_ms, frame_sequence, frame_jpeg })
 }
 
 /// GET /api/status
@@ -166,6 +160,11 @@ pub async fn handle_status(State(state): State<AppState>) -> Json<StatusResponse
     })
 }
 
+/// GET /api/catalog - Verified catalog (models known to load with full checkpoint coverage)
+pub async fn handle_catalog() -> Json<serde_json::Value> {
+    Json(json!(crate::hub::manifest::get_verified_manifests()))
+}
+
 /// GET /api/tags - List locally installed models
 pub async fn handle_tags(State(state): State<AppState>) -> Json<serde_json::Value> {
     let models = state.catalog.list_installed();
@@ -185,23 +184,13 @@ pub async fn handle_load_model(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let _ = authenticate_request(&headers, &state.auth, Role::Admin).await?;
 
-    let manifest = state
-        .catalog
-        .get_manifest(&payload.model_name)
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": format!("Model not found: {}", payload.model_name) })),
-            )
-        })?;
+    let manifest = state.catalog.get_manifest(&payload.model_name).ok_or_else(|| {
+        (StatusCode::NOT_FOUND, Json(json!({ "error": format!("Model not found: {}", payload.model_name) })))
+    })?;
 
     let weights_path = state.catalog.get_weights_path(&payload.model_name);
 
-    let report = state
-        .engine
-        .load_model(manifest, weights_path.as_deref())
-        .await
-        .map_err(engine_error)?;
+    let report = state.engine.load_model(manifest, weights_path.as_deref()).await.map_err(engine_error)?;
 
     Ok(Json(json!({
         "status": "loaded",
@@ -250,14 +239,10 @@ async fn execute_delete_model(
 
     match state.catalog.delete_model(&name) {
         Ok(true) => Ok(Json(json!({ "status": "deleted", "model": name }))),
-        Ok(false) => Err((
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": format!("Model '{}' not found on disk", name) })),
-        )),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        )),
+        Ok(false) => {
+            Err((StatusCode::NOT_FOUND, Json(json!({ "error": format!("Model '{}' not found on disk", name) }))))
+        }
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))),
     }
 }
 
@@ -277,14 +262,9 @@ pub async fn handle_delete_model_root(
     Query(query): Query<DeleteModelQuery>,
     body: Option<Json<DeleteModelPayload>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let name = query.name
-        .or_else(|| body.and_then(|Json(b)| b.name.or(b.model)))
-        .ok_or_else(|| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "Missing 'name' or 'model' parameter for deletion" })),
-            )
-        })?;
+    let name = query.name.or_else(|| body.and_then(|Json(b)| b.name.or(b.model))).ok_or_else(|| {
+        (StatusCode::BAD_REQUEST, Json(json!({ "error": "Missing 'name' or 'model' parameter for deletion" })))
+    })?;
     execute_delete_model(state, headers, name).await
 }
 
@@ -301,14 +281,12 @@ pub async fn handle_pull(
 ) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
     let _ = authenticate_request(&headers, &state.auth, Role::Admin).await?;
     let rx = state.catalog.clone().start_pull(payload.repo_id);
-    let stream = BroadcastStream::new(rx).filter_map(|res| {
-        match res {
-            Ok(event) => {
-                let serialized = serde_json::to_string(&event).unwrap_or_default();
-                Some(Ok::<_, Infallible>(format!("{}\n", serialized)))
-            }
-            Err(_) => None,
+    let stream = BroadcastStream::new(rx).filter_map(|res| match res {
+        Ok(event) => {
+            let serialized = serde_json::to_string(&event).unwrap_or_default();
+            Some(Ok::<_, Infallible>(format!("{}\n", serialized)))
         }
+        Err(_) => None,
     });
 
     Ok(Response::builder()
@@ -331,38 +309,24 @@ pub async fn handle_embed(
         let name = field.name().unwrap_or("").to_string();
         if name == "file" || name == "image" || name == "video" {
             let data = field.bytes().await.map_err(|e| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({ "error": format!("Failed reading upload field: {}", e) })),
-                )
+                (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("Failed reading upload field: {}", e) })))
             })?;
             file_bytes = Some(data.to_vec());
             break;
         }
     }
 
-    let buffer = file_bytes.ok_or_else(|| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "No 'file' multipart field provided" })),
-        )
-    })?;
+    let buffer = file_bytes
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, Json(json!({ "error": "No 'file' multipart field provided" }))))?;
 
     // Check payload limits
     if buffer.len() > MAX_VIDEO_PAYLOAD_SIZE {
-        return Err((
-            StatusCode::PAYLOAD_TOO_LARGE,
-            Json(json!({ "error": "Payload exceeds 200 MB maximum limit" })),
-        ));
+        return Err((StatusCode::PAYLOAD_TOO_LARGE, Json(json!({ "error": "Payload exceeds 200 MB maximum limit" }))));
     }
 
     // Sniff media format
-    let format = sniff_media_format(&buffer).map_err(|e| {
-        (
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            Json(json!({ "error": e.to_string() })),
-        )
-    })?;
+    let format = sniff_media_format(&buffer)
+        .map_err(|e| (StatusCode::UNSUPPORTED_MEDIA_TYPE, Json(json!({ "error": e.to_string() }))))?;
 
     // If image format: PNG, JPEG, WebP
     if matches!(format, "png" | "jpeg" | "webp") {
@@ -373,27 +337,17 @@ pub async fn handle_embed(
             ));
         }
 
-        let tensor = preprocess_image_bytes(&buffer, 224, 224, &state.engine.device).map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": format!("Image preprocessing failed: {}", e) })),
-            )
-        })?;
-
         ensure_model_loaded(&state).await?;
+        let prep = state.engine.preprocessing().await;
+        let tensor = preprocess_image_bytes(&buffer, &prep, &state.engine.device)
+            .map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("Image preprocessing failed: {e}")))?;
 
         let (model, dim, embedding, patches, latency_ms) =
             state.engine.embed_image(&tensor).await.map_err(engine_error)?;
 
         state.embeddings_total.fetch_add(1, Ordering::Relaxed);
 
-        Ok(Json(EmbedResponse {
-            model,
-            dimension: dim,
-            latency_ms,
-            embedding,
-            patch_embeddings: patches,
-        }))
+        Ok(Json(EmbedResponse { model, dimension: dim, latency_ms, embedding, patch_embeddings: patches }))
     } else {
         // Decoding uploaded video containers is not implemented yet. Say so rather
         // than silently embedding whatever the camera ring buffer holds.
@@ -415,6 +369,8 @@ pub struct StreamQuery {
     pub threshold: Option<f32>,
     /// Required lead over the runner-up (default 0.04).
     pub margin: Option<f32>,
+    /// Bearer token (query fallback for `EventSource`, which cannot set headers).
+    pub token: Option<String>,
 }
 
 /// GET /api/embed/stream - Server-Sent Events (SSE) stream of live embeddings.
@@ -425,8 +381,18 @@ pub struct StreamQuery {
 /// silently dropping frames.
 pub async fn handle_embed_stream(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<StreamQuery>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    // `EventSource` cannot set headers, so the token may also come as `?token=`.
+    let mut headers = headers;
+    if let Some(t) = params.token.as_deref() {
+        if let Ok(v) = format!("Bearer {t}").parse() {
+            headers.insert(axum::http::header::AUTHORIZATION, v);
+        }
+    }
+    let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
+
     let mut frame_rx = state.camera_supervisor.subscribe();
     let fps = params.fps.unwrap_or(10).clamp(1, 30);
     let threshold = params.threshold.unwrap_or(DEFAULT_THRESHOLD).clamp(0.0, 1.0);
@@ -492,7 +458,7 @@ pub async fn handle_embed_stream(
         }
     };
 
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
 /// POST /api/energy - Compute latent energy distance and anomaly metrics
@@ -538,22 +504,12 @@ pub async fn handle_energy(
 
     let l2_distance = (sum_sq / dim).sqrt();
     let norm_product = (norm_a * norm_b).sqrt();
-    let cosine_similarity = if norm_product > 1e-8 {
-        dot / norm_product
-    } else {
-        1.0
-    };
+    let cosine_similarity = if norm_product > 1e-8 { dot / norm_product } else { 1.0 };
     let cosine_dissimilarity = (1.0 - cosine_similarity).max(0.0);
 
     let anomaly = l2_distance > threshold;
 
-    Ok(Json(EnergyResponse {
-        l2_distance,
-        cosine_similarity,
-        cosine_dissimilarity,
-        anomaly,
-        threshold,
-    }))
+    Ok(Json(EnergyResponse { l2_distance, cosine_similarity, cosine_dissimilarity, anomaly, threshold }))
 }
 
 /// POST /api/keys - Generate scoped API key
@@ -566,10 +522,7 @@ pub async fn handle_create_key(
 
     match state.auth.create_key(req).await {
         Ok(res) => Ok(Json(json!(res))),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        )),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))),
     }
 }
 
@@ -593,14 +546,8 @@ pub async fn handle_revoke_key(
 
     match state.auth.revoke_key(&prefix).await {
         Ok(true) => Ok(Json(json!({ "status": "revoked", "prefix": prefix }))),
-        Ok(false) => Err((
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "Key prefix not found" })),
-        )),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        )),
+        Ok(false) => Err((StatusCode::NOT_FOUND, Json(json!({ "error": "Key prefix not found" })))),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))),
     }
 }
 
@@ -631,26 +578,36 @@ pub struct CameraControlQuery {
 /// POST /api/camera/start
 pub async fn handle_camera_start(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(q): Query<CameraControlQuery>,
-) -> Json<serde_json::Value> {
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
     let dev = q.device.unwrap_or(0);
-    let fps = q.fps.unwrap_or(10);
-    let _ = state.camera_supervisor.start(dev, fps);
-    Json(json!({ "status": "started", "device": dev, "fps": fps }))
+    let fps = q.fps.unwrap_or(10).clamp(1, 30);
+    state.camera_supervisor.start(dev, fps).map_err(engine_error)?;
+    Ok(Json(json!({ "status": "started", "device": dev, "fps": fps })))
 }
 
 /// POST /api/camera/stop
-pub async fn handle_camera_stop(State(state): State<AppState>) -> Json<serde_json::Value> {
+pub async fn handle_camera_stop(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
     state.camera_supervisor.stop();
-    Json(json!({ "status": "stopped" }))
+    Ok(Json(json!({ "status": "stopped" })))
 }
 
 /// GET /api/ring-buffer - Retrieve thumbnails of frames currently in sliding window
-pub async fn handle_ring_buffer(State(state): State<AppState>) -> Json<serde_json::Value> {
+pub async fn handle_ring_buffer(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
     let lock = state.ring_buffer.read().await;
     let count = lock.len();
     let thumbnails = lock.get_thumbnails();
-    Json(json!({ "count": count, "thumbnails": thumbnails }))
+    Ok(Json(json!({ "count": count, "thumbnails": thumbnails })))
 }
 
 /// POST /api/manifests - Register custom Jepafile
@@ -663,17 +620,12 @@ pub async fn handle_register_manifest(
 
     match state.catalog.register_jepafile(cfg) {
         Ok(m) => Ok(Json(json!(m))),
-        Err(e) => Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": e.to_string() })),
-        )),
+        Err(e) => Err((StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() })))),
     }
 }
 
 /// GET /api/settings - Retrieve runtime settings
-pub async fn handle_get_settings(
-    State(state): State<AppState>,
-) -> Json<SettingsDto> {
+pub async fn handle_get_settings(State(state): State<AppState>) -> Json<SettingsDto> {
     let settings = state.config.load_settings();
     Json(settings)
 }
@@ -685,12 +637,8 @@ pub async fn handle_save_settings(
     Json(dto): Json<SettingsDto>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let _ = authenticate_request(&headers, &state.auth, Role::Admin).await?;
-    let data = serde_json::to_string_pretty(&dto).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        )
-    })?;
+    let data = serde_json::to_string_pretty(&dto)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))))?;
     let _ = std::fs::write(&state.config.settings_path, data);
     Ok(Json(json!({ "status": "saved" })))
 }
@@ -704,13 +652,9 @@ pub async fn handle_get_session_token(
         return Ok(Json(json!({ "token": "no_auth", "no_auth": true })));
     }
 
-    let host_hdr = headers
-        .get("host")
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("");
-    let is_loopback = host_hdr.starts_with("127.0.0.1")
-        || host_hdr.starts_with("localhost")
-        || host_hdr.starts_with("[::1]");
+    let host_hdr = headers.get("host").and_then(|h| h.to_str().ok()).unwrap_or("");
+    let is_loopback =
+        host_hdr.starts_with("127.0.0.1") || host_hdr.starts_with("localhost") || host_hdr.starts_with("[::1]");
 
     if !is_loopback && state.config.host != "127.0.0.1" {
         return Err((
@@ -719,9 +663,19 @@ pub async fn handle_get_session_token(
         ));
     }
 
-    let token = std::fs::read_to_string(&state.config.auth_token_path)
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default();
+    // Only the embedded testbench (same origin) may bootstrap a session this way.
+    // Browsers send `Sec-Fetch-Site` on every fetch; a cross-site page gets refused
+    // even if CORS were misconfigured. Non-browser clients must use `jepa key`.
+    let fetch_site = headers.get("sec-fetch-site").and_then(|h| h.to_str().ok()).unwrap_or("same-origin");
+    if !matches!(fetch_site, "same-origin" | "none") {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "Session token is only issued to the embedded testbench (same-origin)" })),
+        ));
+    }
+
+    let token =
+        std::fs::read_to_string(&state.config.auth_token_path).map(|s| s.trim().to_string()).unwrap_or_default();
 
     Ok(Json(json!({ "token": token, "no_auth": false })))
 }

@@ -5,34 +5,32 @@ pub mod ijepa;
 pub mod vit;
 pub mod vjepa;
 
-use std::path::Path;
-use std::sync::Arc;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::{VarBuilder, VarMap};
+use std::path::Path;
+use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::engine::ijepa::IJepaModel;
-use crate::engine::vit::{load_safetensors_into_backbone, VitBackbone};
+use crate::engine::vit::{load_safetensors_into_backbone, VitBackbone, VitConfig};
 use crate::engine::vjepa::VJepaModel;
-use crate::types::{HardwareInfo, JepaError, ModelManifest, ModelModality, WeightReport};
-
-/// MLP hidden size ratio shared by every supported ViT variant.
-const MLP_RATIO: f64 = 4.0;
+use crate::types::{HardwareInfo, JepaError, ModelManifest, ModelModality, Preprocessing, WeightReport};
 
 /// Instantiate a randomly initialised backbone matching a manifest.
 pub(crate) fn build_backbone(manifest: &ModelManifest, device: &Device) -> Result<(VarMap, VitBackbone), JepaError> {
     let varmap = VarMap::new();
     let vb = VarBuilder::from_varmap(&varmap, DType::F32, device);
-    let backbone = VitBackbone::new(
-        manifest.image_size,
-        manifest.patch_size,
-        3,
-        manifest.embed_dim,
-        manifest.num_layers,
-        manifest.num_heads,
-        MLP_RATIO,
-        vb,
-    )?;
+    let cfg = VitConfig {
+        img_size: manifest.image_size,
+        patch_size: manifest.patch_size,
+        in_chans: 3,
+        embed_dim: manifest.embed_dim,
+        depth: manifest.num_layers,
+        num_heads: manifest.num_heads,
+        mlp_ratio: manifest.mlp_ratio(),
+        variant: manifest.backbone_variant(),
+    };
+    let backbone = VitBackbone::new(&cfg, vb)?;
     Ok((varmap, backbone))
 }
 
@@ -68,21 +66,23 @@ pub(crate) fn load_checkpoint_strict(
             model_name,
             preview
         );
-        return Err(JepaError::WeightsIncomplete {
-            loaded: outcome.loaded,
-            expected: outcome.expected,
-        });
+        return Err(JepaError::WeightsIncomplete { loaded: outcome.loaded, expected: outcome.expected });
     }
     if !outcome.pos_embed_loaded {
         tracing::info!("'{}' uses fixed 2D sin-cos positional embeddings (none found in checkpoint).", model_name);
     }
-    tracing::info!("Loaded {}/{} tensors into '{}' from {}", outcome.loaded, outcome.expected, model_name, path.display());
-    Ok(WeightReport {
-        loaded: outcome.loaded,
-        expected: outcome.expected,
-        source: "safetensors".to_string(),
-    })
+    tracing::info!(
+        "Loaded {}/{} tensors into '{}' from {}",
+        outcome.loaded,
+        outcome.expected,
+        model_name,
+        path.display()
+    );
+    Ok(WeightReport { loaded: outcome.loaded, expected: outcome.expected, source: "safetensors".to_string() })
 }
+
+/// `(pooled embedding, per-patch tokens if available, latency in ms)`.
+pub type ImageEmbedding = (Vec<f32>, Option<Vec<Vec<f32>>>, f64);
 
 /// Common trait for all JEPA model variants (I-JEPA, V-JEPA, Audio-JEPA)
 pub trait JepaModelTrait: Send + Sync {
@@ -90,7 +90,8 @@ pub trait JepaModelTrait: Send + Sync {
     fn modality(&self) -> ModelModality;
     fn dimension(&self) -> usize;
     fn weight_report(&self) -> WeightReport;
-    fn embed_image(&self, img: &Tensor) -> Result<(Vec<f32>, Option<Vec<Vec<f32>>>, f64), JepaError>;
+    fn preprocessing(&self) -> Preprocessing;
+    fn embed_image(&self, img: &Tensor) -> Result<ImageEmbedding, JepaError>;
     fn embed_video(&self, vid: &Tensor) -> Result<(Vec<f32>, f64), JepaError>;
 }
 
@@ -111,7 +112,11 @@ impl JepaModelTrait for IJepaModel {
         self.weights.clone()
     }
 
-    fn embed_image(&self, img: &Tensor) -> Result<(Vec<f32>, Option<Vec<Vec<f32>>>, f64), JepaError> {
+    fn preprocessing(&self) -> Preprocessing {
+        self.manifest.preprocessing()
+    }
+
+    fn embed_image(&self, img: &Tensor) -> Result<ImageEmbedding, JepaError> {
         let (pooled, patches, latency) = self.forward_image(img)?;
         Ok((pooled, Some(patches), latency))
     }
@@ -142,7 +147,11 @@ impl JepaModelTrait for VJepaModel {
         self.weights.clone()
     }
 
-    fn embed_image(&self, img: &Tensor) -> Result<(Vec<f32>, Option<Vec<Vec<f32>>>, f64), JepaError> {
+    fn preprocessing(&self) -> Preprocessing {
+        self.manifest.preprocessing()
+    }
+
+    fn embed_image(&self, img: &Tensor) -> Result<ImageEmbedding, JepaError> {
         // Broadcast single image across temporal frames for representation extraction
         let (_b, _c, _h, _w) = img.dims4()?;
         let repeated = img.unsqueeze(2)?.repeat((1, 1, self.temporal_frames, 1, 1))?;
@@ -164,16 +173,16 @@ pub struct EngineManager {
 
 impl EngineManager {
     pub fn new(device: Device, hardware_info: HardwareInfo) -> Arc<Self> {
-        Arc::new(Self {
-            active_model: RwLock::new(None),
-            device,
-            hardware_info: RwLock::new(hardware_info),
-        })
+        Arc::new(Self { active_model: RwLock::new(None), device, hardware_info: RwLock::new(hardware_info) })
     }
 
     /// Load a model into active GPU/system memory. `weights_path` must point to a
     /// downloaded safetensors file; a missing or unsupported checkpoint is an error.
-    pub async fn load_model(&self, manifest: ModelManifest, weights_path: Option<&Path>) -> Result<WeightReport, JepaError> {
+    pub async fn load_model(
+        &self,
+        manifest: ModelManifest,
+        weights_path: Option<&Path>,
+    ) -> Result<WeightReport, JepaError> {
         let name = manifest.name.clone();
         let path = weights_path.ok_or_else(|| {
             JepaError::ModelNotFound(format!("'{}' is not downloaded. Run `jepa pull {}` first.", name, name))
@@ -182,16 +191,17 @@ impl EngineManager {
         // Model construction is CPU-heavy (mmap + copies); keep it off the async executor.
         let device = self.device.clone();
         let path = path.to_path_buf();
-        let model_box: Box<dyn JepaModelTrait> = tokio::task::spawn_blocking(move || -> Result<Box<dyn JepaModelTrait>, JepaError> {
-            Ok(match manifest.modality {
-                ModelModality::Image => Box::new(IJepaModel::load(manifest, &path, device)?),
-                ModelModality::Video | ModelModality::Multimodal | ModelModality::Audio => {
-                    Box::new(VJepaModel::load(manifest, &path, device)?)
-                }
+        let model_box: Box<dyn JepaModelTrait> =
+            tokio::task::spawn_blocking(move || -> Result<Box<dyn JepaModelTrait>, JepaError> {
+                Ok(match manifest.modality {
+                    ModelModality::Image => Box::new(IJepaModel::load(manifest, &path, device)?),
+                    ModelModality::Video | ModelModality::Multimodal | ModelModality::Audio => {
+                        Box::new(VJepaModel::load(manifest, &path, device)?)
+                    }
+                })
             })
-        })
-        .await
-        .map_err(|e| JepaError::InferenceError(format!("Model load task failed: {e}")))??;
+            .await
+            .map_err(|e| JepaError::InferenceError(format!("Model load task failed: {e}")))??;
 
         let report = model_box.weight_report();
         let mut lock = self.active_model.write().await;
@@ -225,8 +235,27 @@ impl EngineManager {
         lock.as_ref().map(|m| m.weight_report())
     }
 
-    /// Embed an image tensor [1, 3, 224, 224]
-    pub async fn embed_image(&self, img: &Tensor) -> Result<(String, usize, Vec<f32>, Option<Vec<Vec<f32>>>, f64), JepaError> {
+    /// Input preprocessing of the active model (defaults when nothing is loaded).
+    pub async fn preprocessing(&self) -> Preprocessing {
+        let lock = self.active_model.read().await;
+        lock.as_ref().map(|m| m.preprocessing()).unwrap_or_default()
+    }
+
+    /// Build a randomly initialised image model for tests: embeddings are meaningless
+    /// but every API path can be exercised without downloading weights.
+    #[doc(hidden)]
+    pub async fn load_random_for_test(&self, manifest: ModelManifest) -> Result<(), JepaError> {
+        let model = IJepaModel::load_random(manifest, self.device.clone())?;
+        let mut lock = self.active_model.write().await;
+        *lock = Some(Box::new(model));
+        Ok(())
+    }
+
+    /// Embed an image tensor [1, 3, H, W]
+    pub async fn embed_image(
+        &self,
+        img: &Tensor,
+    ) -> Result<(String, usize, Vec<f32>, Option<Vec<Vec<f32>>>, f64), JepaError> {
         let lock = self.active_model.read().await;
         let model = lock.as_ref().ok_or_else(|| {
             JepaError::ModelNotFound("No model currently loaded in memory. Load a model first.".to_string())
@@ -238,7 +267,7 @@ impl EngineManager {
         Ok((name, dim, pooled, patches, latency))
     }
 
-    /// Embed a spatio-temporal video tensor [1, 3, 16, 224, 224]
+    /// Embed a spatio-temporal video tensor [1, 3, T, H, W]
     pub async fn embed_video(&self, vid: &Tensor) -> Result<(String, usize, Vec<f32>, f64), JepaError> {
         let lock = self.active_model.read().await;
         let model = lock.as_ref().ok_or_else(|| {

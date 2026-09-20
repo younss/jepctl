@@ -1,16 +1,16 @@
 //! 16-frame circular sliding window buffer for V-JEPA spatio-temporal inference.
 
-use std::collections::VecDeque;
-use std::io::Cursor;
-use std::sync::Arc;
 use base64::prelude::*;
 use candle_core::{Device, Tensor};
 use image::{imageops::FilterType, DynamicImage, ImageFormat, RgbImage};
+use std::collections::VecDeque;
+use std::io::Cursor;
+use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::config::RING_BUFFER_CAPACITY;
 use crate::media::image::preprocess_dynamic_image;
-use crate::types::JepaError;
+use crate::types::{JepaError, Preprocessing};
 
 /// Side length of the "model view": the centre-cropped square every frame is
 /// reduced to before it is embedded.
@@ -64,10 +64,7 @@ impl RingBuffer {
         let thumb = dyn_img.resize_exact(96, 54, FilterType::Nearest);
         let mut thumb_bytes = Cursor::new(Vec::new());
         let _ = thumb.write_to(&mut thumb_bytes, ImageFormat::Jpeg);
-        let thumb_base64 = format!(
-            "data:image/jpeg;base64,{}",
-            BASE64_STANDARD.encode(thumb_bytes.into_inner())
-        );
+        let thumb_base64 = format!("data:image/jpeg;base64,{}", BASE64_STANDARD.encode(thumb_bytes.into_inner()));
 
         let model_view = to_model_view(&image, MODEL_VIEW_SIZE);
         let mut view_bytes = Cursor::new(Vec::new());
@@ -93,11 +90,9 @@ impl RingBuffer {
     }
 
     /// Preprocess only the latest frame into an image tensor [1, 3, H, W].
-    pub fn latest_image_tensor(&self, target_h: u32, target_w: u32, device: &Device) -> Result<Tensor, JepaError> {
-        let entry = self
-            .latest()
-            .ok_or_else(|| JepaError::InvalidPayload("Ring buffer is empty".into()))?;
-        preprocess_dynamic_image(&DynamicImage::ImageRgb8(entry.rgb_image.clone()), target_w, target_h, device)
+    pub fn latest_image_tensor(&self, prep: &Preprocessing, device: &Device) -> Result<Tensor, JepaError> {
+        let entry = self.latest().ok_or_else(|| JepaError::InvalidPayload("Ring buffer is empty".into()))?;
+        preprocess_dynamic_image(&DynamicImage::ImageRgb8(entry.rgb_image.clone()), prep, device)
     }
 
     /// Retrieve the number of frames currently in the buffer
@@ -116,7 +111,7 @@ impl RingBuffer {
     }
 
     /// Construct 5D spatio-temporal video tensor [1, 3, T, H, W] for V-JEPA
-    pub fn to_video_tensor(&self, target_h: u32, target_w: u32, device: &Device) -> Result<Tensor, JepaError> {
+    pub fn to_video_tensor(&self, prep: &Preprocessing, device: &Device) -> Result<Tensor, JepaError> {
         if self.frames.is_empty() {
             return Err(JepaError::InvalidPayload("Ring buffer is empty".into()));
         }
@@ -126,7 +121,7 @@ impl RingBuffer {
         // Collect existing frames
         for entry in &self.frames {
             let dyn_img = DynamicImage::ImageRgb8(entry.rgb_image.clone());
-            let tensor = preprocess_dynamic_image(&dyn_img, target_w, target_h, device)?; // [1, 3, H, W]
+            let tensor = preprocess_dynamic_image(&dyn_img, prep, device)?; // [1, 3, H, W]
             frame_tensors.push(tensor);
         }
 
@@ -163,7 +158,13 @@ mod tests {
 
     #[test]
     fn model_view_is_square_centre_crop() {
-        let img = RgbImage::from_fn(640, 360, |x, _| if x < 140 || x >= 500 { image::Rgb([255, 0, 0]) } else { image::Rgb([0, 255, 0]) });
+        let img = RgbImage::from_fn(640, 360, |x, _| {
+            if !(140..500).contains(&x) {
+                image::Rgb([255, 0, 0])
+            } else {
+                image::Rgb([0, 255, 0])
+            }
+        });
         let view = to_model_view(&img, 224);
         assert_eq!((view.width(), view.height()), (224, 224));
         // Red side bands are cropped away: every pixel is green.
@@ -181,9 +182,10 @@ mod tests {
         assert_eq!(rb.latest().unwrap().timestamp_ms, 4);
         assert!(!rb.latest().unwrap().model_view_jpeg.is_empty());
 
-        let t = rb.to_video_tensor(16, 16, &Device::Cpu).unwrap();
+        let prep = Preprocessing { size: 16, ..Default::default() };
+        let t = rb.to_video_tensor(&prep, &Device::Cpu).unwrap();
         assert_eq!(t.dims(), &[1, 3, 3, 16, 16]);
-        let img = rb.latest_image_tensor(16, 16, &Device::Cpu).unwrap();
+        let img = rb.latest_image_tensor(&prep, &Device::Cpu).unwrap();
         assert_eq!(img.dims(), &[1, 3, 16, 16]);
     }
 }

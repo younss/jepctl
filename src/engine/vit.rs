@@ -1,9 +1,59 @@
 //! Vision Transformer (ViT) backbone implemented in pure Candle.
-//! Supports I-JEPA and V-JEPA spatio-temporal representations.
+//!
+//! One backbone serves every supported checkpoint family; the differences are
+//! captured by [`VitVariant`]:
+//!
+//! | variant  | CLS token | LayerScale | pooled output | checkpoints                    |
+//! |----------|-----------|------------|---------------|--------------------------------|
+//! | `Plain`  | no        | no         | mean of patches | I-JEPA (HF), V-JEPA-style    |
+//! | `Cls`    | yes       | no         | CLS token     | HF `ViTModel`, timm ViT        |
+//! | `DinoV2` | yes       | yes        | CLS token     | HF `Dinov2Model`               |
+//!
+//! [`load_safetensors_into_backbone`] maps the four tensor namings encountered in
+//! the wild (HF ViT/I-JEPA, HF DINOv2, timm/Meta with fused QKV) onto the backbone
+//! and reports exactly which parameters were covered.
 
-use candle_core::{D, Device, Result, Tensor};
+use candle_core::{Device, Result, Tensor, D};
 use candle_nn::{conv2d, layer_norm, linear, Conv2d, Conv2dConfig, LayerNorm, Linear, Module, VarBuilder};
+use serde::{Deserialize, Serialize};
+
 use crate::types::JepaError;
+
+/// Structural variant of the ViT backbone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum VitVariant {
+    /// Patch tokens only, mean-pooled (I-JEPA, V-JEPA).
+    #[default]
+    Plain,
+    /// Learned CLS token, no LayerScale (HF `ViTModel`, timm ViT).
+    Cls,
+    /// CLS token + LayerScale on both residual branches (DINOv2).
+    DinoV2,
+}
+
+impl VitVariant {
+    pub fn has_cls(self) -> bool {
+        !matches!(self, VitVariant::Plain)
+    }
+
+    pub fn has_layer_scale(self) -> bool {
+        matches!(self, VitVariant::DinoV2)
+    }
+}
+
+/// Everything needed to instantiate a backbone.
+#[derive(Debug, Clone)]
+pub struct VitConfig {
+    pub img_size: usize,
+    pub patch_size: usize,
+    pub in_chans: usize,
+    pub embed_dim: usize,
+    pub depth: usize,
+    pub num_heads: usize,
+    pub mlp_ratio: f64,
+    pub variant: VitVariant,
+}
 
 /// 2D Patch embedding module using convolution
 #[derive(Debug)]
@@ -11,43 +61,23 @@ pub struct PatchEmbed {
     proj: Conv2d,
     pub patch_size: usize,
     pub embed_dim: usize,
+    pub grid_size: usize,
     pub num_patches: usize,
 }
 
 impl PatchEmbed {
-    pub fn new(
-        img_size: usize,
-        patch_size: usize,
-        in_chans: usize,
-        embed_dim: usize,
-        vb: VarBuilder,
-    ) -> Result<Self> {
-        let cfg = Conv2dConfig {
-            stride: patch_size,
-            padding: 0,
-            dilation: 1,
-            groups: 1,
-            ..Default::default()
-        };
+    pub fn new(img_size: usize, patch_size: usize, in_chans: usize, embed_dim: usize, vb: VarBuilder) -> Result<Self> {
+        let cfg = Conv2dConfig { stride: patch_size, padding: 0, dilation: 1, groups: 1, ..Default::default() };
         let proj = conv2d(in_chans, embed_dim, patch_size, cfg, vb.pp("proj"))?;
         let grid_size = img_size / patch_size;
-        let num_patches = grid_size * grid_size;
 
-        Ok(Self {
-            proj,
-            patch_size,
-            embed_dim,
-            num_patches,
-        })
+        Ok(Self { proj, patch_size, embed_dim, grid_size, num_patches: grid_size * grid_size })
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        // x: [B, C, H, W]
-        let _b = x.dim(0)?;
-        let feat = self.proj.forward(x)?; // [B, embed_dim, grid_h, grid_w]
-        let flattened = feat.flatten(2, 3)?; // [B, embed_dim, num_patches]
-        let tokens = flattened.transpose(1, 2)?; // [B, num_patches, embed_dim]
-        Ok(tokens)
+        // x: [B, C, H, W] -> [B, num_patches, embed_dim]
+        let feat = self.proj.forward(x)?; // [B, D, gh, gw]
+        feat.flatten(2, 3)?.transpose(1, 2)
     }
 }
 
@@ -66,48 +96,29 @@ pub struct Attention {
 impl Attention {
     pub fn new(embed_dim: usize, num_heads: usize, vb: VarBuilder) -> Result<Self> {
         let head_dim = embed_dim / num_heads;
-        let scale = 1.0 / (head_dim as f64).sqrt();
-
-        let q_proj = linear(embed_dim, embed_dim, vb.pp("q_proj"))?;
-        let k_proj = linear(embed_dim, embed_dim, vb.pp("k_proj"))?;
-        let v_proj = linear(embed_dim, embed_dim, vb.pp("v_proj"))?;
-        let out_proj = linear(embed_dim, embed_dim, vb.pp("out_proj"))?;
-
         Ok(Self {
-            q_proj,
-            k_proj,
-            v_proj,
-            out_proj,
+            q_proj: linear(embed_dim, embed_dim, vb.pp("q_proj"))?,
+            k_proj: linear(embed_dim, embed_dim, vb.pp("k_proj"))?,
+            v_proj: linear(embed_dim, embed_dim, vb.pp("v_proj"))?,
+            out_proj: linear(embed_dim, embed_dim, vb.pp("out_proj"))?,
             num_heads,
             head_dim,
-            scale,
+            scale: 1.0 / (head_dim as f64).sqrt(),
         })
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let (b, n, _) = x.dims3()?;
-
-        let q = self.q_proj.forward(x)?;
-        let k = self.k_proj.forward(x)?;
-        let v = self.v_proj.forward(x)?;
-
-        let q = q
-            .reshape((b, n, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?; // [B, heads, N, head_dim]
-        let k = k
-            .reshape((b, n, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
-        let v = v
-            .reshape((b, n, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
+        let split_heads = |t: Tensor| -> Result<Tensor> {
+            t.reshape((b, n, self.num_heads, self.head_dim))?.transpose(1, 2)?.contiguous()
+        };
+        let q = split_heads(self.q_proj.forward(x)?)?;
+        let k = split_heads(self.k_proj.forward(x)?)?;
+        let v = split_heads(self.v_proj.forward(x)?)?;
 
         let scores = (q.matmul(&k.transpose(D::Minus2, D::Minus1)?)? * self.scale)?;
         let attn = candle_nn::ops::softmax(&scores, D::Minus1)?;
         let context = attn.matmul(&v)?; // [B, heads, N, head_dim]
-
         let context = context.transpose(1, 2)?.reshape((b, n, self.num_heads * self.head_dim))?;
         self.out_proj.forward(&context)
     }
@@ -122,9 +133,10 @@ pub struct Mlp {
 
 impl Mlp {
     pub fn new(embed_dim: usize, hidden_dim: usize, vb: VarBuilder) -> Result<Self> {
-        let fc1 = linear(embed_dim, hidden_dim, vb.pp("fc1"))?;
-        let fc2 = linear(hidden_dim, embed_dim, vb.pp("fc2"))?;
-        Ok(Self { fc1, fc2 })
+        Ok(Self {
+            fc1: linear(embed_dim, hidden_dim, vb.pp("fc1"))?,
+            fc2: linear(hidden_dim, embed_dim, vb.pp("fc2"))?,
+        })
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
@@ -133,37 +145,50 @@ impl Mlp {
     }
 }
 
-/// Vision Transformer Encoder Block with Pre-Norm
+/// Pre-norm Transformer encoder block with optional LayerScale.
 #[derive(Debug)]
 pub struct Block {
     norm1: LayerNorm,
     attn: Attention,
     norm2: LayerNorm,
     mlp: Mlp,
+    /// LayerScale gains (DINOv2): `ls1` scales the attention branch, `ls2` the MLP branch.
+    ls1: Option<Tensor>,
+    ls2: Option<Tensor>,
 }
 
 impl Block {
-    pub fn new(embed_dim: usize, num_heads: usize, mlp_ratio: f64, vb: VarBuilder) -> Result<Self> {
-        let norm1 = layer_norm(embed_dim, 1e-6, vb.pp("norm1"))?;
-        let attn = Attention::new(embed_dim, num_heads, vb.pp("attn"))?;
-        let norm2 = layer_norm(embed_dim, 1e-6, vb.pp("norm2"))?;
+    pub fn new(embed_dim: usize, num_heads: usize, mlp_ratio: f64, layer_scale: bool, vb: VarBuilder) -> Result<Self> {
         let hidden_dim = (embed_dim as f64 * mlp_ratio) as usize;
-        let mlp = Mlp::new(embed_dim, hidden_dim, vb.pp("mlp"))?;
-
+        let (ls1, ls2) = if layer_scale {
+            (
+                Some(vb.get_with_hints(embed_dim, "ls1", candle_nn::Init::Const(1.0))?),
+                Some(vb.get_with_hints(embed_dim, "ls2", candle_nn::Init::Const(1.0))?),
+            )
+        } else {
+            (None, None)
+        };
         Ok(Self {
-            norm1,
-            attn,
-            norm2,
-            mlp,
+            norm1: layer_norm(embed_dim, 1e-6, vb.pp("norm1"))?,
+            attn: Attention::new(embed_dim, num_heads, vb.pp("attn"))?,
+            norm2: layer_norm(embed_dim, 1e-6, vb.pp("norm2"))?,
+            mlp: Mlp::new(embed_dim, hidden_dim, vb.pp("mlp"))?,
+            ls1,
+            ls2,
         })
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let residual = x;
-        let x = (residual + self.attn.forward(&self.norm1.forward(x)?)?)?;
-        let residual = &x;
-        let x = (residual + self.mlp.forward(&self.norm2.forward(&x)?)?)?;
-        Ok(x)
+        let mut a = self.attn.forward(&self.norm1.forward(x)?)?;
+        if let Some(ls) = &self.ls1 {
+            a = a.broadcast_mul(ls)?;
+        }
+        let x = (x + a)?;
+        let mut m = self.mlp.forward(&self.norm2.forward(&x)?)?;
+        if let Some(ls) = &self.ls2 {
+            m = m.broadcast_mul(ls)?;
+        }
+        x + m
     }
 }
 
@@ -174,89 +199,90 @@ pub struct VitBackbone {
     pub blocks: Vec<Block>,
     pub norm: LayerNorm,
     pub embed_dim: usize,
-    pub pos_embed: Option<Tensor>,
+    pub variant: VitVariant,
+    /// Learned CLS token `[1, 1, D]` for CLS variants.
+    pub cls_token: Option<Tensor>,
+    /// Positional embedding `[1, N(+1), D]`; sin-cos by default, replaced by the checkpoint when present.
+    pub pos_embed: Tensor,
 }
 
 impl VitBackbone {
-    pub fn new(
-        img_size: usize,
-        patch_size: usize,
-        in_chans: usize,
-        embed_dim: usize,
-        depth: usize,
-        num_heads: usize,
-        mlp_ratio: f64,
-        vb: VarBuilder,
-    ) -> Result<Self> {
-        let patch_embed = PatchEmbed::new(img_size, patch_size, in_chans, embed_dim, vb.pp("patch_embed"))?;
-        let mut blocks = Vec::with_capacity(depth);
+    pub fn new(cfg: &VitConfig, vb: VarBuilder) -> Result<Self> {
+        let patch_embed =
+            PatchEmbed::new(cfg.img_size, cfg.patch_size, cfg.in_chans, cfg.embed_dim, vb.pp("patch_embed"))?;
         let blocks_vb = vb.pp("blocks");
-        for i in 0..depth {
-            blocks.push(Block::new(embed_dim, num_heads, mlp_ratio, blocks_vb.pp(i))?);
+        let blocks = (0..cfg.depth)
+            .map(|i| {
+                Block::new(cfg.embed_dim, cfg.num_heads, cfg.mlp_ratio, cfg.variant.has_layer_scale(), blocks_vb.pp(i))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let norm = layer_norm(cfg.embed_dim, 1e-6, vb.pp("norm"))?;
+
+        let cls_token = if cfg.variant.has_cls() {
+            Some(vb.get_with_hints((1, 1, cfg.embed_dim), "cls_token", candle_nn::Init::Const(0.0))?)
+        } else {
+            None
+        };
+
+        let grid = patch_embed.grid_size;
+        let mut pos_embed = generate_sincos_pos_embed(grid, cfg.embed_dim, vb.device())?;
+        if cfg.variant.has_cls() {
+            let zero = Tensor::zeros((1, 1, cfg.embed_dim), pos_embed.dtype(), vb.device())?;
+            pos_embed = Tensor::cat(&[&zero, &pos_embed], 1)?;
         }
-        let norm = layer_norm(embed_dim, 1e-6, vb.pp("norm"))?;
 
-        // 2D Sine-Cosine Positional Embedding initialization
-        let num_patches = patch_embed.num_patches;
-        let pos_tensor = Self::generate_sincos_pos_embed(num_patches, embed_dim, vb.device())?;
-
-        Ok(Self {
-            patch_embed,
-            blocks,
-            norm,
-            embed_dim,
-            pos_embed: Some(pos_tensor),
-        })
+        Ok(Self { patch_embed, blocks, norm, embed_dim: cfg.embed_dim, variant: cfg.variant, cls_token, pos_embed })
     }
 
-    /// Forward pass returning patch token representations and pooled vector
+    /// Forward pass returning `(patch tokens [B, N, D], pooled [B, D])`.
     pub fn forward(&self, x: &Tensor) -> Result<(Tensor, Tensor)> {
-        // x: [B, 3, H, W]
+        let b = x.dim(0)?;
         let mut tokens = self.patch_embed.forward(x)?; // [B, N, D]
 
-        if let Some(ref pos) = self.pos_embed {
-            tokens = tokens.broadcast_add(pos)?;
+        if let Some(cls) = &self.cls_token {
+            let cls = cls.expand((b, 1, self.embed_dim))?;
+            tokens = Tensor::cat(&[&cls, &tokens], 1)?;
         }
+        tokens = tokens.broadcast_add(&self.pos_embed)?;
 
         for block in &self.blocks {
             tokens = block.forward(&tokens)?;
         }
+        let normalized = self.norm.forward(&tokens)?;
 
-        let normalized_tokens = self.norm.forward(&tokens)?; // [B, N, D]
-
-        // Global Average Pooling across patch tokens
-        let pooled = normalized_tokens.mean(1)?; // [B, D]
-
-        Ok((normalized_tokens, pooled))
-    }
-
-    /// Generates canonical 2D Sine-Cosine Positional Embeddings
-    fn generate_sincos_pos_embed(num_patches: usize, embed_dim: usize, device: &Device) -> Result<Tensor> {
-        let grid_size = (num_patches as f64).sqrt() as usize;
-        let mut pos_embed_data = Vec::with_capacity(num_patches * embed_dim);
-
-        let half_dim = embed_dim / 2;
-        let omega_len = half_dim / 2;
-
-        for h in 0..grid_size {
-            for w in 0..grid_size {
-                let mut token_pos = Vec::with_capacity(embed_dim);
-                for i in 0..omega_len {
-                    let omega = 1.0 / (10000.0f64.powf((i as f64) / (omega_len as f64)));
-                    token_pos.push((h as f64 * omega).sin() as f32);
-                    token_pos.push((h as f64 * omega).cos() as f32);
-                    token_pos.push((w as f64 * omega).sin() as f32);
-                    token_pos.push((w as f64 * omega).cos() as f32);
-                }
-                while token_pos.len() < embed_dim {
-                    token_pos.push(0.0f32);
-                }
-                pos_embed_data.extend(token_pos);
-            }
+        if self.cls_token.is_some() {
+            let n = normalized.dim(1)?;
+            let pooled = normalized.narrow(1, 0, 1)?.squeeze(1)?;
+            let patches = normalized.narrow(1, 1, n - 1)?.contiguous()?;
+            Ok((patches, pooled))
+        } else {
+            let pooled = normalized.mean(1)?;
+            Ok((normalized, pooled))
         }
-
-        Tensor::from_vec(pos_embed_data, (1, num_patches, embed_dim), device)
     }
+}
+
+/// Canonical 2D sine-cosine positional embedding `[1, grid², D]` (MAE / I-JEPA style).
+fn generate_sincos_pos_embed(grid_size: usize, embed_dim: usize, device: &Device) -> Result<Tensor> {
+    let num_patches = grid_size * grid_size;
+    let mut data = Vec::with_capacity(num_patches * embed_dim);
+    let omega_len = embed_dim / 4;
+
+    for h in 0..grid_size {
+        for w in 0..grid_size {
+            let mut token = Vec::with_capacity(embed_dim);
+            for i in 0..omega_len {
+                let omega = 1.0 / 10000f64.powf(i as f64 / omega_len as f64);
+                token.push((h as f64 * omega).sin() as f32);
+                token.push((h as f64 * omega).cos() as f32);
+                token.push((w as f64 * omega).sin() as f32);
+                token.push((w as f64 * omega).cos() as f32);
+            }
+            token.resize(embed_dim, 0.0);
+            data.extend(token);
+        }
+    }
+    Tensor::from_vec(data, (1, num_patches, embed_dim), device)
 }
 
 /// Outcome of mapping a checkpoint onto the backbone.
@@ -272,12 +298,190 @@ pub struct LoadOutcome {
     pub pos_embed_loaded: bool,
 }
 
-/// Load and map safetensors weights across common Hugging Face and Meta ViT formats.
-///
-/// Supported layouts: this crate's native names (`blocks.N.attn.q_proj`, ...),
-/// HF `ViTModel` / `IJepaModel` (`encoder.layer.N.attention.attention.query`, with or
-/// without a `vit.` prefix). Checkpoints with a CLS token have their positional
-/// embedding sliced to the patch tokens only.
+/// Where a backbone parameter may come from inside a checkpoint.
+enum Source {
+    Named(String),
+    /// Row-slice `index` (0 = q, 1 = k, 2 = v) of a fused `qkv` tensor.
+    FusedQkv {
+        name: String,
+        index: usize,
+    },
+}
+
+/// All checkpoint names that may hold a given backbone parameter.
+fn candidate_sources(target: &str) -> Vec<Source> {
+    let prefixes = ["", "vit.", "dinov2.", "model."];
+    let mut out = vec![Source::Named(target.to_string())];
+    let mut push_named = |name: String| {
+        for p in prefixes {
+            out.push(Source::Named(format!("{p}{name}")));
+        }
+    };
+
+    match target {
+        "patch_embed.proj.weight" => push_named("embeddings.patch_embeddings.projection.weight".into()),
+        "patch_embed.proj.bias" => push_named("embeddings.patch_embeddings.projection.bias".into()),
+        "norm.weight" => push_named("layernorm.weight".into()),
+        "norm.bias" => push_named("layernorm.bias".into()),
+        "cls_token" => push_named("embeddings.cls_token".into()),
+        _ => {
+            if let Some(rest) = target.strip_prefix("blocks.") {
+                if let Some((idx, sub)) = rest.split_once('.') {
+                    // HF ViT / I-JEPA naming
+                    let hf_vit = match sub {
+                        "norm1.weight" => Some("layernorm_before.weight"),
+                        "norm1.bias" => Some("layernorm_before.bias"),
+                        "norm2.weight" => Some("layernorm_after.weight"),
+                        "norm2.bias" => Some("layernorm_after.bias"),
+                        "mlp.fc1.weight" => Some("intermediate.dense.weight"),
+                        "mlp.fc1.bias" => Some("intermediate.dense.bias"),
+                        "mlp.fc2.weight" => Some("output.dense.weight"),
+                        "mlp.fc2.bias" => Some("output.dense.bias"),
+                        _ => None,
+                    };
+                    // Shared by HF ViT and HF DINOv2
+                    let hf_attn = match sub {
+                        "attn.q_proj.weight" => Some("attention.attention.query.weight"),
+                        "attn.q_proj.bias" => Some("attention.attention.query.bias"),
+                        "attn.k_proj.weight" => Some("attention.attention.key.weight"),
+                        "attn.k_proj.bias" => Some("attention.attention.key.bias"),
+                        "attn.v_proj.weight" => Some("attention.attention.value.weight"),
+                        "attn.v_proj.bias" => Some("attention.attention.value.bias"),
+                        "attn.out_proj.weight" => Some("attention.output.dense.weight"),
+                        "attn.out_proj.bias" => Some("attention.output.dense.bias"),
+                        _ => None,
+                    };
+                    // HF DINOv2 naming (norm1/norm2/mlp keep timm names; LayerScale is separate)
+                    let hf_dino = match sub {
+                        "ls1" => Some("layer_scale1.lambda1"),
+                        "ls2" => Some("layer_scale2.lambda1"),
+                        "norm1.weight" | "norm1.bias" | "norm2.weight" | "norm2.bias" | "mlp.fc1.weight"
+                        | "mlp.fc1.bias" | "mlp.fc2.weight" | "mlp.fc2.bias" => Some(sub),
+                        _ => None,
+                    };
+                    for name in [hf_vit, hf_attn, hf_dino].into_iter().flatten() {
+                        push_named(format!("encoder.layer.{idx}.{name}"));
+                    }
+                    // timm / Meta naming: fused qkv, `attn.proj`, `ls*.gamma`
+                    let fused = |what: &str, index: usize| Source::FusedQkv {
+                        name: format!("blocks.{idx}.attn.qkv.{what}"),
+                        index,
+                    };
+                    match sub {
+                        "attn.q_proj.weight" => out.push(fused("weight", 0)),
+                        "attn.k_proj.weight" => out.push(fused("weight", 1)),
+                        "attn.v_proj.weight" => out.push(fused("weight", 2)),
+                        "attn.q_proj.bias" => out.push(fused("bias", 0)),
+                        "attn.k_proj.bias" => out.push(fused("bias", 1)),
+                        "attn.v_proj.bias" => out.push(fused("bias", 2)),
+                        "attn.out_proj.weight" => out.push(Source::Named(format!("blocks.{idx}.attn.proj.weight"))),
+                        "attn.out_proj.bias" => out.push(Source::Named(format!("blocks.{idx}.attn.proj.bias"))),
+                        "ls1" => out.push(Source::Named(format!("blocks.{idx}.ls1.gamma"))),
+                        "ls2" => out.push(Source::Named(format!("blocks.{idx}.ls2.gamma"))),
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Bicubic (Catmull-Rom) resampling of a `[1, S*S, D]` positional grid to `[1, T*T, D]`.
+fn resample_pos_grid(pos: &Tensor, src: usize, dst: usize, device: &Device) -> Result<Tensor> {
+    let (_, _, d) = pos.dims3()?;
+    let data: Vec<f32> = pos.flatten_all()?.to_vec1()?;
+    let mut out = vec![0f32; dst * dst * d];
+
+    let cubic = |t: f32| -> f32 {
+        // Catmull-Rom kernel (a = -0.5)
+        let t = t.abs();
+        if t < 1.0 {
+            1.5 * t * t * t - 2.5 * t * t + 1.0
+        } else if t < 2.0 {
+            -0.5 * t * t * t + 2.5 * t * t - 4.0 * t + 2.0
+        } else {
+            0.0
+        }
+    };
+    let scale = src as f32 / dst as f32;
+
+    for ty in 0..dst {
+        let sy = (ty as f32 + 0.5) * scale - 0.5;
+        let y0 = sy.floor() as isize;
+        for tx in 0..dst {
+            let sx = (tx as f32 + 0.5) * scale - 0.5;
+            let x0 = sx.floor() as isize;
+            let o = (ty * dst + tx) * d;
+            let mut wsum = 0f32;
+            for dy in -1..=2isize {
+                let yy = (y0 + dy).clamp(0, src as isize - 1) as usize;
+                let wy = cubic(sy - (y0 + dy) as f32);
+                for dx in -1..=2isize {
+                    let xx = (x0 + dx).clamp(0, src as isize - 1) as usize;
+                    let w = wy * cubic(sx - (x0 + dx) as f32);
+                    if w == 0.0 {
+                        continue;
+                    }
+                    wsum += w;
+                    let i = (yy * src + xx) * d;
+                    for c in 0..d {
+                        out[o + c] += w * data[i + c];
+                    }
+                }
+            }
+            if wsum.abs() > 1e-6 {
+                for c in 0..d {
+                    out[o + c] /= wsum;
+                }
+            }
+        }
+    }
+    Tensor::from_vec(out, (1, dst * dst, d), device)
+}
+
+/// Adapt a checkpoint positional embedding `[1, M(+1), D]` to the backbone's grid,
+/// interpolating between resolutions and adding/removing the CLS row as required.
+fn adapt_pos_embed(
+    ckpt: &Tensor,
+    grid: usize,
+    has_cls: bool,
+    device: &Device,
+) -> std::result::Result<Tensor, JepaError> {
+    let (_, m, _d) = ckpt.dims3()?;
+    let is_square = |n: usize| ((n as f64).sqrt() as usize).pow(2) == n;
+    let (ckpt_cls, src_grid) = if is_square(m) {
+        (false, (m as f64).sqrt() as usize)
+    } else if m >= 1 && is_square(m - 1) {
+        (true, ((m - 1) as f64).sqrt() as usize)
+    } else {
+        return Err(JepaError::InferenceError(format!("Positional embedding with {m} rows is not a square grid")));
+    };
+
+    let (cls_row, patch_rows) = if ckpt_cls {
+        (Some(ckpt.narrow(1, 0, 1)?), ckpt.narrow(1, 1, m - 1)?.contiguous()?)
+    } else {
+        (None, ckpt.clone())
+    };
+
+    let patch_rows = if src_grid == grid {
+        patch_rows
+    } else {
+        tracing::info!("Resampling positional embedding grid {}x{} -> {}x{}", src_grid, src_grid, grid, grid);
+        resample_pos_grid(&patch_rows, src_grid, grid, device)?
+    };
+
+    if !has_cls {
+        return Ok(patch_rows);
+    }
+    let cls_row = match cls_row {
+        Some(c) => c,
+        None => Tensor::zeros((1, 1, patch_rows.dim(2)?), patch_rows.dtype(), device)?,
+    };
+    Ok(Tensor::cat(&[&cls_row, &patch_rows], 1)?)
+}
+
+/// Load and map safetensors weights across common Hugging Face, timm and Meta ViT formats.
 pub fn load_safetensors_into_backbone(
     varmap: &candle_nn::VarMap,
     backbone: &mut VitBackbone,
@@ -289,109 +493,145 @@ pub fn load_safetensors_into_backbone(
             .map_err(|e| JepaError::InferenceError(format!("Could not mmap safetensors: {}", e)))?
     };
 
-    let mut loaded_tensors = 0;
+    let mut loaded = 0;
     let mut missing = Vec::new();
-    let vars = varmap.data().lock().unwrap();
+    let vars = varmap.data().lock().map_err(|_| JepaError::InferenceError("VarMap lock poisoned".into()))?;
     let expected = vars.len();
 
-    for (target_name, var) in vars.iter() {
-        let mut candidates = vec![target_name.clone()];
-
-        if target_name == "patch_embed.proj.weight" {
-            candidates.push("embeddings.patch_embeddings.projection.weight".to_string());
-            candidates.push("vit.embeddings.patch_embeddings.projection.weight".to_string());
-        } else if target_name == "patch_embed.proj.bias" {
-            candidates.push("embeddings.patch_embeddings.projection.bias".to_string());
-            candidates.push("vit.embeddings.patch_embeddings.projection.bias".to_string());
-        } else if target_name == "norm.weight" {
-            candidates.push("layernorm.weight".to_string());
-            candidates.push("vit.layernorm.weight".to_string());
-        } else if target_name == "norm.bias" {
-            candidates.push("layernorm.bias".to_string());
-            candidates.push("vit.layernorm.bias".to_string());
-        } else if let Some(stripped) = target_name.strip_prefix("blocks.") {
-            if let Some(dot_idx) = stripped.find('.') {
-                let block_idx = &stripped[..dot_idx];
-                let sub = &stripped[dot_idx + 1..];
-
-                let hf_sub = match sub {
-                    "norm1.weight" => Some("layernorm_before.weight"),
-                    "norm1.bias" => Some("layernorm_before.bias"),
-                    "attn.q_proj.weight" => Some("attention.attention.query.weight"),
-                    "attn.q_proj.bias" => Some("attention.attention.query.bias"),
-                    "attn.k_proj.weight" => Some("attention.attention.key.weight"),
-                    "attn.k_proj.bias" => Some("attention.attention.key.bias"),
-                    "attn.v_proj.weight" => Some("attention.attention.value.weight"),
-                    "attn.v_proj.bias" => Some("attention.attention.value.bias"),
-                    "attn.out_proj.weight" => Some("attention.output.dense.weight"),
-                    "attn.out_proj.bias" => Some("attention.output.dense.bias"),
-                    "norm2.weight" => Some("layernorm_after.weight"),
-                    "norm2.bias" => Some("layernorm_after.bias"),
-                    "mlp.fc1.weight" => Some("intermediate.dense.weight"),
-                    "mlp.fc1.bias" => Some("intermediate.dense.bias"),
-                    "mlp.fc2.weight" => Some("output.dense.weight"),
-                    "mlp.fc2.bias" => Some("output.dense.bias"),
-                    _ => None,
-                };
-
-                if let Some(hs) = hf_sub {
-                    candidates.push(format!("encoder.layer.{}.{}", block_idx, hs));
-                    candidates.push(format!("vit.encoder.layer.{}.{}", block_idx, hs));
-                }
-            }
-        }
-
+    for (target, var) in vars.iter() {
         let mut found = false;
-        for c in candidates {
-            if let Ok(tensor) = mmap.load(&c, device) {
-                if var.shape() == tensor.shape() {
-                    var.set(&tensor)?;
-                    loaded_tensors += 1;
-                    found = true;
-                    break;
-                } else {
-                    tracing::warn!(
-                        "Shape mismatch for '{}' -> '{}': backbone {:?}, checkpoint {:?}",
-                        target_name, c, var.shape(), tensor.shape()
-                    );
-                }
+        for source in candidate_sources(target) {
+            let tensor = match &source {
+                Source::Named(name) => mmap.load(name, device).ok(),
+                Source::FusedQkv { name, index } => mmap.load(name, device).ok().and_then(|t| {
+                    let rows = t.dim(0).ok()? / 3;
+                    t.narrow(0, index * rows, rows).ok()?.contiguous().ok()
+                }),
+            };
+            let Some(tensor) = tensor else { continue };
+            if var.shape() == tensor.shape() {
+                var.set(&tensor)?;
+                loaded += 1;
+                found = true;
+                break;
             }
+            tracing::warn!(
+                "Shape mismatch for '{}': backbone {:?}, checkpoint {:?}",
+                target,
+                var.shape(),
+                tensor.shape()
+            );
         }
         if !found {
-            missing.push(target_name.clone());
+            missing.push(target.clone());
         }
     }
 
-    // Positional embeddings: HF checkpoints may carry a leading CLS position.
+    let pos_names = [
+        "pos_embed",
+        "embeddings.position_embeddings",
+        "vit.embeddings.position_embeddings",
+        "dinov2.embeddings.position_embeddings",
+    ];
     let mut pos_embed_loaded = false;
-    if let Ok(pos_tensor) = mmap
-        .load("embeddings.position_embeddings", device)
-        .or_else(|_| mmap.load("vit.embeddings.position_embeddings", device))
-        .or_else(|_| mmap.load("pos_embed", device))
-    {
-        if let Some(ref mut current_pos) = backbone.pos_embed {
-            let (_, want_n, want_d) = current_pos.dims3()?;
-            match pos_tensor.dims3() {
-                Ok((1, n, d)) if n == want_n && d == want_d => {
-                    *current_pos = pos_tensor;
-                    pos_embed_loaded = true;
-                }
-                Ok((1, n, d)) if n == want_n + 1 && d == want_d => {
-                    *current_pos = pos_tensor.narrow(1, 1, want_n)?.contiguous()?;
-                    pos_embed_loaded = true;
-                }
-                Ok(dims) => {
-                    tracing::warn!("Positional embedding shape {:?} incompatible with backbone {:?}", dims, (1, want_n, want_d));
-                }
-                Err(e) => tracing::warn!("Unreadable positional embedding: {}", e),
+    if let Some(ckpt_pos) = pos_names.iter().find_map(|n| mmap.load(n, device).ok()) {
+        match adapt_pos_embed(&ckpt_pos, backbone.patch_embed.grid_size, backbone.cls_token.is_some(), device) {
+            Ok(pos) if pos.shape() == backbone.pos_embed.shape() => {
+                backbone.pos_embed = pos;
+                pos_embed_loaded = true;
             }
+            Ok(pos) => tracing::warn!(
+                "Adapted positional embedding {:?} does not match {:?}",
+                pos.shape(),
+                backbone.pos_embed.shape()
+            ),
+            Err(e) => tracing::warn!("Could not adapt positional embedding: {}", e),
         }
     }
 
-    Ok(LoadOutcome {
-        loaded: loaded_tensors,
-        expected,
-        missing,
-        pos_embed_loaded,
-    })
+    Ok(LoadOutcome { loaded, expected, missing, pos_embed_loaded })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_nn::{VarBuilder, VarMap};
+
+    fn cfg(variant: VitVariant) -> VitConfig {
+        VitConfig {
+            img_size: 32,
+            patch_size: 16,
+            in_chans: 3,
+            embed_dim: 8,
+            depth: 1,
+            num_heads: 2,
+            mlp_ratio: 4.0,
+            variant,
+        }
+    }
+
+    #[test]
+    fn variants_produce_expected_shapes() {
+        for variant in [VitVariant::Plain, VitVariant::Cls, VitVariant::DinoV2] {
+            let varmap = VarMap::new();
+            let vb = VarBuilder::from_varmap(&varmap, candle_core::DType::F32, &Device::Cpu);
+            let bb = VitBackbone::new(&cfg(variant), vb).unwrap();
+            let x = Tensor::ones((2, 3, 32, 32), candle_core::DType::F32, &Device::Cpu).unwrap();
+            let (patches, pooled) = bb.forward(&x).unwrap();
+            assert_eq!(patches.dims(), &[2, 4, 8], "{variant:?}");
+            assert_eq!(pooled.dims(), &[2, 8], "{variant:?}");
+            let n_vars = varmap.data().lock().unwrap().len();
+            // patch_embed (2) + final norm (2) + one block (16) [+ cls] [+ ls1, ls2]
+            let expected = match variant {
+                VitVariant::Plain => 2 + 2 + 16,
+                VitVariant::Cls => 2 + 2 + 16 + 1,
+                VitVariant::DinoV2 => 2 + 2 + 16 + 1 + 2,
+            };
+            assert_eq!(n_vars, expected, "{variant:?}");
+        }
+    }
+
+    #[test]
+    fn fused_qkv_and_hf_names_are_candidates() {
+        let names: Vec<String> = candidate_sources("blocks.3.attn.k_proj.weight")
+            .into_iter()
+            .map(|s| match s {
+                Source::Named(n) => n,
+                Source::FusedQkv { name, index } => format!("{name}#{index}"),
+            })
+            .collect();
+        assert!(names.contains(&"encoder.layer.3.attention.attention.key.weight".to_string()));
+        assert!(names.contains(&"vit.encoder.layer.3.attention.attention.key.weight".to_string()));
+        assert!(names.contains(&"blocks.3.attn.qkv.weight#1".to_string()));
+        let ls: Vec<String> = candidate_sources("blocks.0.ls1")
+            .into_iter()
+            .filter_map(|s| if let Source::Named(n) = s { Some(n) } else { None })
+            .collect();
+        assert!(ls.contains(&"encoder.layer.0.layer_scale1.lambda1".to_string()));
+    }
+
+    #[test]
+    fn pos_embed_adapts_cls_and_resolution() {
+        let dev = Device::Cpu;
+        // Checkpoint: CLS + 4x4 grid; backbone: no CLS, 2x2 grid.
+        let ckpt = Tensor::arange(0f32, 17.0 * 3.0, &dev).unwrap().reshape((1, 17, 3)).unwrap();
+        let out = adapt_pos_embed(&ckpt, 2, false, &dev).unwrap();
+        assert_eq!(out.dims(), &[1, 4, 3]);
+        // Checkpoint without CLS, backbone with CLS at the same grid: a zero row is prepended.
+        let ckpt = Tensor::ones((1, 4, 3), candle_core::DType::F32, &dev).unwrap();
+        let out = adapt_pos_embed(&ckpt, 2, true, &dev).unwrap();
+        assert_eq!(out.dims(), &[1, 5, 3]);
+        let first: Vec<f32> = out.narrow(1, 0, 1).unwrap().flatten_all().unwrap().to_vec1().unwrap();
+        assert!(first.iter().all(|v| *v == 0.0));
+    }
+
+    #[test]
+    fn resample_is_identity_on_constant_grid() {
+        let dev = Device::Cpu;
+        let src = Tensor::full(2.5f32, (1, 9, 2), &dev).unwrap();
+        let out = resample_pos_grid(&src, 3, 5, &dev).unwrap();
+        let v: Vec<f32> = out.flatten_all().unwrap().to_vec1().unwrap();
+        assert_eq!(v.len(), 50);
+        assert!(v.iter().all(|x| (x - 2.5).abs() < 1e-4));
+    }
 }

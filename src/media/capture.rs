@@ -1,12 +1,12 @@
 //! Cross-platform camera capture runner with nokhwa and synthetic fallback.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 use image::{Rgb, RgbImage};
 use nokhwa::pixel_format::RgbFormat;
 use nokhwa::utils::{ApiBackend, CameraIndex, RequestedFormat, RequestedFormatType};
 use nokhwa::Camera;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 
 use crate::media::ring_buffer::SharedRingBuffer;
@@ -24,10 +24,7 @@ pub fn list_camera_devices() -> Vec<CameraDeviceInfo> {
                     CameraIndex::Index(i) => *i as usize,
                     CameraIndex::String(s) => s.parse().unwrap_or(0),
                 };
-                devices.push(CameraDeviceInfo {
-                    index: idx,
-                    name: cam.human_name(),
-                });
+                devices.push(CameraDeviceInfo { index: idx, name: cam.human_name() });
             }
         }
         Err(e) => {
@@ -37,10 +34,7 @@ pub fn list_camera_devices() -> Vec<CameraDeviceInfo> {
 
     // Always include a synthetic test bench camera for headless/CI/testing environments
     if devices.is_empty() {
-        devices.push(CameraDeviceInfo {
-            index: 0,
-            name: "Virtual Synthetic JEPA Test Camera".to_string(),
-        });
+        devices.push(CameraDeviceInfo { index: 0, name: "Virtual Synthetic JEPA Test Camera".to_string() });
     }
 
     devices
@@ -56,11 +50,7 @@ pub struct CameraSupervisor {
 impl CameraSupervisor {
     pub fn new(ring_buffer: SharedRingBuffer) -> Self {
         let (frame_tx, _) = broadcast::channel(32);
-        Self {
-            is_running: Arc::new(AtomicBool::new(false)),
-            ring_buffer,
-            frame_tx,
-        }
+        Self { is_running: Arc::new(AtomicBool::new(false)), ring_buffer, frame_tx }
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<u64> {
@@ -99,10 +89,7 @@ impl CameraSupervisor {
                 RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate),
             );
             if cam_result.is_err() {
-                cam_result = Camera::new(
-                    index,
-                    RequestedFormat::new::<RgbFormat>(RequestedFormatType::None),
-                );
+                cam_result = Camera::new(index, RequestedFormat::new::<RgbFormat>(RequestedFormatType::None));
             }
             let mut use_synthetic = false;
 
@@ -112,7 +99,10 @@ impl CameraSupervisor {
                     use_synthetic = true;
                 }
             } else {
-                tracing::warn!("Could not initialize camera: {}. Switching to synthetic pattern.", cam_result.as_ref().err().unwrap());
+                tracing::warn!(
+                    "Could not initialize camera: {}. Switching to synthetic pattern.",
+                    cam_result.as_ref().err().unwrap()
+                );
                 use_synthetic = true;
             }
 

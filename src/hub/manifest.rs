@@ -1,11 +1,12 @@
 //! Jepafile manifest schema, built-in catalog definitions, and validation logic.
 
-use std::fs;
-use std::path::Path;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
 
-use crate::types::{JepaError, ModelManifest, ModelModality};
+use crate::engine::vit::VitVariant;
+use crate::types::{JepaError, ModelManifest, ModelModality, Normalization};
 
 /// Parsable manifest file schema (.jepa or Jepafile)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,6 +23,34 @@ pub struct JepafileConfig {
     pub frames: Option<usize>,
     pub parameter_count: Option<String>,
     pub weights_file: Option<String>,
+    #[serde(default)]
+    pub variant: Option<VitVariant>,
+    #[serde(default)]
+    pub normalization: Option<Normalization>,
+    #[serde(default)]
+    pub mlp_ratio: Option<f64>,
+}
+
+impl From<&ModelManifest> for JepafileConfig {
+    fn from(m: &ModelManifest) -> Self {
+        Self {
+            name: m.name.clone(),
+            repo_id: m.repo_id.clone(),
+            architecture: m.architecture.clone(),
+            modality: m.modality,
+            patch_size: m.patch_size,
+            embed_dim: m.embed_dim,
+            num_layers: m.num_layers,
+            num_heads: m.num_heads,
+            image_size: m.image_size,
+            frames: m.frames,
+            parameter_count: Some(m.parameter_count.clone()),
+            weights_file: Some(m.weights_file.clone()),
+            variant: m.variant,
+            normalization: m.normalization,
+            mlp_ratio: m.mlp_ratio,
+        }
+    }
 }
 
 impl JepafileConfig {
@@ -44,6 +73,9 @@ impl JepafileConfig {
             disk_size_bytes: disk_size,
             weights_file: self.weights_file.clone().unwrap_or_else(|| "model.safetensors".to_string()),
             created_at: Utc::now(),
+            variant: self.variant,
+            normalization: self.normalization,
+            mlp_ratio: self.mlp_ratio,
         })
     }
 
@@ -61,7 +93,13 @@ impl JepafileConfig {
                 self.patch_size
             )));
         }
-        if self.embed_dim == 0 || self.embed_dim % self.num_heads != 0 {
+        if !self.image_size.is_multiple_of(self.patch_size) {
+            return Err(JepaError::InvalidPayload(format!(
+                "image_size ({}) must be a multiple of patch_size ({})",
+                self.image_size, self.patch_size
+            )));
+        }
+        if self.embed_dim == 0 || self.num_heads == 0 || !self.embed_dim.is_multiple_of(self.num_heads) {
             return Err(JepaError::InvalidPayload(format!(
                 "embed_dim ({}) must be divisible by num_heads ({})",
                 self.embed_dim, self.num_heads
@@ -92,154 +130,135 @@ impl JepafileConfig {
     }
 }
 
+/// A verified catalog entry: a Hugging Face repo whose `model.safetensors` is known
+/// to map 100% onto our backbone. Anything not listed here can still be used via a
+/// custom `Jepafile.json`, but is not promised to load.
+struct Verified {
+    name: &'static str,
+    architecture: &'static str,
+    patch_size: usize,
+    embed_dim: usize,
+    num_layers: usize,
+    num_heads: usize,
+    image_size: usize,
+    parameter_count: &'static str,
+    disk_size_bytes: u64,
+    variant: VitVariant,
+    normalization: Normalization,
+    mlp_ratio: f64,
+}
+
+const VERIFIED: &[Verified] = &[
+    Verified {
+        name: "facebook/ijepa_vith14_1k",
+        architecture: "I-JEPA ViT-H/14 (ImageNet-1k)",
+        patch_size: 14,
+        embed_dim: 1280,
+        num_layers: 32,
+        num_heads: 16,
+        image_size: 224,
+        parameter_count: "632M",
+        disk_size_bytes: 2_523_108_984,
+        variant: VitVariant::Plain,
+        normalization: Normalization::ImageNet,
+        mlp_ratio: 4.0,
+    },
+    Verified {
+        name: "facebook/ijepa_vith14_22k",
+        architecture: "I-JEPA ViT-H/14 (ImageNet-22k)",
+        patch_size: 14,
+        embed_dim: 1280,
+        num_layers: 32,
+        num_heads: 16,
+        image_size: 224,
+        parameter_count: "632M",
+        disk_size_bytes: 2_523_108_984,
+        variant: VitVariant::Plain,
+        normalization: Normalization::ImageNet,
+        mlp_ratio: 4.0,
+    },
+    Verified {
+        name: "facebook/dinov2-small",
+        architecture: "DINOv2 ViT-S/14",
+        patch_size: 14,
+        embed_dim: 384,
+        num_layers: 12,
+        num_heads: 6,
+        image_size: 224,
+        parameter_count: "22M",
+        disk_size_bytes: 88_249_960,
+        variant: VitVariant::DinoV2,
+        normalization: Normalization::ImageNet,
+        mlp_ratio: 4.0,
+    },
+    Verified {
+        name: "facebook/dinov2-base",
+        architecture: "DINOv2 ViT-B/14",
+        patch_size: 14,
+        embed_dim: 768,
+        num_layers: 12,
+        num_heads: 12,
+        image_size: 224,
+        parameter_count: "86M",
+        disk_size_bytes: 346_345_912,
+        variant: VitVariant::DinoV2,
+        normalization: Normalization::ImageNet,
+        mlp_ratio: 4.0,
+    },
+    Verified {
+        name: "google/vit-base-patch16-224",
+        architecture: "ViT-B/16 (ImageNet-21k+1k)",
+        patch_size: 16,
+        embed_dim: 768,
+        num_layers: 12,
+        num_heads: 12,
+        image_size: 224,
+        parameter_count: "86M",
+        disk_size_bytes: 346_293_852,
+        variant: VitVariant::Cls,
+        normalization: Normalization::Inception,
+        mlp_ratio: 4.0,
+    },
+    Verified {
+        name: "timm/vit_base_patch16_224.augreg_in21k",
+        architecture: "ViT-B/16 AugReg (ImageNet-21k)",
+        patch_size: 16,
+        embed_dim: 768,
+        num_layers: 12,
+        num_heads: 12,
+        image_size: 224,
+        parameter_count: "86M",
+        disk_size_bytes: 410_397_786,
+        variant: VitVariant::Cls,
+        normalization: Normalization::Inception,
+        mlp_ratio: 4.0,
+    },
+];
+
 /// Retrieve verified built-in catalog manifest specifications
 pub fn get_verified_manifests() -> Vec<ModelManifest> {
-    vec![
-        ModelManifest {
-            name: "google/vit-base-patch16-224".to_string(),
-            repo_id: "google/vit-base-patch16-224".to_string(),
-            architecture: "ViT-B/16".to_string(),
+    VERIFIED
+        .iter()
+        .map(|v| ModelManifest {
+            name: v.name.to_string(),
+            repo_id: v.name.to_string(),
+            architecture: v.architecture.to_string(),
             modality: ModelModality::Image,
-            patch_size: 16,
-            embed_dim: 768,
-            num_layers: 12,
-            num_heads: 12,
-            image_size: 224,
+            patch_size: v.patch_size,
+            embed_dim: v.embed_dim,
+            num_layers: v.num_layers,
+            num_heads: v.num_heads,
+            image_size: v.image_size,
             frames: None,
-            parameter_count: "86M".to_string(),
-            disk_size_bytes: 343_000_000,
+            parameter_count: v.parameter_count.to_string(),
+            disk_size_bytes: v.disk_size_bytes,
             weights_file: "model.safetensors".to_string(),
             created_at: Utc::now(),
-        },
-        ModelManifest {
-            name: "google/siglip-base-patch16-224".to_string(),
-            repo_id: "google/siglip-base-patch16-224".to_string(),
-            architecture: "SigLIP-B/16".to_string(),
-            modality: ModelModality::Image,
-            patch_size: 16,
-            embed_dim: 768,
-            num_layers: 12,
-            num_heads: 12,
-            image_size: 224,
-            frames: None,
-            parameter_count: "86M".to_string(),
-            disk_size_bytes: 343_000_000,
-            weights_file: "model.safetensors".to_string(),
-            created_at: Utc::now(),
-        },
-        ModelManifest {
-            name: "microsoft/beit-base-patch16-224".to_string(),
-            repo_id: "microsoft/beit-base-patch16-224".to_string(),
-            architecture: "BEiT-B/16".to_string(),
-            modality: ModelModality::Image,
-            patch_size: 16,
-            embed_dim: 768,
-            num_layers: 12,
-            num_heads: 12,
-            image_size: 224,
-            frames: None,
-            parameter_count: "86M".to_string(),
-            disk_size_bytes: 343_000_000,
-            weights_file: "model.safetensors".to_string(),
-            created_at: Utc::now(),
-        },
-        ModelManifest {
-            name: "timm/vit_base_patch16_224.augreg_in21k".to_string(),
-            repo_id: "timm/vit_base_patch16_224.augreg_in21k".to_string(),
-            architecture: "ViT-B/16".to_string(),
-            modality: ModelModality::Image,
-            patch_size: 16,
-            embed_dim: 768,
-            num_layers: 12,
-            num_heads: 12,
-            image_size: 224,
-            frames: None,
-            parameter_count: "86M".to_string(),
-            disk_size_bytes: 343_000_000,
-            weights_file: "model.safetensors".to_string(),
-            created_at: Utc::now(),
-        },
-        ModelManifest {
-            name: "facebook/dinov2-small".to_string(),
-            repo_id: "facebook/dinov2-small".to_string(),
-            architecture: "ViT-S/14".to_string(),
-            modality: ModelModality::Image,
-            patch_size: 14,
-            embed_dim: 384,
-            num_layers: 12,
-            num_heads: 6,
-            image_size: 224,
-            frames: None,
-            parameter_count: "22M".to_string(),
-            disk_size_bytes: 88_000_000,
-            weights_file: "model.safetensors".to_string(),
-            created_at: Utc::now(),
-        },
-        ModelManifest {
-            name: "facebook/dinov2-base".to_string(),
-            repo_id: "facebook/dinov2-base".to_string(),
-            architecture: "ViT-B/14".to_string(),
-            modality: ModelModality::Image,
-            patch_size: 14,
-            embed_dim: 768,
-            num_layers: 12,
-            num_heads: 12,
-            image_size: 224,
-            frames: None,
-            parameter_count: "86M".to_string(),
-            disk_size_bytes: 343_000_000,
-            weights_file: "model.safetensors".to_string(),
-            created_at: Utc::now(),
-        },
-        ModelManifest {
-            name: "facebook/ijepa_vitb16_1k".to_string(),
-            repo_id: "facebook/ijepa_vitb16_1k".to_string(),
-            architecture: "ViT-B/16".to_string(),
-            modality: ModelModality::Image,
-            patch_size: 16,
-            embed_dim: 768,
-            num_layers: 12,
-            num_heads: 12,
-            image_size: 224,
-            frames: None,
-            parameter_count: "86M".to_string(),
-            disk_size_bytes: 344_000_000,
-            weights_file: "model.safetensors".to_string(),
-            created_at: Utc::now(),
-        },
-        ModelManifest {
-            name: "facebook/ijepa_vith14_1k".to_string(),
-            repo_id: "facebook/ijepa_vith14_1k".to_string(),
-            architecture: "ViT-H/14".to_string(),
-            modality: ModelModality::Image,
-            patch_size: 14,
-            embed_dim: 1280,
-            num_layers: 32,
-            num_heads: 16,
-            image_size: 224,
-            frames: None,
-            parameter_count: "632M".to_string(),
-            disk_size_bytes: 2_528_000_000,
-            weights_file: "model.safetensors".to_string(),
-            created_at: Utc::now(),
-        },
-        ModelManifest {
-            name: "facebookresearch/jepa:vjepa_vitl16".to_string(),
-            repo_id: "facebookresearch/jepa".to_string(),
-            architecture: "ViT-L/16".to_string(),
-            modality: ModelModality::Video,
-            patch_size: 16,
-            embed_dim: 1024,
-            num_layers: 24,
-            num_heads: 16,
-            image_size: 224,
-            frames: Some(16),
-            parameter_count: "307M".to_string(),
-            disk_size_bytes: 1_228_000_000,
-            weights_file: "model.safetensors".to_string(),
-            created_at: Utc::now(),
-        },
-    ]
+            variant: Some(v.variant),
+            normalization: Some(v.normalization),
+            mlp_ratio: Some(v.mlp_ratio),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -250,25 +269,25 @@ mod tests {
     fn test_all_verified_manifests_valid() {
         let manifests = get_verified_manifests();
         assert!(!manifests.is_empty());
-        assert!(manifests.len() >= 8);
-
-        // Verify multi-organization catalog coverage
-        let has_google = manifests.iter().any(|m| m.name.starts_with("google/"));
-        let has_microsoft = manifests.iter().any(|m| m.name.starts_with("microsoft/"));
-        let has_timm = manifests.iter().any(|m| m.name.starts_with("timm/"));
-        let has_facebook = manifests.iter().any(|m| m.name.starts_with("facebook"));
-
-        assert!(has_google, "Catalog must include Google models");
-        assert!(has_microsoft, "Catalog must include Microsoft models");
-        assert!(has_timm, "Catalog must include TIMM models");
-        assert!(has_facebook, "Catalog must include Facebook/Meta models");
-
-        for m in manifests {
-            assert!(m.patch_size == 14 || m.patch_size == 16);
-            assert!(m.embed_dim % m.num_heads == 0);
-            assert!(m.num_layers > 0);
-            assert!(m.image_size > 0);
-            assert!(!m.weights_file.is_empty());
+        for m in &manifests {
+            JepafileConfig::from(m).validate().unwrap_or_else(|e| panic!("{}: {e}", m.name));
+            assert!(m.variant.is_some() && m.normalization.is_some(), "{} must be explicit", m.name);
+            assert_eq!(m.backbone_variant(), m.variant.unwrap());
         }
+        let names: std::collections::HashSet<_> = manifests.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names.len(), manifests.len(), "duplicate catalog entry");
+    }
+
+    #[test]
+    fn jepafile_roundtrip_keeps_optional_fields() {
+        let m = &get_verified_manifests()[0];
+        let cfg = JepafileConfig::from(m);
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: JepafileConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.variant, m.variant);
+        assert_eq!(back.normalization, m.normalization);
+        // Old Jepafiles without the new fields still parse.
+        let legacy: JepafileConfig = serde_json::from_str(r#"{"name":"x/y","repo_id":"x/y","architecture":"vit","modality":"image","patch_size":16,"embed_dim":64,"num_layers":1,"num_heads":4,"image_size":224,"frames":null,"parameter_count":null,"weights_file":null}"#).unwrap();
+        assert!(legacy.variant.is_none());
     }
 }

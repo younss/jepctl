@@ -20,10 +20,7 @@ pub struct ModelCatalog {
 
 impl ModelCatalog {
     pub fn new(config: Arc<RuntimeConfig>) -> Self {
-        Self {
-            config,
-            downloader: ModelDownloader::new(),
-        }
+        Self { config, downloader: ModelDownloader::new() }
     }
 
     /// List all locally installed models and registered manifests
@@ -178,10 +175,7 @@ impl ModelCatalog {
     }
 
     /// Stream download a model from Hugging Face hub
-    pub fn start_pull(
-        self: Arc<Self>,
-        repo_id: String,
-    ) -> broadcast::Receiver<PullProgressEvent> {
+    pub fn start_pull(self: Arc<Self>, repo_id: String) -> broadcast::Receiver<PullProgressEvent> {
         let (tx, rx) = broadcast::channel(128);
         let catalog = self.clone();
 
@@ -205,20 +199,7 @@ impl ModelCatalog {
 
             // If verified model, generate manifest file in target directory
             if let Some(m) = get_verified_manifests().into_iter().find(|v| v.name == repo_id || v.repo_id == repo_id) {
-                let jepafile = JepafileConfig {
-                    name: m.name.clone(),
-                    repo_id: m.repo_id.clone(),
-                    architecture: m.architecture.clone(),
-                    modality: m.modality,
-                    patch_size: m.patch_size,
-                    embed_dim: m.embed_dim,
-                    num_layers: m.num_layers,
-                    num_heads: m.num_heads,
-                    image_size: m.image_size,
-                    frames: m.frames,
-                    parameter_count: Some(m.parameter_count.clone()),
-                    weights_file: Some(m.weights_file.clone()),
-                };
+                let jepafile = JepafileConfig::from(&m);
                 let _ = fs::create_dir_all(&target_dir);
                 let _ = jepafile.save_to_file(&target_dir.join("Jepafile.json"));
             }
@@ -271,6 +252,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             port: 11435,
             no_auth: true,
+            cors_origins: Vec::new(),
         });
 
         let catalog = ModelCatalog::new(cfg);
@@ -289,6 +271,9 @@ mod tests {
             frames: None,
             parameter_count: Some("86M".to_string()),
             weights_file: Some("model.safetensors".to_string()),
+            variant: None,
+            normalization: None,
+            mlp_ratio: None,
         };
 
         catalog.register_jepafile(custom_jepafile).unwrap();

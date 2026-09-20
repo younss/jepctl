@@ -9,7 +9,6 @@ use serde_json::json;
 
 use crate::gestures::{match_gestures, GestureMatchResult, RegisteredGesture, DEFAULT_MARGIN, DEFAULT_THRESHOLD};
 use crate::media::image::preprocess_image_bytes;
-use crate::media::ring_buffer::MODEL_VIEW_SIZE;
 use crate::server::handlers::{api_error, embed_current_view, engine_error, ensure_model_loaded, ApiError, AppState};
 use crate::server::middleware::authenticate_request;
 use crate::types::Role;
@@ -82,10 +81,7 @@ pub struct ListGesturesQuery {
 }
 
 fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
 fn decode_data_uri(b64: &str) -> Result<Vec<u8>, ApiError> {
@@ -131,18 +127,16 @@ async fn resolve_input(
 
     if let Some(b64) = image_base64 {
         let bytes = decode_data_uri(&b64)?;
-        let tensor = preprocess_image_bytes(&bytes, MODEL_VIEW_SIZE, MODEL_VIEW_SIZE, &state.engine.device)
-            .map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("Image preprocessing failed: {e}")))?;
         ensure_model_loaded(state).await?;
+        let prep = state.engine.preprocessing().await;
+        let tensor = preprocess_image_bytes(&bytes, &prep, &state.engine.device)
+            .map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("Image preprocessing failed: {e}")))?;
         let (model, _dim, emb, patches, _lat) = state.engine.embed_image(&tensor).await.map_err(engine_error)?;
         let thumb = thumbnail.or_else(|| Some(format!("data:image/jpeg;base64,{}", BASE64_STANDARD.encode(&bytes))));
         return Ok(ResolvedInput { model, embedding: emb, patches, thumbnail: thumb });
     }
 
-    Err(api_error(
-        StatusCode::BAD_REQUEST,
-        "Provide one input: 'from_camera': true, 'embedding' or 'image_base64'",
-    ))
+    Err(api_error(StatusCode::BAD_REQUEST, "Provide one input: 'from_camera': true, 'embedding' or 'image_base64'"))
 }
 
 /// POST /api/gestures - Register (or add a sample to) a reference gesture.
@@ -158,15 +152,14 @@ pub async fn handle_create_gesture(
         return Err(api_error(StatusCode::BAD_REQUEST, "'name' must be 1-64 characters"));
     }
 
-    let input = resolve_input(&state, payload.from_camera, payload.embedding, payload.image_base64, payload.thumbnail).await?;
+    let input =
+        resolve_input(&state, payload.from_camera, payload.embedding, payload.image_base64, payload.thumbnail).await?;
 
     let now = now_secs();
     let item = {
         let mut store = state.gestures.write().await;
         let gesture = store.get_mut_or_insert(&name, &input.model, payload.is_neutral, now);
-        gesture
-            .add_sample(&input.embedding, input.patches.as_deref(), now)
-            .map_err(engine_error)?;
+        gesture.add_sample(&input.embedding, input.patches.as_deref(), now).map_err(engine_error)?;
         if input.thumbnail.is_some() {
             gesture.thumbnail = input.thumbnail;
         }
@@ -179,7 +172,10 @@ pub async fn handle_create_gesture(
 
     tracing::info!(
         "Gesture '{}' now has {} sample(s) for model '{}' (dim {})",
-        item.name, item.sample_count, item.model_name, item.dimension
+        item.name,
+        item.sample_count,
+        item.model_name,
+        item.dimension
     );
     Ok((StatusCode::CREATED, Json(item)))
 }
@@ -187,8 +183,10 @@ pub async fn handle_create_gesture(
 /// GET /api/gestures - List registered gestures (active model by default).
 pub async fn handle_list_gestures(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(q): Query<ListGesturesQuery>,
-) -> Json<Vec<GestureItem>> {
+) -> Result<Json<Vec<GestureItem>>, ApiError> {
+    let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
     let store = state.gestures.read().await;
     let items: Vec<GestureItem> = if q.all {
         let mut all: Vec<&RegisteredGesture> = store.gestures.values().collect();
@@ -204,7 +202,7 @@ pub async fn handle_list_gestures(
             None => Vec::new(),
         }
     };
-    Json(items)
+    Ok(Json(items))
 }
 
 /// DELETE /api/gestures/{name} - Remove a gesture and all its samples.

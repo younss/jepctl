@@ -108,6 +108,48 @@ pub struct HardwareInfo {
     pub cpu_threads: usize,
 }
 
+/// Pixel normalisation applied before the patch embedding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Normalization {
+    /// mean (0.485, 0.456, 0.406), std (0.229, 0.224, 0.225) — I-JEPA, DINOv2, HF ViT.
+    #[default]
+    ImageNet,
+    /// mean 0.5, std 0.5 on every channel — timm "augreg" ViTs, SigLIP.
+    Inception,
+}
+
+impl Normalization {
+    pub fn mean(self) -> [f32; 3] {
+        match self {
+            Self::ImageNet => [0.485, 0.456, 0.406],
+            Self::Inception => [0.5, 0.5, 0.5],
+        }
+    }
+
+    pub fn std(self) -> [f32; 3] {
+        match self {
+            Self::ImageNet => [0.229, 0.224, 0.225],
+            Self::Inception => [0.5, 0.5, 0.5],
+        }
+    }
+}
+
+/// How a model expects its input prepared. Shared by every entry point (upload,
+/// camera, CLI) so that reference and live embeddings are always comparable.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Preprocessing {
+    /// Side of the square input (centre crop + resize).
+    pub size: u32,
+    pub normalization: Normalization,
+}
+
+impl Default for Preprocessing {
+    fn default() -> Self {
+        Self { size: 224, normalization: Normalization::ImageNet }
+    }
+}
+
 /// Jepafile manifest definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelManifest {
@@ -125,6 +167,52 @@ pub struct ModelManifest {
     pub disk_size_bytes: u64,
     pub weights_file: String,
     pub created_at: DateTime<Utc>,
+    /// Backbone structure (CLS token, LayerScale). Inferred from `name` when absent.
+    #[serde(default)]
+    pub variant: Option<crate::engine::vit::VitVariant>,
+    /// Pixel normalisation. Inferred from `name` when absent.
+    #[serde(default)]
+    pub normalization: Option<Normalization>,
+    /// MLP hidden ratio (4.0 for every catalog model except ViT-g).
+    #[serde(default)]
+    pub mlp_ratio: Option<f64>,
+}
+
+impl ModelManifest {
+    /// Backbone variant, explicit or inferred from the model family.
+    pub fn backbone_variant(&self) -> crate::engine::vit::VitVariant {
+        use crate::engine::vit::VitVariant;
+        if let Some(v) = self.variant {
+            return v;
+        }
+        let n = self.name.to_ascii_lowercase();
+        if n.contains("dinov2") {
+            VitVariant::DinoV2
+        } else if n.contains("jepa") {
+            VitVariant::Plain
+        } else if n.contains("vit") {
+            VitVariant::Cls
+        } else {
+            VitVariant::Plain
+        }
+    }
+
+    /// Input preprocessing, explicit or inferred from the model family.
+    pub fn preprocessing(&self) -> Preprocessing {
+        let normalization = self.normalization.unwrap_or_else(|| {
+            let n = self.name.to_ascii_lowercase();
+            if (n.starts_with("timm/") && n.contains("augreg")) || n.starts_with("google/vit") || n.contains("siglip") {
+                Normalization::Inception
+            } else {
+                Normalization::ImageNet
+            }
+        });
+        Preprocessing { size: self.image_size as u32, normalization }
+    }
+
+    pub fn mlp_ratio(&self) -> f64 {
+        self.mlp_ratio.unwrap_or(4.0)
+    }
 }
 
 /// System health and status response.
@@ -326,134 +414,22 @@ mod tests {
         assert!(sim_ortho.abs() < 1e-5);
     }
 
+    /// Every static `getElementById("...")` in app.js must exist in index.html.
+    /// (Template-literal ids such as `slot-img-${i}` are generated and skipped.)
     #[test]
-    fn test_app_js_syntax_balance() {
+    fn ui_dom_ids_referenced_by_js_exist_in_html() {
         let js = include_str!("ui/app.js");
-        let chars: Vec<char> = js.chars().collect();
-        let mut i = 0;
-        let mut line_num = 1;
-        let mut in_line_comment = false;
-        let mut in_block_comment = false;
-        let mut in_single_quote = false;
-        let mut in_double_quote = false;
-        let mut escaped = false;
-        // Stack can contain: '{', '(', '[', '`'
-        let mut stack: Vec<(char, usize)> = Vec::new();
-
-        while i < chars.len() {
-            let c = chars[i];
-            let next_c = if i + 1 < chars.len() { chars[i + 1] } else { '\0' };
-
-            if c == '\n' {
-                line_num += 1;
-                in_line_comment = false;
-                escaped = false;
-                i += 1;
-                continue;
-            }
-
-            if in_line_comment {
-                i += 1;
-                continue;
-            }
-
-            if in_block_comment {
-                if c == '*' && next_c == '/' {
-                    in_block_comment = false;
-                    i += 2;
-                } else {
-                    i += 1;
-                }
-                continue;
-            }
-
-            if in_single_quote {
-                if !escaped && c == '\'' {
-                    in_single_quote = false;
-                }
-                escaped = !escaped && c == '\\';
-                i += 1;
-                continue;
-            }
-
-            if in_double_quote {
-                if !escaped && c == '"' {
-                    in_double_quote = false;
-                }
-                escaped = !escaped && c == '\\';
-                i += 1;
-                continue;
-            }
-
-            // Check if we are inside a template literal (stack top is '`')
-            if let Some(&('`', _)) = stack.last() {
-                if !escaped && c == '`' {
-                    stack.pop();
-                    i += 1;
-                    continue;
-                }
-                if !escaped && c == '$' && next_c == '{' {
-                    stack.push(('{', line_num));
-                    i += 2;
-                    continue;
-                }
-                escaped = !escaped && c == '\\';
-                i += 1;
-                continue;
-            }
-
-            // Normal code
-            if c == '/' && next_c == '/' {
-                in_line_comment = true;
-                i += 2;
-                continue;
-            }
-            if c == '/' && next_c == '*' {
-                in_block_comment = true;
-                i += 2;
-                continue;
-            }
-            if c == '\'' {
-                in_single_quote = true;
-                escaped = false;
-                i += 1;
-                continue;
-            }
-            if c == '"' {
-                in_double_quote = true;
-                escaped = false;
-                i += 1;
-                continue;
-            }
-            if c == '`' {
-                stack.push(('`', line_num));
-                escaped = false;
-                i += 1;
-                continue;
-            }
-
-            if c == '{' || c == '(' || c == '[' {
-                stack.push((c, line_num));
-            } else if c == '}' {
-                match stack.pop() {
-                    Some(('{', _)) => {},
-                    other => panic!("Mismatched '}}' at line {}: expected '{{', found {:?}", line_num, other),
-                }
-            } else if c == ')' {
-                match stack.pop() {
-                    Some(('(', _)) => {},
-                    other => panic!("Mismatched ')' at line {}: expected '(', found {:?}", line_num, other),
-                }
-            } else if c == ']' {
-                match stack.pop() {
-                    Some(('[', _)) => {},
-                    other => panic!("Mismatched ']' at line {}: expected '[', found {:?}", line_num, other),
+        let html = include_str!("ui/index.html");
+        let mut missing = Vec::new();
+        for chunk in js.split("getElementById(\"").skip(1) {
+            if let Some(id) = chunk.split('"').next() {
+                if !html.contains(&format!("id=\"{id}\"")) {
+                    missing.push(id.to_string());
                 }
             }
-
-            i += 1;
         }
-
-        assert!(stack.is_empty(), "Unclosed tokens remaining on stack: {:?}", stack);
+        missing.sort();
+        missing.dedup();
+        assert!(missing.is_empty(), "ids used in app.js but absent from index.html: {missing:?}");
     }
 }

@@ -19,7 +19,7 @@ use clap::{Args, Parser, Subcommand};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::auth::AuthManager;
-use crate::config::{RuntimeConfig, DEFAULT_HOST, DEFAULT_PORT};
+use crate::config::{RuntimeConfig, DEFAULT_HOST, DEFAULT_MODEL, DEFAULT_PORT};
 use crate::engine::device::select_device;
 use crate::engine::EngineManager;
 use crate::hub::manifest::get_verified_manifests;
@@ -34,8 +34,8 @@ use crate::types::{CreateKeyRequest, Role};
 #[derive(Parser)]
 #[command(
     name = "jepa",
-    about = "Local runtime for Joint-Embedding Predictive Architectures (I-JEPA, V-JEPA)",
-    version = "0.1.0"
+    about = "Local runtime, CLI and testbench for JEPA-style vision encoders (I-JEPA, DINOv2, ViT)",
+    version
 )]
 struct Cli {
     #[command(subcommand)]
@@ -60,6 +60,11 @@ struct Cli {
     /// Open native desktop application window
     #[arg(long, global = true)]
     gui: bool,
+
+    /// Browser origins allowed to call the API cross-site (comma separated,
+    /// e.g. "http://localhost:5173,https://app.example.com"). Default: same-origin only.
+    #[arg(long, global = true, env = "JEPA_CORS_ORIGINS", value_delimiter = ',')]
+    cors_origins: Vec<String>,
 }
 
 #[derive(Subcommand)]
@@ -81,13 +86,13 @@ enum Commands {
 
     /// Pull model checkpoint weights from Hugging Face hub
     Pull {
-        /// Repository ID (e.g. facebook/ijepa_vith14_1k or facebookresearch/jepa:vjepa_vitl16)
+        /// Hugging Face repository ID (e.g. facebook/ijepa_vith14_1k or facebook/dinov2-small)
         model: String,
     },
 
-    /// Compute latent representation vector for an image or video file
+    /// Compute the latent representation vector of an image file
     Embed {
-        /// Path to target image (PNG, JPEG, WebP) or video file
+        /// Path to target image (PNG, JPEG, WebP)
         path: PathBuf,
 
         /// Model name to use for embedding
@@ -171,10 +176,7 @@ enum KeyCommands {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
     tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,jepa=debug".into()),
-        )
+        .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,jepa=debug".into()))
         .with(tracing_subscriber::fmt::layer())
         .init();
 
@@ -182,13 +184,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Security check: --no-auth is strictly restricted to 127.0.0.1 or localhost
     if cli.no_auth && cli.host != "127.0.0.1" && cli.host != "localhost" {
-        eprintln!("Security violation: --no-auth is strictly forbidden when binding to external interfaces ({}).", cli.host);
+        eprintln!(
+            "Security violation: --no-auth is strictly forbidden when binding to external interfaces ({}).",
+            cli.host
+        );
         eprintln!("Authentication must remain enabled for external/LAN connections.");
         std::process::exit(1);
     }
 
     // Initialize configuration
-    let config = Arc::new(RuntimeConfig::init(cli.host.clone(), cli.port, cli.no_auth)?);
+    let mut runtime_config = RuntimeConfig::init(cli.host.clone(), cli.port, cli.no_auth)?;
+    runtime_config.cors_origins =
+        cli.cors_origins.iter().map(|o| o.trim().to_string()).filter(|o| !o.is_empty()).collect();
+    let config = Arc::new(runtime_config);
     let settings = config.load_settings();
 
     // Initialize hardware device
@@ -307,7 +315,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
 
-            let model_name = model.unwrap_or_else(|| "facebook/ijepa_vitb16_1k".to_string());
+            let model_name = model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
             if let Some(m) = catalog.get_manifest(&model_name) {
                 let weights = catalog.get_weights_path(&model_name);
                 engine.load_model(m, weights.as_deref()).await?;
@@ -317,7 +325,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let file_bytes = std::fs::read(&path)?;
-            let tensor = preprocess_image_bytes(&file_bytes, 224, 224, &engine.device)?;
+            let prep = engine.preprocessing().await;
+            let tensor = preprocess_image_bytes(&file_bytes, &prep, &engine.device)?;
             let (m_name, dim, embedding, _patches, latency_ms) = engine.embed_image(&tensor).await?;
 
             if format == "raw" {
@@ -340,12 +349,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         Some(Commands::Stream { camera, fps, model }) => {
-            let model_name = model.unwrap_or_else(|| "facebookresearch/jepa:vjepa_vitl16".to_string());
-            if let Some(m) = catalog.get_manifest(&model_name) {
-                let weights = catalog.get_weights_path(&model_name);
-                engine.load_model(m, weights.as_deref()).await?;
-                println!("Loaded model '{}' for streaming.", model_name);
-            }
+            let model_name = model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
+            let Some(m) = catalog.get_manifest(&model_name) else {
+                eprintln!("Model '{}' not found in catalog.", model_name);
+                std::process::exit(1);
+            };
+            let weights = catalog.get_weights_path(&model_name);
+            engine.load_model(m, weights.as_deref()).await?;
+            let prep = engine.preprocessing().await;
+            println!("Loaded model '{}' for streaming.", model_name);
 
             camera_supervisor.start(camera, fps)?;
             println!("Streaming embeddings from camera device {} at {} FPS. Press Ctrl-C to stop.", camera, fps);
@@ -353,11 +365,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut frame_rx = camera_supervisor.subscribe();
             let mut frame_count: u64 = 0;
 
-            while let Ok(_) = frame_rx.recv().await {
+            while frame_rx.recv().await.is_ok() {
                 frame_count += 1;
                 let vid_tensor = {
                     let lock = ring_buffer.read().await;
-                    lock.to_video_tensor(224, 224, &engine.device)?
+                    lock.to_video_tensor(&prep, &engine.device)?
                 };
 
                 let (m_name, _dim, embedding, latency_ms) = engine.embed_video(&vid_tensor).await?;
@@ -385,17 +397,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{:<42} {:<10} {:<10} {:<10} {:<12}", "NAME", "MODALITY", "DIMS", "PARAMS", "DISK SIZE");
                 for m in models {
                     let size_mb = (m.disk_size_bytes / (1024 * 1024)).to_string() + " MB";
-                    println!("{:<42} {:<10} {:<10} {:<10} {:<12}", m.name, m.modality.to_string(), m.embed_dim, m.parameter_count, size_mb);
+                    println!(
+                        "{:<42} {:<10} {:<10} {:<10} {:<12}",
+                        m.name,
+                        m.modality.to_string(),
+                        m.embed_dim,
+                        m.parameter_count,
+                        size_mb
+                    );
                 }
             }
         }
 
-        Some(Commands::Rm { model }) => {
-            match catalog.delete_model(&model)? {
-                true => println!("Successfully removed model '{}'.", model),
-                false => println!("Model '{}' was not found on disk.", model),
-            }
-        }
+        Some(Commands::Rm { model }) => match catalog.delete_model(&model)? {
+            true => println!("Successfully removed model '{}'.", model),
+            false => println!("Model '{}' was not found on disk.", model),
+        },
 
         Some(Commands::Key { sub }) => match sub {
             KeyCommands::Generate { name, role, days } => {
@@ -403,11 +420,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "admin" => Role::Admin,
                     _ => Role::Inference,
                 };
-                let req = CreateKeyRequest {
-                    name,
-                    role: r,
-                    expire_days: days,
-                };
+                let req = CreateKeyRequest { name, role: r, expire_days: days };
                 let res = auth.create_key(req).await?;
                 println!("Generated API Key:");
                 println!("  Prefix:      {}", res.key_prefix);
@@ -440,14 +453,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn print_startup_banner(config: &RuntimeConfig, auth: &AuthManager) {
-    println!(r#"
+    println!(
+        r#"
        ___ _____ ___   _   
       |_  |  ___| ___ \ /_\  
         | | |__ | |_/ // _ \ 
         | |  __||  __/ / _ \ 
     /\__/ / |___| |   / ___ \
-    \____/\____/\_|  /_/   \_\  v0.1.0
-"#);
+    \____/\____/\_|  /_/   \_\  v{version}
+"#,
+        version = env!("CARGO_PKG_VERSION")
+    );
     println!("  Joint-Embedding Predictive Architecture Local Runtime");
     println!("  Serving web testbench at: http://{}:{}", config.host, config.port);
     println!("  Root Storage: {}", config.home_dir.display());

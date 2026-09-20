@@ -37,6 +37,7 @@
         slotHoldCounts: { 1: 0, 2: 0, 3: 0 },
         lastAudioToneTime: 0,
         registeredGestures: [],
+        streamStarting: null,
         modelViewTimer: null,
         modelViewObjectUrl: null,
         modelViewSequence: null,
@@ -75,7 +76,9 @@
         telemetryMem: document.getElementById("telemetry-mem"),
         btnQuickCamera: document.getElementById("btn-quick-camera"),
         btnQuickPullIjepa: document.getElementById("btn-quick-pull-ijepa"),
-        btnQuickPullVjepa: document.getElementById("btn-quick-pull-vjepa"),
+        btnQuickPullDinov2: document.getElementById("btn-quick-pull-dinov2"),
+        verifiedGrid: document.getElementById("verified-grid"),
+        appVersion: document.getElementById("app-version"),
 
         // Models
         pullRepoInput: document.getElementById("pull-repo-input"),
@@ -278,8 +281,8 @@
         if (el.btnQuickPullIjepa) {
             el.btnQuickPullIjepa.addEventListener("click", () => pullModel("facebook/ijepa_vith14_1k"));
         }
-        if (el.btnQuickPullVjepa) {
-            el.btnQuickPullVjepa.addEventListener("click", () => pullModel("facebookresearch/jepa:vjepa_vitl16"));
+        if (el.btnQuickPullDinov2) {
+            el.btnQuickPullDinov2.addEventListener("click", () => pullModel("facebook/dinov2-small"));
         }
     }
 
@@ -350,6 +353,8 @@
 
             el.memStats.textContent = `${usedGb} GB / ${totalGb} GB (${percent}%)`;
             el.memProgress.style.width = `${percent}%`;
+
+            if (el.appVersion && data.version) el.appVersion.textContent = `v${data.version}`;
 
             // Active Model
             const modelChanged = state.activeModel !== data.active_model;
@@ -439,8 +444,48 @@
             const models = await res.json();
             renderModelsTable(models);
             updateGestureModelSelector(models);
+            await renderVerifiedCatalog(models);
         } catch (e) {
             console.error("fetchModels error:", e);
+        }
+    }
+
+    // The verified catalog comes from the server so the UI can never advertise a model
+    // the engine does not actually load.
+    async function renderVerifiedCatalog(installed) {
+        if (!el.verifiedGrid) return;
+        try {
+            const res = await apiFetch("/api/catalog");
+            if (!res.ok) return;
+            const catalog = await res.json();
+            const installedNames = new Set((installed || []).filter((m) => m.disk_size_bytes > 0).map((m) => m.name));
+            el.verifiedGrid.innerHTML = "";
+            catalog.forEach((m) => {
+                const card = document.createElement("div");
+                card.className = "verified-card";
+                const org = m.name.split("/")[0];
+                const isInstalled = installedNames.has(m.name);
+                const sizeGb = m.disk_size_bytes ? (m.disk_size_bytes / 1e9).toFixed(2) : "?";
+                card.innerHTML = `
+                    <div class="badge-row">
+                        <span class="badge badge-image">${escapeHtml(org)}</span>
+                        <span class="badge badge-dim">${m.embed_dim} dims</span>
+                        <span class="badge badge-dim">${escapeHtml(m.variant || "plain")}</span>
+                    </div>
+                    <h4>${escapeHtml(m.name)}</h4>
+                    <p>${escapeHtml(m.architecture)} · ${escapeHtml(m.parameter_count)} · ${m.image_size}px · ${escapeHtml(m.normalization || "imagenet")} norm · ${sizeGb} GB</p>
+                    <div class="card-action"></div>`;
+                const action = card.querySelector(".card-action");
+                const btn = document.createElement("button");
+                btn.className = isInstalled ? "btn btn-sm btn-outline" : "btn btn-sm btn-primary";
+                btn.textContent = isInstalled ? "Installed" : "Pull Checkpoint";
+                btn.disabled = isInstalled;
+                btn.addEventListener("click", () => pullModel(m.name));
+                action.appendChild(btn);
+                el.verifiedGrid.appendChild(card);
+            });
+        } catch (e) {
+            console.error("renderVerifiedCatalog error:", e);
         }
     }
 
@@ -919,7 +964,19 @@
         }
     }
 
-    async function startLiveStream() {
+    // Serialise concurrent start requests (e.g. "Capture" clicked while the camera is
+    // still starting): every caller awaits the same in-flight start.
+    function startLiveStream() {
+        if (state.isStreaming) return Promise.resolve();
+        if (!state.streamStarting) {
+            state.streamStarting = startLiveStreamInner().finally(() => {
+                state.streamStarting = null;
+            });
+        }
+        return state.streamStarting;
+    }
+
+    async function startLiveStreamInner() {
         const camIdx = el.cameraDeviceSelect ? parseInt(el.cameraDeviceSelect.value, 10) : 0;
         const fps = state.streamFps;
 
@@ -928,7 +985,9 @@
             await apiFetch(`/api/camera/start?device=${camIdx}&fps=${fps}`, { method: "POST" });
 
             // 2. Open Server-Sent Events (SSE) listener
-            const sseUrl = `/api/embed/stream?fps=${fps}&threshold=${state.gestureThreshold}&margin=${state.gestureMargin}`;
+            if (!state.authToken) await fetchSessionToken();
+            const tokenParam = state.authToken && state.authToken !== "no_auth" ? `&token=${encodeURIComponent(state.authToken)}` : "";
+            const sseUrl = `/api/embed/stream?fps=${fps}&threshold=${state.gestureThreshold}&margin=${state.gestureMargin}${tokenParam}`;
             state.sseSource = new EventSource(sseUrl);
 
             state.sseSource.onmessage = (e) => {

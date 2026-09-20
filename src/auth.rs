@@ -1,11 +1,11 @@
 //! Authentication, RBAC authorization, and constant-time validation.
 
+use chrono::{Duration, Utc};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
-use chrono::{Duration, Utc};
 use subtle::ConstantTimeEq;
 use tokio::sync::RwLock;
 
@@ -64,11 +64,8 @@ impl AuthManager {
         };
         map.insert(admin_token.clone(), admin_record);
 
-        let manager = Arc::new(Self {
-            tokens: RwLock::new(map),
-            keys_file: keys_file.to_path_buf(),
-            no_auth_enabled: no_auth,
-        }) ;
+        let manager =
+            Arc::new(Self { tokens: RwLock::new(map), keys_file: keys_file.to_path_buf(), no_auth_enabled: no_auth });
 
         // Persist back
         let _ = manager.persist_sync();
@@ -105,13 +102,7 @@ impl AuthManager {
 
         self.persist().await?;
 
-        Ok(CreateKeyResponse {
-            key_prefix,
-            raw_token,
-            role: req.role,
-            name: req.name,
-            created_at: now,
-        })
+        Ok(CreateKeyResponse { key_prefix, raw_token, role: req.role, name: req.name, created_at: now })
     }
 
     /// List all registered key records
@@ -125,11 +116,8 @@ impl AuthManager {
         let mut found = false;
         {
             let mut lock = self.tokens.write().await;
-            let to_remove: Vec<String> = lock
-                .iter()
-                .filter(|(_, rec)| rec.key_prefix == prefix)
-                .map(|(k, _)| k.clone())
-                .collect();
+            let to_remove: Vec<String> =
+                lock.iter().filter(|(_, rec)| rec.key_prefix == prefix).map(|(k, _)| k.clone()).collect();
 
             for k in to_remove {
                 lock.remove(&k);
@@ -173,9 +161,8 @@ impl AuthManager {
             }
         }
 
-        let record = matched_record.ok_or_else(|| {
-            JepaError::AuthError("Invalid or missing Bearer authorization token".to_string())
-        })?;
+        let record = matched_record
+            .ok_or_else(|| JepaError::AuthError("Invalid or missing Bearer authorization token".to_string()))?;
 
         // Verify expiration
         if let Some(exp) = record.expires_at {
@@ -194,9 +181,7 @@ impl AuthManager {
                 if record.role == Role::Admin {
                     Ok(record)
                 } else {
-                    Err(JepaError::Forbidden(
-                        "Endpoint requires administrative privileges".to_string(),
-                    ))
+                    Err(JepaError::Forbidden("Endpoint requires administrative privileges".to_string()))
                 }
             }
         }

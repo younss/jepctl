@@ -5,7 +5,7 @@ set -euo pipefail
 # Builds release binary, creates /Applications/JEPA.app native desktop bundle,
 # packages CLI into /usr/local/bin/jepa, and installs LaunchAgent.
 
-VERSION="0.1.0"
+VERSION="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
 IDENTIFIER="com.jepa.pkg"
 BUILD_DIR="target/packaging_macos"
 PKG_ROOT="${BUILD_DIR}/root"
@@ -13,7 +13,7 @@ SCRIPTS_DIR="${BUILD_DIR}/scripts"
 OUTPUT_PKG="target/jepa-${VERSION}-macos-arm64.pkg"
 
 echo "Building release binary for Apple Silicon (arm64)..."
-cargo build --release
+cargo build --release --features metal
 
 rm -rf "${PKG_ROOT}" "${SCRIPTS_DIR}"
 mkdir -p "${PKG_ROOT}/usr/local/bin"

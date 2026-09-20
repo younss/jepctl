@@ -1,12 +1,15 @@
 //! I-JEPA 2D Image Encoder and Patch Representation Extractor.
 
+use candle_core::{Device, Tensor};
 use std::path::Path;
 use std::time::Instant;
-use candle_core::{Device, Tensor};
 
 use crate::engine::vit::VitBackbone;
 use crate::engine::{build_backbone, load_checkpoint_strict};
 use crate::types::{JepaError, ModelManifest, WeightReport};
+
+/// `(pooled embedding, per-patch tokens, latency in ms)`.
+pub type ImageForward = (Vec<f32>, Vec<Vec<f32>>, f64);
 
 /// I-JEPA image encoder instance
 pub struct IJepaModel {
@@ -22,12 +25,7 @@ impl IJepaModel {
     pub fn load(manifest: ModelManifest, weights_path: &Path, device: Device) -> Result<Self, JepaError> {
         let (varmap, mut backbone) = build_backbone(&manifest, &device)?;
         let weights = load_checkpoint_strict(&varmap, &mut backbone, weights_path, &device, &manifest.name)?;
-        Ok(Self {
-            manifest,
-            backbone,
-            device,
-            weights,
-        })
+        Ok(Self { manifest, backbone, device, weights })
     }
 
     /// Build the architecture with random weights. Only useful for tests and
@@ -36,16 +34,11 @@ impl IJepaModel {
     pub fn load_random(manifest: ModelManifest, device: Device) -> Result<Self, JepaError> {
         let (_varmap, backbone) = build_backbone(&manifest, &device)?;
         let expected = _varmap.data().lock().map(|d| d.len()).unwrap_or(0);
-        Ok(Self {
-            manifest,
-            backbone,
-            device,
-            weights: WeightReport { loaded: 0, expected, source: "random".into() },
-        })
+        Ok(Self { manifest, backbone, device, weights: WeightReport { loaded: 0, expected, source: "random".into() } })
     }
 
     /// Forward pass computing global pooled representation and spatial patch representations
-    pub fn forward_image(&self, img: &Tensor) -> Result<(Vec<f32>, Vec<Vec<f32>>, f64), JepaError> {
+    pub fn forward_image(&self, img: &Tensor) -> Result<ImageForward, JepaError> {
         let start = Instant::now();
         let img = img.to_device(&self.device)?;
 
@@ -73,8 +66,8 @@ impl IJepaModel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle_core::DType;
     use crate::types::ModelModality;
+    use candle_core::DType;
 
     #[test]
     fn test_load_refuses_missing_checkpoint() {
@@ -93,6 +86,9 @@ mod tests {
             disk_size_bytes: 0,
             weights_file: "model.safetensors".to_string(),
             created_at: chrono::Utc::now(),
+            variant: None,
+            normalization: None,
+            mlp_ratio: None,
         };
         let err = IJepaModel::load(manifest, Path::new("/nonexistent/model.safetensors"), Device::Cpu)
             .err()
@@ -117,6 +113,9 @@ mod tests {
             disk_size_bytes: 1024,
             weights_file: "model.safetensors".to_string(),
             created_at: chrono::Utc::now(),
+            variant: None,
+            normalization: None,
+            mlp_ratio: None,
         };
 
         let device = Device::Cpu;

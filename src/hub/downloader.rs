@@ -1,11 +1,11 @@
 //! Hugging Face safetensors stream downloader with atomic write and real-time progress.
 
+use futures_util::StreamExt;
+use reqwest::Client;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-use futures_util::StreamExt;
-use reqwest::Client;
 use tokio::sync::broadcast;
 
 use crate::types::{JepaError, PullProgressEvent};
@@ -14,14 +14,15 @@ pub struct ModelDownloader {
     client: Client,
 }
 
+impl Default for ModelDownloader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ModelDownloader {
     pub fn new() -> Self {
-        Self {
-            client: Client::builder()
-                .user_agent("jepa-runtime/0.1.0 (pure-rust)")
-                .build()
-                .unwrap_or_default(),
-        }
+        Self { client: Client::builder().user_agent("jepa-runtime/0.1.0 (pure-rust)").build().unwrap_or_default() }
     }
 
     /// Stream download model weights from Hugging Face hub into target directory
@@ -37,10 +38,7 @@ impl ModelDownloader {
 
         // Canonical Hugging Face direct resolve URL for safetensors weights
         let clean_repo = repo_id.replace("facebookresearch/jepa:", "facebookresearch/");
-        let url = format!(
-            "https://huggingface.co/{}/resolve/main/model.safetensors",
-            clean_repo
-        );
+        let url = format!("https://huggingface.co/{}/resolve/main/model.safetensors", clean_repo);
 
         tracing::info!("Initiating stream download from: {}", url);
 
@@ -94,16 +92,9 @@ impl ModelDownloader {
 
             if last_emit.elapsed().as_millis() >= 200 || downloaded == total_bytes {
                 let elapsed_secs = start_time.elapsed().as_secs_f64();
-                let speed_mb_s = if elapsed_secs > 0.0 {
-                    (downloaded as f64 / (1024.0 * 1024.0)) / elapsed_secs
-                } else {
-                    0.0
-                };
-                let percentage = if total_bytes > 0 {
-                    (downloaded as f32 / total_bytes as f32) * 100.0
-                } else {
-                    0.0
-                };
+                let speed_mb_s =
+                    if elapsed_secs > 0.0 { (downloaded as f64 / (1024.0 * 1024.0)) / elapsed_secs } else { 0.0 };
+                let percentage = if total_bytes > 0 { (downloaded as f32 / total_bytes as f32) * 100.0 } else { 0.0 };
 
                 let _ = progress_tx.send(PullProgressEvent {
                     repo_id: repo_id.to_string(),

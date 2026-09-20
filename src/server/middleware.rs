@@ -1,14 +1,14 @@
 //! Security middleware, Bearer token guard, and audit logging.
 
-use std::collections::VecDeque;
-use std::sync::Arc;
-use std::time::Instant;
 use axum::extract::Request;
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{Json, Response};
 use chrono::Utc;
 use serde_json::json;
+use std::collections::VecDeque;
+use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::RwLock;
 
 use crate::auth::AuthManager;
@@ -34,14 +34,7 @@ pub async fn record_audit_entry(
     if lock.len() >= 100 {
         lock.pop_back();
     }
-    lock.push_front(AuditLogEntry {
-        timestamp: Utc::now(),
-        method,
-        path,
-        client_ip,
-        status_code,
-        latency_ms,
-    });
+    lock.push_front(AuditLogEntry { timestamp: Utc::now(), method, path, client_ip, status_code, latency_ms });
 }
 
 /// Extract and authenticate Bearer token with required RBAC role
@@ -61,9 +54,7 @@ pub async fn authenticate_request(
         });
     }
 
-    let auth_header = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|h| h.to_str().ok());
+    let auth_header = headers.get(axum::http::header::AUTHORIZATION).and_then(|h| h.to_str().ok());
 
     let token = match auth_header {
         Some(val) if val.starts_with("Bearer ") => &val[7..],
@@ -80,29 +71,16 @@ pub async fn authenticate_request(
     auth_manager
         .validate_token(token, required_role)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::FORBIDDEN,
-                Json(json!({ "error": e.to_string() })),
-            )
-        })
+        .map_err(|e| (StatusCode::FORBIDDEN, Json(json!({ "error": e.to_string() }))))
 }
 
 /// Audit logging middleware layer
-pub async fn audit_middleware(
-    req: Request,
-    next: Next,
-    audit_log: SharedAuditLog,
-) -> Response {
+pub async fn audit_middleware(req: Request, next: Next, audit_log: SharedAuditLog) -> Response {
     let start = Instant::now();
     let method = req.method().to_string();
     let path = req.uri().path().to_string();
-    let client_ip = req
-        .headers()
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("127.0.0.1")
-        .to_string();
+    let client_ip =
+        req.headers().get("x-forwarded-for").and_then(|v| v.to_str().ok()).unwrap_or("127.0.0.1").to_string();
 
     let response = next.run(req).await;
 

@@ -27,15 +27,9 @@ pub fn launch_desktop_window(target_url: &str) -> Result<(), JepaError> {
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
 
-        match event {
-            Event::WindowEvent {
-                event: WindowEvent::CloseRequested,
-                ..
-            } => {
-                tracing::info!("Desktop window closed by user. Terminating application.");
-                *control_flow = ControlFlow::Exit;
-            }
-            _ => (),
+        if let Event::WindowEvent { event: WindowEvent::CloseRequested, .. } = event {
+            tracing::info!("Desktop window closed by user. Terminating application.");
+            *control_flow = ControlFlow::Exit;
         }
     });
 }

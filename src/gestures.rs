@@ -77,12 +77,7 @@ impl RegisteredGesture {
     }
 
     /// Append a reference sample and recompute the prototype.
-    pub fn add_sample(
-        &mut self,
-        embedding: &[f32],
-        patches: Option<&[Vec<f32>]>,
-        now: u64,
-    ) -> Result<(), JepaError> {
+    pub fn add_sample(&mut self, embedding: &[f32], patches: Option<&[Vec<f32>]>, now: u64) -> Result<(), JepaError> {
         if embedding.is_empty() {
             return Err(JepaError::InvalidPayload("Empty embedding".into()));
         }
@@ -203,11 +198,8 @@ pub fn match_gestures(
     margin_required: f32,
 ) -> GestureMatchResult {
     let input = normalize_l2(input_embedding);
-    let candidates: Vec<&RegisteredGesture> = gestures
-        .iter()
-        .copied()
-        .filter(|g| g.dimension == input.len() && !g.prototype.is_empty())
-        .collect();
+    let candidates: Vec<&RegisteredGesture> =
+        gestures.iter().copied().filter(|g| g.dimension == input.len() && !g.prototype.is_empty()).collect();
 
     if candidates.is_empty() {
         return GestureMatchResult::empty(threshold, "No registered gesture matches the input dimension");
@@ -229,9 +221,8 @@ pub fn match_gestures(
         c
     });
 
-    let input_residual = centroid.as_ref().map(|c| {
-        normalize_l2(&input.iter().zip(c.iter()).map(|(a, b)| a - b).collect::<Vec<_>>())
-    });
+    let input_residual =
+        centroid.as_ref().map(|c| normalize_l2(&input.iter().zip(c.iter()).map(|(a, b)| a - b).collect::<Vec<_>>()));
 
     let mut scores: Vec<GestureScore> = candidates
         .iter()
@@ -239,9 +230,7 @@ pub fn match_gestures(
             let raw = dot_product(&input, &g.prototype).clamp(0.0, 1.0);
             let contrastive = match (&centroid, &input_residual) {
                 (Some(c), Some(res)) => {
-                    let g_res = normalize_l2(
-                        &g.prototype.iter().zip(c.iter()).map(|(a, b)| a - b).collect::<Vec<_>>(),
-                    );
+                    let g_res = normalize_l2(&g.prototype.iter().zip(c.iter()).map(|(a, b)| a - b).collect::<Vec<_>>());
                     Some(dot_product(res, &g_res).clamp(-1.0, 1.0))
                 }
                 _ => None,
@@ -284,7 +273,11 @@ pub fn match_gestures(
             ),
         )
     } else {
-        (true, Some(best.name.clone()), format!("'{}' scored {:.2} with margin {:.3}", best.name, best.combined, margin))
+        (
+            true,
+            Some(best.name.clone()),
+            format!("'{}' scored {:.2} with margin {:.3}", best.name, best.combined, margin),
+        )
     };
 
     let confidence = scores.iter().filter(|s| !s.is_neutral).map(|s| s.combined).fold(0.0, f32::max);
@@ -355,7 +348,13 @@ impl GestureStore {
         v
     }
 
-    pub fn get_mut_or_insert(&mut self, name: &str, model_name: &str, is_neutral: bool, now: u64) -> &mut RegisteredGesture {
+    pub fn get_mut_or_insert(
+        &mut self,
+        name: &str,
+        model_name: &str,
+        is_neutral: bool,
+        now: u64,
+    ) -> &mut RegisteredGesture {
         let entry = self
             .gestures
             .entry(name.to_string())

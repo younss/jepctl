@@ -1,27 +1,38 @@
 [package]
 name = "jepa"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "High-performance local runtime, CLI, and testbench for Joint-Embedding Predictive Architectures"
-authors = ["JEPA Engineering Team"]
+description = "Local runtime, CLI and testbench for JEPA-style vision encoders (I-JEPA, DINOv2, ViT) — like Ollama, for representation learning"
+authors = ["Younss <younssiga@gmail.com>", "jepctl contributors"]
 license = "Apache-2.0"
+repository = "https://github.com/younss/jepctl"
+homepage = "https://github.com/younss/jepctl"
+readme = "README.md"
+keywords = ["jepa", "vision-transformer", "embeddings", "candle", "local-ai"]
+categories = ["command-line-utilities", "computer-vision", "science"]
+exclude = ["packaging/", ".github/", "docs/"]
 
 [features]
-default = ["metal"]
-metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
-cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
+# No accelerator by default so `cargo build` works on every platform.
+# Enable one explicitly: `--features metal` (Apple Silicon) or `--features cuda` (NVIDIA).
+default = []
+metal = ["candle-core/metal", "candle-nn/metal"]
+cuda = ["candle-core/cuda", "candle-nn/cuda"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
 
 [dependencies]
 # Inference engine
 candle-core = "0.11.0"
 candle-nn = "0.11.0"
-candle-transformers = "0.11.0"
 
 # Async runtime & Web server
 tokio = { version = "1.53.1", features = ["full"] }
 tokio-stream = { version = "0.1.19", features = ["sync"] }
 axum = { version = "0.8.9", features = ["multipart", "tokio", "json"] }
-tower = "0.5.3"
 tower-http = { version = "0.7.1", features = ["cors", "trace", "limit"] }
 futures-util = "0.3.34"
 
@@ -48,14 +59,14 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 nokhwa = { version = "0.10.11", features = ["input-native"] }
 sysinfo = "0.39.6"
 
-# Hub Client & Network
-hf-hub = { version = "1.0.0", features = ["rustls-tls"] }
+# Hub Client & Network (Hugging Face resolve URLs are fetched directly)
 reqwest = { version = "0.13.5", features = ["json", "stream"] }
 
 # Error Handling & Utilities
-anyhow = "1.0.104"
 thiserror = "2.0.20"
-async-trait = "0.1.92"
 async-stream = "0.3.6"
 wry = "0.57.0"
 tao = "0.37.0"
+
+[dev-dependencies]
+tower = { version = "0.5.3", features = ["util"] }

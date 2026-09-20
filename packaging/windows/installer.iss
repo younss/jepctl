@@ -3,7 +3,7 @@
 ; and optional Windows service setup.
 
 #define MyAppName "JEPA Runtime"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.2.0"
 #define MyAppPublisher "JEPA Engineering Team"
 #define MyAppURL "https://github.com/facebookresearch/jepa"
 #define MyAppExeName "jepa.exe"

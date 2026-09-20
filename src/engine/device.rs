@@ -1,8 +1,8 @@
 //! Cross-platform hardware detection and telemetry for Metal, CUDA, and CPU backends.
 
+use crate::types::{HardwareBackend, HardwareInfo};
 use candle_core::Device;
 use sysinfo::System;
-use crate::types::{HardwareBackend, HardwareInfo};
 
 /// Detect the optimal hardware acceleration device according to platform capabilities
 /// and requested compute backend preference.
@@ -55,11 +55,8 @@ pub fn query_telemetry(backend: HardwareBackend, device_name_override: Option<&s
 
     let memory_total_bytes = sys.total_memory();
     let memory_used_bytes = sys.used_memory();
-    let memory_percent = if memory_total_bytes > 0 {
-        (memory_used_bytes as f32 / memory_total_bytes as f32) * 100.0
-    } else {
-        0.0
-    };
+    let memory_percent =
+        if memory_total_bytes > 0 { (memory_used_bytes as f32 / memory_total_bytes as f32) * 100.0 } else { 0.0 };
 
     let cpu_threads = sys.cpus().len();
     let cpu_brand = sys.cpus().first().map(|c| c.brand().to_string()).unwrap_or_else(|| "Generic CPU".to_string());
@@ -87,12 +84,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_select_device() {
-        let (dev, info) = select_device(None);
-        println!("Selected device: {:?}, Backend: {:?}, Name: {}", dev, info.backend, info.device_name);
-        #[cfg(target_os = "macos")]
-        {
-            assert_eq!(info.backend, HardwareBackend::Metal);
-        }
+    fn auto_selects_the_best_compiled_backend() {
+        let (_dev, info) = select_device(None);
+        #[cfg(all(feature = "metal", target_os = "macos"))]
+        assert_eq!(info.backend, HardwareBackend::Metal);
+        #[cfg(not(any(feature = "metal", feature = "cuda")))]
+        assert_eq!(info.backend, HardwareBackend::Cpu);
+        assert!(info.cpu_threads > 0);
+        assert!(info.memory_total_bytes > 0);
+    }
+
+    #[test]
+    fn explicit_cpu_preference_is_honoured() {
+        let (dev, info) = select_device(Some("cpu"));
+        assert!(matches!(dev, Device::Cpu));
+        assert_eq!(info.backend, HardwareBackend::Cpu);
     }
 }

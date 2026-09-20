@@ -1,10 +1,13 @@
 //! Cross-platform storage paths, directory layout, and security constants.
 
+use crate::types::{JepaError, SettingsDto};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use crate::types::{JepaError, SettingsDto};
 
 pub const DEFAULT_HOST: &str = "127.0.0.1";
+
+/// Model used by CLI commands when none is given.
+pub const DEFAULT_MODEL: &str = "facebook/ijepa_vith14_1k";
 pub const DEFAULT_PORT: u16 = 11435;
 
 /// Maximum payload limit for single image embedding requests: 20 Megabytes
@@ -33,6 +36,8 @@ pub struct RuntimeConfig {
     pub host: String,
     pub port: u16,
     pub no_auth: bool,
+    /// Browser origins allowed to call the API cross-site. Empty = same-origin only.
+    pub cors_origins: Vec<String>,
 }
 
 impl RuntimeConfig {
@@ -78,6 +83,7 @@ impl RuntimeConfig {
             host,
             port,
             no_auth,
+            cors_origins: Vec::new(),
         })
     }
 
@@ -103,9 +109,7 @@ impl RuntimeConfig {
     pub fn safe_resolve_model_path(&self, model_name_or_file: &str) -> Result<PathBuf, JepaError> {
         // Disallow path traversal components
         if model_name_or_file.contains("..") {
-            return Err(JepaError::PathTraversal(
-                "Identifier contains invalid sequence '..'".into(),
-            ));
+            return Err(JepaError::PathTraversal("Identifier contains invalid sequence '..'".into()));
         }
 
         // Normalize colons into safe hierarchical directory paths

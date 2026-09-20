@@ -309,6 +309,9 @@ pub struct StatusResponse {
     /// Whether the server camera capture thread is running.
     #[serde(default)]
     pub camera_active: bool,
+    /// Capture state: source (device or synthetic), frame count, last error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<crate::media::capture::CameraHealth>,
     pub embeddings_computed_total: u64,
     pub uptime_seconds: u64,
 }

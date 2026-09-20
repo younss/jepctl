@@ -4,6 +4,11 @@
 (function () {
     "use strict";
 
+    // Shared decorative icons use the inline sprite; no network or font dependency.
+    function uiIcon(name, extraClass = "") {
+        return `<svg class="ui-icon ${extraClass}" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-${name}"></use></svg>`;
+    }
+
     // Application State
     const state = {
         activeSection: "overview",
@@ -270,8 +275,8 @@
         const toast = document.createElement("div");
         toast.className = `toast ${kind}`;
         toast.setAttribute("role", kind === "error" ? "alert" : "status");
-        const icons = { success: "\u2713", error: "\u2717", warning: "!", info: "i" };
-        toast.innerHTML = `<span class="toast-icon" aria-hidden="true">${icons[kind] || "i"}</span><span class="toast-msg"></span><button class="toast-close" aria-label="Dismiss">\u00d7</button>`;
+        const icons = { success: "check", error: "close", warning: "warning", info: "activity" };
+        toast.innerHTML = `<span class="toast-icon" aria-hidden="true">${uiIcon(icons[kind] || "activity")}</span><span class="toast-msg"></span><button class="toast-close" aria-label="Dismiss">${uiIcon("close")}</button>`;
         toast.querySelector(".toast-msg").textContent = message;
         const remove = () => { if (toast.parentNode) toast.parentNode.removeChild(toast); };
         toast.querySelector(".toast-close").addEventListener("click", remove);
@@ -493,9 +498,8 @@
 
     // Initialize Application
     async function init() {
-        await fetchSessionToken();
-
         setupNavigation();
+        await fetchSessionToken();
         setupApiDialog();
         setupIntegration();
         setupImagePlayground();
@@ -527,8 +531,49 @@
     // Navigation Switcher
     function setupNavigation() {
         const items = [...el.navItems];
+        const navToggle = document.getElementById("nav-toggle");
+        const sidebar = document.getElementById("app-sidebar");
+        const main = document.getElementById("main-content");
+        const narrowWindow = window.matchMedia("(max-width: 760px)");
+        const setNavigationOpen = (open) => {
+            sidebar.classList.toggle("is-open", open);
+            navToggle.setAttribute("aria-expanded", String(open));
+        };
+        navToggle.addEventListener("click", () => {
+            const open = !sidebar.classList.contains("is-open");
+            setNavigationOpen(open);
+            if (open) sidebar.querySelector(".nav-item.active").focus();
+        });
+        document.addEventListener("keydown", (event) => {
+            if (event.key === "Escape" && sidebar.classList.contains("is-open")) {
+                setNavigationOpen(false);
+                navToggle.focus();
+            }
+        });
+        document.addEventListener("click", (event) => {
+            if (!sidebar.contains(event.target) && !navToggle.contains(event.target)) setNavigationOpen(false);
+        });
+        document.addEventListener("focusin", (event) => {
+            if (!sidebar.contains(event.target) && !navToggle.contains(event.target)) setNavigationOpen(false);
+        });
+        narrowWindow.addEventListener("change", () => {
+            if (narrowWindow.matches && sidebar.contains(document.activeElement)) navToggle.focus();
+            setNavigationOpen(false);
+        });
+        document.querySelectorAll("[data-navigate]").forEach((button) => {
+            button.addEventListener("click", () => {
+                switchSection(button.dataset.navigate);
+                main.focus({ preventScroll: true });
+            });
+        });
         items.forEach((item, idx) => {
-            item.addEventListener("click", () => switchSection(item.getAttribute("data-section")));
+            item.addEventListener("click", () => {
+                switchSection(item.getAttribute("data-section"));
+                if (narrowWindow.matches) {
+                    setNavigationOpen(false);
+                    main.focus({ preventScroll: true });
+                }
+            });
             item.addEventListener("keydown", (e) => {
                 let next = null;
                 if (e.key === "ArrowDown") next = items[(idx + 1) % items.length];
@@ -558,6 +603,9 @@
     function switchSection(sectionId) {
         if (state.activeSection === "robot" && sectionId !== "robot") robotLeaveSection();
         state.activeSection = sectionId;
+        const selectedNav = [...el.navItems].find((item) => item.dataset.section === sectionId);
+        document.getElementById("current-section-label").textContent = selectedNav.querySelector(".nav-text").textContent;
+        document.getElementById("main-content").scrollTop = 0;
 
         el.navItems.forEach((item) => {
             const on = item.getAttribute("data-section") === sectionId;
@@ -611,8 +659,8 @@
 
             // Update Header Status
             el.statusDot.style.backgroundColor = "var(--accent-green)";
-            el.statusDot.style.boxShadow = "0 0 8px var(--accent-green)";
-            el.daemonStatusText.textContent = "Daemon: Connected";
+            el.statusDot.style.boxShadow = "none";
+            el.daemonStatusText.textContent = "Runtime online";
 
             // Hardware Telemetry
             const hw = data.hardware;
@@ -627,10 +675,17 @@
             el.memProgress.style.width = `${percent}%`;
 
             if (el.appVersion && data.version) el.appVersion.textContent = `v${data.version}`;
+            state.cameraHealth = data.camera || null;
             if (el.headerCameraChip) {
                 const on = !!data.camera_active;
-                el.headerCameraChip.classList.toggle("on", on);
-                el.headerCameraText.textContent = on ? `Camera ${state.streamFps || 10} fps` : "Camera off";
+                const h = data.camera || {};
+                el.headerCameraChip.classList.toggle("on", on && h.source === "device");
+                el.headerCameraChip.classList.toggle("warn", on && h.source !== "device");
+                el.headerCameraText.textContent = !on ? "Camera off"
+                    : h.source === "opening" ? "Camera opening"
+                    : h.source === "synthetic" ? "Camera: synthetic pattern"
+                    : `Camera ${state.streamFps || 10} fps`;
+                el.headerCameraChip.title = h.error || "";
             }
             if (el.integrationModel) el.integrationModel.textContent = data.active_model || "none: load one in Models";
 
@@ -712,7 +767,7 @@
         } catch (err) {
             el.statusDot.style.backgroundColor = "var(--accent-red)";
             el.statusDot.style.boxShadow = "0 0 8px var(--accent-red)";
-            el.daemonStatusText.textContent = "Daemon: Disconnected";
+            el.daemonStatusText.textContent = "Runtime offline";
         }
     }
 
@@ -754,6 +809,7 @@
                 const isInstalled = installedNames.has(m.name);
                 const sizeGb = m.disk_size_bytes ? (m.disk_size_bytes / 1e9).toFixed(2) : "?";
                 card.innerHTML = `
+                    ${uiIcon(m.modality === "video" ? "video" : m.modality === "audio" ? "sound" : "models", "catalog-model-icon")}
                     <div class="badge-row">
                         <span class="badge badge-image">${escapeHtml(org)}</span>
                         <span class="badge badge-dim">${m.embed_dim} dims</span>
@@ -766,7 +822,7 @@
                 const action = card.querySelector(".card-action");
                 const btn = document.createElement("button");
                 btn.className = isInstalled ? "btn btn-sm btn-outline" : "btn btn-sm btn-primary";
-                btn.textContent = isInstalled ? "Installed" : "Pull Checkpoint";
+                btn.innerHTML = `${uiIcon(isInstalled ? "check" : "download")} ${isInstalled ? "Installed" : "Download"}`;
                 btn.disabled = isInstalled;
                 btn.addEventListener("click", () => pullModel(m.name));
                 action.appendChild(btn);
@@ -814,7 +870,7 @@
         el.installedModelsTbody.innerHTML = "";
 
         if (models.length === 0) {
-            el.installedModelsTbody.innerHTML = `<tr><td colspan="6" class="text-center" style="color: var(--text-dim);">Aucun modele installe localement. Telechargez un checkpoint verifie ci-dessus.</td></tr>`;
+            el.installedModelsTbody.innerHTML = `<tr><td colspan="6" class="text-center" style="color: var(--text-dim);">Your library is ready for its first model. Download a verified checkpoint from the catalog below.</td></tr>`;
             return;
         }
 
@@ -831,10 +887,10 @@
                 <td>${sizeMb} MB</td>
                 <td>
                     ${isLoaded ? 
-                        `<button class="btn btn-sm btn-outline" data-action="unload" data-name="${m.name}">Decharger</button>` :
-                        `<button class="btn btn-sm btn-primary" data-action="load" data-name="${m.name}">Charger</button>`
+                        `<button class="btn btn-sm btn-outline" data-action="unload" data-name="${m.name}">Unload</button>` :
+                        `<button class="btn btn-sm btn-primary" data-action="load" data-name="${m.name}">Load</button>`
                     }
-                    <button class="btn btn-sm btn-danger" data-action="delete" data-name="${m.name}" style="margin-left: 6px;">Supprimer</button>
+                    <button class="btn btn-sm btn-danger" data-action="delete" data-name="${m.name}" style="margin-left: 6px;">Delete</button>
                 </td>
             `;
 
@@ -1032,6 +1088,13 @@
 
         el.imageDropzone.addEventListener("click", () => {
             el.imageFileInput.click();
+        });
+
+        el.imageDropzone.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                el.imageFileInput.click();
+            }
         });
 
         el.imageDropzone.addEventListener("dragover", (e) => {
@@ -2064,11 +2127,16 @@
         stopModelViewPolling();
         if (el.gestureViewPlaceholder) el.gestureViewPlaceholder.style.display = "none";
         const interval = Math.max(100, Math.round(1000 / (state.streamFps || 10)));
+        let misses = 0;
         const tick = async () => {
             if (!state.isStreaming) return;
+            // No frame yet: poll gently and explain instead of hammering the daemon.
+            if (misses >= 3 && (Date.now() % 1000) > interval) return;
             try {
                 const res = await apiFetch("/api/camera/frame");
                 if (res.ok) {
+                    misses = 0;
+                    if (el.gestureViewPlaceholder) el.gestureViewPlaceholder.style.display = "none";
                     const seq = res.headers.get("x-frame-sequence");
                     if (seq !== state.modelViewSequence) {
                         state.modelViewSequence = seq;
@@ -2077,6 +2145,13 @@
                         if (el.gestureModelView) el.gestureModelView.src = url;
                         if (state.modelViewObjectUrl) URL.revokeObjectURL(state.modelViewObjectUrl);
                         state.modelViewObjectUrl = url;
+                    }
+                } else if (res.status === 404) {
+                    misses += 1;
+                    if (el.gestureViewPlaceholder) {
+                        el.gestureViewPlaceholder.style.display = "flex";
+                        const h = state.cameraHealth || {};
+                        el.gestureViewPlaceholder.textContent = h.error || "Waiting for the first camera frame...";
                     }
                 }
             } catch (e) {
@@ -2289,7 +2364,7 @@
         const originalHtml = btnCap ? btnCap.innerHTML : "Capture";
         if (btnCap) {
             btnCap.disabled = true;
-            btnCap.innerHTML = `<span class="btn-icon">&#9203;</span> Encoding...`;
+            btnCap.innerHTML = `${uiIcon("loader", "icon-spinning")} Encoding…`;
         }
 
         try {
@@ -2426,7 +2501,7 @@
                 const t = g.updated_at ? new Date(g.updated_at * 1000).toLocaleTimeString() : "--";
                 metaEl.textContent = `${g.dimension}d · ${g.sample_count} sample(s) · ${g.model_name} · ${t}`;
             }
-            if (btnCap) btnCap.innerHTML = `<span class="btn-icon">&#10133;</span> Add sample`;
+            if (btnCap) btnCap.innerHTML = `${uiIcon("plus")} Add sample`;
             if (btnDel) btnDel.style.display = "inline-flex";
         } else {
             if (card) {
@@ -2447,7 +2522,7 @@
                     ? "Rest pose: absorbs frames with no intentional gesture. Never reported as a detection."
                     : "Capture 3 to 5 samples while moving slightly.";
             }
-            if (btnCap) btnCap.innerHTML = `<span class="btn-icon">&#128247;</span> Capture`;
+            if (btnCap) btnCap.innerHTML = `${uiIcon("camera")} Capture`;
             if (btnDel) btnDel.style.display = "none";
             const scoreValEl = document.getElementById(`slot-score-val-${i}`);
             const scoreBarEl = document.getElementById(`slot-score-bar-${i}`);
@@ -3078,6 +3153,10 @@
                 if (robot.viewUrl) URL.revokeObjectURL(robot.viewUrl);
                 robot.viewUrl = url;
                 if (ph) ph.style.display = "none";
+            } else if (ph) {
+                const h = state.cameraHealth || {};
+                ph.style.display = "flex";
+                ph.textContent = h.error || (res.status === 409 ? "Waiting for the first camera frame..." : `Observation failed (${res.status})`);
             }
         } catch (e) {
             console.warn("agent view failed", e);
@@ -3272,6 +3351,17 @@
             else if (goal.has_goal && goal.phase === "plateau") note.textContent = `Plateau: no improvement for ${60} steps. Best energy ${num(goal.best_energy)} is as close as this view and model get; it re-checks every second.`;
             else if ((t.mode === "exploring" || t.mode === "goal_seeking") && t.backend === "virtual") note.textContent = "Virtual arm: the twin is drawn into the camera frame, so the agent learns how its joints change the picture over the real background.";
             else note.textContent = "";
+        }
+        const badge = document.getElementById("robot-agent-view-badge");
+        const caption = document.getElementById("robot-agent-view-caption");
+        const frozen = t.backend === "virtual" && t.freeze_background;
+        if (badge) badge.style.display = frozen && t.has_background ? "inline-block" : "none";
+        if (caption) {
+            caption.textContent = t.backend === "physical"
+                ? "What the agent observes: the live camera (ROI applied)."
+                : frozen
+                    ? "What the agent observes: the virtual arm drawn over a snapshot of the camera taken when learning started. The background is intentionally still so only the arm changes between observations; use Refresh background to take a new snapshot, or untick Freeze background for the live feed."
+                    : "What the agent observes: the virtual arm drawn over the live camera feed. Anything moving in the background counts as noise for the model.";
         }
         const stepDone = (id, on) => { const n = document.getElementById(id); if (n) n.classList.toggle("done", !!on); };
         stepDone("robot-step-camera", state.isStreaming);

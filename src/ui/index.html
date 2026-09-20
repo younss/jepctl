@@ -7,23 +7,54 @@
     <link rel="stylesheet" href="/styles.css">
 </head>
 <body class="dark-theme">
+    <svg xmlns="http://www.w3.org/2000/svg" class="icon-definitions" aria-hidden="true"><defs>
+        <symbol id="icon-brand" viewBox="0 0 24 24"><path d="M12 2 21 7v10l-9 5-9-5V7Z"/><path d="m3 7 9 5 9-5M12 12v10M7.5 4.5l9 5v5l-4.5 2.5"/></symbol>
+        <symbol id="icon-overview" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+        <symbol id="icon-models" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5Z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></symbol>
+        <symbol id="icon-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1"/><path d="m3 16 5-5 5 5 3-3 5 5"/></symbol>
+        <symbol id="icon-video" viewBox="0 0 24 24"><rect x="3" y="5" width="12" height="14" rx="3"/><path d="m15 10 6-4v12l-6-4"/></symbol>
+        <symbol id="icon-activity" viewBox="0 0 24 24"><path d="M2 12h4l3-8 6 16 3-8h4"/></symbol>
+        <symbol id="icon-hand" viewBox="0 0 24 24"><path d="M8 13V5a2 2 0 0 1 4 0v6-8a2 2 0 0 1 4 0v8-5a2 2 0 0 1 4 0v9a7 7 0 0 1-12 5l-5-6a2 2 0 0 1 3-3l2 2Z"/></symbol>
+        <symbol id="icon-robot" viewBox="0 0 24 24"><path d="M4 21h16M7 21v-4l4-4-5-5 4-4 7 7v5M17 11l3-3-3-3-3 3"/><circle cx="8" cy="6" r="2"/><circle cx="13" cy="13" r="2"/></symbol>
+        <symbol id="icon-code" viewBox="0 0 24 24"><path d="m7 6-6 6 6 6m10-12 6 6-6 6m-3-15-4 18"/></symbol>
+        <symbol id="icon-settings" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></symbol>
+        <symbol id="icon-chip" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4m6-4v4M9 18v4m6-4v4M2 9h4m-4 6h4m12-6h4m-4 6h4"/><path d="M10 10h4v4h-4Z"/></symbol>
+        <symbol id="icon-camera" viewBox="0 0 24 24"><path d="M8 5 10 3h4l2 2h4a2 2 0 0 1 2 2v12H2V7a2 2 0 0 1 2-2Z"/><circle cx="12" cy="12" r="4"/></symbol>
+        <symbol id="icon-upload" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M3 15v6h18v-6"/></symbol>
+        <symbol id="icon-download" viewBox="0 0 24 24"><path d="M12 3v13m-5-5 5 5 5-5M3 16v5h18v-5"/></symbol>
+        <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol>
+        <symbol id="icon-lock" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V6a4 4 0 0 1 8 0v4m-4 5v2"/></symbol>
+        <symbol id="icon-warning" viewBox="0 0 24 24"><path d="m12 3 10 18H2Z"/><path d="M12 9v4m0 4h.01"/></symbol>
+        <symbol id="icon-sound" viewBox="0 0 24 24"><path d="m11 4-6 5H2v6h3l6 5ZM15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/></symbol>
+        <symbol id="icon-palette" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v18M3 12h9"/></symbol>
+        <symbol id="icon-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+        <symbol id="icon-delete" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7"/></symbol>
+        <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+        <symbol id="icon-loader" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9"/></symbol>
+        <symbol id="icon-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+        <symbol id="icon-shield" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6Z"/><path d="m8 12 3 3 5-6"/></symbol>
+        <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+        <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+    </defs></svg>
+    <a class="skip-link" href="#main-content">Skip to workspace</a>
     <!-- Global Header -->
     <header class="app-header">
         <div class="header-left">
+            <button class="icon-button nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false" aria-controls="app-sidebar"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-menu"></use></svg></button>
             <div class="brand">
-                <span class="logo-symbol">&#9670;</span>
+                <svg class="ui-icon logo-symbol" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-brand"></use></svg>
                 <span class="logo-title">jepctl</span>
                 <span class="version-tag" id="app-version">v?</span>
             </div>
             <div class="status-indicator">
                 <span class="pulse-dot" id="status-dot"></span>
-                <span id="daemon-status-text">Daemon: Connected</span>
+                <span id="daemon-status-text">Connecting…</span>
             </div>
         </div>
 
         <div class="header-center">
             <div class="hardware-pill" id="hardware-badge">
-                <span class="icon">&#9881;</span>
+                <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-chip"></use></svg>
                 <span id="hardware-name">Detecting Hardware...</span>
             </div>
             <div class="memory-monitor">
@@ -49,59 +80,60 @@
                 <span class="model-status-label">Model</span>
                 <span class="model-name-text" id="header-active-model">none loaded</span>
                 <span class="weights-badge" id="header-weights-badge" title="Tensors loaded from the checkpoint / expected">--</span>
-                <button class="btn-sm btn-outline" id="btn-header-unload" style="display: none;">Unload</button>
+                <button class="btn btn-sm btn-outline" id="btn-header-unload" style="display: none;">Unload</button>
             </div>
         </div>
     </header>
 
     <div class="app-body">
         <!-- Persistent Navigation Sidebar -->
-        <nav class="sidebar" aria-label="Sections">
+        <nav class="sidebar" id="app-sidebar" aria-label="Sections">
+            <div class="workspace-label"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-brand"></use></svg><div>Local workspace<span>Representation studio</span></div></div>
             <div class="nav-group-title" id="nav-workspace-title">Workspace</div>
-            <div class="nav-list" role="tablist" aria-labelledby="nav-workspace-title">
-                <button class="nav-item active" role="tab" aria-selected="true" aria-controls="section-overview" data-section="overview">
-                    <span class="nav-icon" aria-hidden="true">&#9638;</span>
+            <div class="nav-list" role="tablist" aria-orientation="vertical" aria-labelledby="nav-workspace-title">
+                <button class="nav-item active" role="tab" id="tab-overview" tabindex="0" aria-selected="true" aria-controls="section-overview" data-section="overview">
+                    <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-overview"></use></svg>
                     <span class="nav-text">Overview</span>
                 </button>
-                <button class="nav-item" role="tab" aria-selected="false" aria-controls="section-models" data-section="models">
-                    <span class="nav-icon" aria-hidden="true">&#128451;</span>
+                <button class="nav-item" role="tab" id="tab-models" tabindex="-1" aria-selected="false" aria-controls="section-models" data-section="models">
+                    <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-models"></use></svg>
                     <span class="nav-text">Models</span>
                 </button>
-                <button class="nav-item" role="tab" aria-selected="false" aria-controls="section-image-playground" data-section="image-playground">
-                    <span class="nav-icon" aria-hidden="true">&#128444;</span>
+                <button class="nav-item" role="tab" id="tab-image-playground" tabindex="-1" aria-selected="false" aria-controls="section-image-playground" data-section="image-playground">
+                    <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-image"></use></svg>
                     <span class="nav-text">Embed</span>
                 </button>
-                <button class="nav-item" role="tab" aria-selected="false" aria-controls="section-video-stream" data-section="video-stream">
-                    <span class="nav-icon" aria-hidden="true">&#127916;</span>
-                    <span class="nav-text">Live</span>
+                <button class="nav-item" role="tab" id="tab-video-stream" tabindex="-1" aria-selected="false" aria-controls="section-video-stream" data-section="video-stream">
+                    <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-video"></use></svg>
+                    <span class="nav-text">Live stream</span>
                 </button>
-                <button class="nav-item" role="tab" aria-selected="false" aria-controls="section-anomaly-monitor" data-section="anomaly-monitor">
-                    <span class="nav-icon" aria-hidden="true">&#9889;</span>
+                <button class="nav-item" role="tab" id="tab-anomaly-monitor" tabindex="-1" aria-selected="false" aria-controls="section-anomaly-monitor" data-section="anomaly-monitor">
+                    <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-activity"></use></svg>
                     <span class="nav-text">Energy</span>
                 </button>
-                <button class="nav-item" role="tab" aria-selected="false" aria-controls="section-gestures" data-section="gestures">
-                    <span class="nav-icon" aria-hidden="true">&#9995;</span>
+                <button class="nav-item" role="tab" id="tab-gestures" tabindex="-1" aria-selected="false" aria-controls="section-gestures" data-section="gestures">
+                    <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-hand"></use></svg>
                     <span class="nav-text">Gestures</span>
                 </button>
-                <button class="nav-item" role="tab" aria-selected="false" aria-controls="section-robot" data-section="robot">
-                    <span class="nav-icon" aria-hidden="true">&#129302;</span>
+                <button class="nav-item" role="tab" id="tab-robot" tabindex="-1" aria-selected="false" aria-controls="section-robot" data-section="robot">
+                    <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-robot"></use></svg>
                     <span class="nav-text">Robot Twin</span>
                 </button>
             </div>
-            <div class="nav-group-title" id="nav-admin-title">Admin</div>
-            <div class="nav-list" role="tablist" aria-labelledby="nav-admin-title">
-                <button class="nav-item" role="tab" aria-selected="false" aria-controls="section-security" data-section="security">
-                    <span class="nav-icon" aria-hidden="true">&#128268;</span>
+            <div class="nav-group-title" id="nav-admin-title">Manage</div>
+            <div class="nav-list" role="tablist" aria-orientation="vertical" aria-labelledby="nav-admin-title">
+                <button class="nav-item" role="tab" id="tab-security" tabindex="-1" aria-selected="false" aria-controls="section-security" data-section="security">
+                    <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-code"></use></svg>
                     <span class="nav-text">Integration &amp; Keys</span>
                 </button>
-                <button class="nav-item" role="tab" aria-selected="false" aria-controls="section-settings" data-section="settings">
-                    <span class="nav-icon" aria-hidden="true">&#9881;</span>
+                <button class="nav-item" role="tab" id="tab-settings" tabindex="-1" aria-selected="false" aria-controls="section-settings" data-section="settings">
+                    <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-settings"></use></svg>
                     <span class="nav-text">Settings</span>
                 </button>
             </div>
 
             <div class="sidebar-footer">
-                <div class="security-chip">
+                <div class="security-chip"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-shield"></use></svg>
                     <span id="auth-status-chip">Auth: Active</span>
                 </div>
                 <div class="sidebar-hint">Keyboard: <kbd>&uarr;</kbd><kbd>&darr;</kbd> sections</div>
@@ -109,46 +141,57 @@
         </nav>
 
         <!-- Main Content Area -->
-        <main class="main-content">
+        <main class="main-content" id="main-content" tabindex="-1">
+            <div class="workspace-breadcrumb"><span>Workspace</span><span aria-hidden="true">/</span><strong id="current-section-label">Overview</strong><span class="workspace-location">On your machine</span></div>
             <!-- Alert Banner for Anomaly Detection -->
             <div class="anomaly-banner" id="anomaly-alert-banner" style="display: none;">
-                <span class="alert-icon">&#9888;</span>
+                <svg class="ui-icon alert-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-warning"></use></svg>
                 <span class="alert-msg">ANOMALY DETECTED: Latent energy distance exceeded alert threshold!</span>
             </div>
 
             <!-- SECTION 1: OVERVIEW -->
-            <section class="content-section active" id="section-overview">
+            <section class="content-section active" id="section-overview" role="tabpanel" aria-labelledby="tab-overview">
                 <div class="section-title">
-                    <h2>Overview</h2>
-                    <p>Runtime health, hardware telemetry and forward-pass metrics.</p>
+                    <h2>Workspace</h2>
+                    <p>Your local runtime, models, and experiments. All in one place.</p>
                 </div>
 
                 <div class="kpi-grid">
                     <div class="kpi-card">
-                        <div class="kpi-title">Inference Latency</div>
+                        <div class="kpi-title">Inference latency</div>
                         <div class="kpi-value" id="kpi-latency">-- ms</div>
                         <div class="kpi-sub">Forward pass duration</div>
                     </div>
                     <div class="kpi-card">
-                        <div class="kpi-title">Stream Throughput</div>
+                        <div class="kpi-title">Stream throughput</div>
                         <div class="kpi-value" id="kpi-fps">-- FPS</div>
-                        <div class="kpi-sub">Continuous spatio-temporal rate</div>
+                        <div class="kpi-sub">Frames processed per second</div>
                     </div>
                     <div class="kpi-card">
-                        <div class="kpi-title">Total Embeddings</div>
+                        <div class="kpi-title">Embeddings</div>
                         <div class="kpi-value" id="kpi-total-embeddings">0</div>
                         <div class="kpi-sub">Vectors computed this session</div>
                     </div>
                     <div class="kpi-card">
-                        <div class="kpi-title">Daemon Uptime</div>
+                        <div class="kpi-title">Uptime</div>
                         <div class="kpi-value" id="kpi-uptime">00:00:00</div>
                         <div class="kpi-sub">Active process duration</div>
                     </div>
                 </div>
 
+                <div class="workspace-intro">
+                    <div class="intro-copy"><span class="intro-kicker">LOCAL MODEL WORKSPACE</span><h3>Start your next experiment.</h3><p>Load an encoder, inspect its embeddings, or work with a live camera.</p><button class="btn btn-primary" data-navigate="models"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-models"></use></svg> Model library <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-arrow"></use></svg></button></div>
+                    <svg class="latent-art" viewBox="0 0 360 220" aria-hidden="true"><defs><linearGradient id="latent-gradient" x1="0" y1="0" x2="1" y2="1"><stop stop-color="currentColor" stop-opacity=".8"/><stop offset="1" stop-color="currentColor" stop-opacity=".1"/></linearGradient></defs><g fill="none" stroke="url(#latent-gradient)"><path d="m180 20 130 70v70l-130 65L50 160V90Z"/><path d="m180 20 0 135m-130-65 130 65 130-65M50 125l130 65 130-65M95 66v117m42-140v161m87-160v160m43-137v116M95 66l130 65m-88-88 130 66M95 113l130-69m-88 90 130-68"/><ellipse cx="180" cy="125" rx="163" ry="48" transform="rotate(-25 180 125)"/></g><g fill="currentColor"><circle cx="180" cy="20" r="4"/><circle cx="50" cy="90" r="4"/><circle cx="310" cy="90" r="4"/><circle cx="180" cy="155" r="5"/><circle cx="225" cy="131" r="3"/><circle cx="95" cy="113" r="3"/></g></svg>
+                </div>
+                <div class="section-heading"><h3>Tools</h3><span>Choose a workspace</span></div>
+                <div class="workflow-grid">
+                    <button class="workflow-card" data-navigate="models"><span class="workflow-top"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-models"></use></svg><span>01</span></span><strong>Find your model</strong><span class="workflow-description">Browse verified encoders and load a checkpoint.</span><svg class="ui-icon workflow-arrow" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-arrow"></use></svg></button>
+                    <button class="workflow-card" data-navigate="image-playground"><span class="workflow-top"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-image"></use></svg><span>02</span></span><strong>Embed a file</strong><span class="workflow-description">Inspect vectors from an image, clip, or audio file.</span><svg class="ui-icon workflow-arrow" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-arrow"></use></svg></button>
+                    <button class="workflow-card" data-navigate="gestures"><span class="workflow-top"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-hand"></use></svg><span>03</span></span><strong>Explore gestures</strong><span class="workflow-description">Capture a few poses. Understand every match.</span><svg class="ui-icon workflow-arrow" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-arrow"></use></svg></button>
+                </div>
                 <div class="telemetry-grid">
                     <div class="card">
-                        <h3>Hardware Telemetry</h3>
+                        <h3>System resources</h3>
                         <div class="info-table">
                             <div class="row">
                                 <span class="lbl">Compute Accelerator:</span>
@@ -178,56 +221,28 @@
                     </div>
 
                     <div class="card">
-                        <h3>Quick Actions</h3>
-                        <p>Fast launch controls for common tasks.</p>
+                        <h3>Quick launch</h3>
+                        <p>Jump into a live session or download a familiar encoder.</p>
                         <div class="quick-actions-row">
-                            <button class="btn btn-primary" id="btn-quick-camera">Launch Camera Playground</button>
-                            <button class="btn btn-secondary" id="btn-quick-pull-ijepa">Pull I-JEPA (ViT-H/14)</button>
-                            <button class="btn btn-secondary" id="btn-quick-pull-dinov2">Pull DINOv2 (ViT-S/14)</button>
+                            <button class="btn btn-primary" id="btn-quick-camera">Open live stream</button>
+                            <button class="btn btn-secondary" id="btn-quick-pull-ijepa">Download I-JEPA</button>
+                            <button class="btn btn-secondary" id="btn-quick-pull-dinov2">Download DINOv2</button>
                         </div>
                     </div>
                 </div>
             </section>
 
             <!-- SECTION 2: MODELS -->
-            <section class="content-section" id="section-models">
+            <section class="content-section" id="section-models" role="tabpanel" aria-labelledby="tab-models">
                 <div class="section-title">
-                    <h2>Models</h2>
+                    <h2>Model library</h2>
                     <p>Pull verified checkpoints from Hugging Face, load one into memory, or register a custom Jepafile.</p>
                 </div>
 
-                <!-- Model Pull Bar -->
+                <!-- Your models Table -->
                 <div class="card">
-                    <h3>Pull Model from Hugging Face</h3>
-                    <div class="pull-bar">
-                        <input type="text" id="pull-repo-input" placeholder="e.g. facebook/ijepa_vith14_1k or facebookresearch/jepa" class="input-text">
-                        <button class="btn btn-primary" id="btn-start-pull">Pull Model</button>
-                    </div>
-
-                    <div class="pull-progress-container" id="pull-progress-box" style="display: none;">
-                        <div class="pull-meta">
-                            <span id="pull-status-text">Downloading...</span>
-                            <span id="pull-speed-text">0.0 MB/s</span>
-                        </div>
-                        <div class="progress-track">
-                            <div class="progress-fill" id="pull-progress-fill" style="width: 0%;"></div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Verified Remote Catalog -->
-                <div class="card">
-                    <h3>Verified Catalog Browser</h3>
-                    <p>Every entry loads with 100% checkpoint coverage. Anything else goes through a custom Jepafile.</p>
-                    <div class="verified-grid" id="verified-grid">
-                        <p class="reasoning-empty">Loading catalog...</p>
-                    </div>
-                </div>
-
-                <!-- Installed Models Table -->
-                <div class="card">
-                    <h3>Installed Models</h3>
-                    <table class="data-table" id="table-installed-models">
+                    <h3>Your models</h3>
+                    <div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable data table"><table class="data-table" id="table-installed-models">
                         <thead>
                             <tr>
                                 <th>Model Name</th>
@@ -243,15 +258,43 @@
                                 <td colspan="6" class="text-center">Loading models catalog...</td>
                             </tr>
                         </tbody>
-                    </table>
+                    </table></div>
+                </div>
+
+                <!-- Model Pull Bar -->
+                <div class="card">
+                    <h3>Download a model</h3>
+                    <div class="pull-bar">
+                        <input type="text" id="pull-repo-input" placeholder="facebook/dinov2-small" aria-label="Hugging Face repository ID" class="input-text">
+                        <button class="btn btn-primary" id="btn-start-pull">Download</button>
+                    </div>
+
+                    <div class="pull-progress-container" id="pull-progress-box" style="display: none;">
+                        <div class="pull-meta">
+                            <span id="pull-status-text">Downloading...</span>
+                            <span id="pull-speed-text">0.0 MB/s</span>
+                        </div>
+                        <div class="progress-track">
+                            <div class="progress-fill" id="pull-progress-fill" style="width: 0%;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Verified Remote Catalog -->
+                <div class="card">
+                    <h3>Discover models</h3>
+                    <p>Every entry loads with 100% checkpoint coverage. Anything else goes through a custom Jepafile.</p>
+                    <div class="verified-grid" id="verified-grid">
+                        <p class="reasoning-empty">Loading catalog...</p>
+                    </div>
                 </div>
 
                 <!-- Custom Jepafile Creator -->
-                <div class="card">
-                    <h3>Custom Jepafile Manifest Creator</h3>
+                <details class="card advanced-card">
+                    <summary>Register a custom model<span>Advanced · Jepafile manifest</span></summary>
                     <p>Construct and register custom manifests with specific patch sizes, normalization targets, and architectures.</p>
                     <div class="editor-wrap">
-                        <textarea id="jepafile-json-editor" class="code-editor" rows="10">{
+                        <textarea aria-label="Custom Jepafile manifest JSON" id="jepafile-json-editor" class="code-editor" rows="10">{
   "name": "custom/my_ijepa_model",
   "repo_id": "custom/my_ijepa_model",
   "architecture": "ViT-B/16",
@@ -267,11 +310,11 @@
                             <button class="btn btn-primary" id="btn-save-jepafile">Register Custom Manifest</button>
                         </div>
                     </div>
-                </div>
+                </details>
             </section>
 
             <!-- SECTION 3: IMAGE PLAYGROUND -->
-            <section class="content-section" id="section-image-playground">
+            <section class="content-section" id="section-image-playground" role="tabpanel" aria-labelledby="tab-image-playground">
                 <div class="section-title">
                     <h2>Embed a file</h2>
                     <p>Compute the embedding of an image, a clip or an audio file with the active model and inspect the patch grid. Equivalent to <code>POST /api/embed</code>.</p>
@@ -280,10 +323,10 @@
                 <div class="playground-layout">
                     <!-- Left: Upload and Canvas -->
                     <div class="playground-left">
-                        <div class="dropzone" id="image-dropzone">
+                        <div class="dropzone" id="image-dropzone" role="button" tabindex="0" aria-label="Choose an image, video, or audio file to embed">
                             <input type="file" id="image-file-input" accept="image/png, image/jpeg, image/webp, image/gif, video/mp4, video/webm, audio/wav, audio/x-wav, audio/mpeg, audio/flac, audio/ogg" style="display: none;">
                             <div class="dropzone-prompt">
-                                <span class="dropzone-icon">&#128247;</span>
+                                <svg class="ui-icon dropzone-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-upload"></use></svg>
                                 <p><strong>Drop a file</strong> or click to browse</p>
                                 <span class="dropzone-hint">Images (PNG, JPEG, WebP), clips (GIF, animated WebP; MP4/WebM with ffmpeg) and audio (WAV; MP3/FLAC/OGG with ffmpeg). The active model decides what it can embed.</span>
                             </div>
@@ -325,7 +368,7 @@
                                         <button class="btn btn-sm btn-secondary" id="btn-export-json">Export JSON</button>
                                     </div>
                                 </div>
-                                <textarea id="vector-numeric-view" class="code-editor" rows="8" readonly placeholder="Run an image embedding to view output vectors..."></textarea>
+                                <textarea aria-label="Embedding vector values" id="vector-numeric-view" class="code-editor" rows="8" readonly placeholder="Run an image embedding to view output vectors..."></textarea>
                             </div>
                         </div>
                     </div>
@@ -333,7 +376,7 @@
             </section>
 
             <!-- SECTION 4: VIDEO & CAMERA STREAM -->
-            <section class="content-section" id="section-video-stream">
+            <section class="content-section" id="section-video-stream" role="tabpanel" aria-labelledby="tab-video-stream">
                 <div class="section-title">
                     <h2>Live camera stream</h2>
                     <p>Continuous embeddings of the server camera over Server-Sent Events. Equivalent to <code>GET /api/embed/stream</code>.</p>
@@ -350,14 +393,14 @@
                         </div>
 
                         <div class="control-item" id="camera-select-wrap">
-                            <label>Camera Device:</label>
+                            <label for="camera-device-select">Camera Device:</label>
                             <select id="camera-device-select" class="select-input">
                                 <option value="0">Detecting cameras...</option>
                             </select>
                         </div>
 
                         <div class="control-item">
-                            <label>Target Frame Rate:</label>
+                            <label for="stream-fps-select">Target Frame Rate:</label>
                             <select id="stream-fps-select" class="select-input">
                                 <option value="5">5 FPS (Resource Saver)</option>
                                 <option value="10" selected>10 FPS (Balanced)</option>
@@ -374,7 +417,7 @@
                 <!-- Visual 16-Frame Sliding Ring Buffer Scrubber Strip -->
                 <div class="card">
                     <div class="buffer-header">
-                        <h3>Visual Sliding Ring Buffer (16 Temporal Frames)</h3>
+                        <h3>Recent frames · 16-frame buffer</h3>
                         <span class="buffer-badge" id="buffer-count-badge">Buffer: 0 / 16 Frames</span>
                     </div>
                     <div class="scrubber-strip" id="scrubber-strip-container">
@@ -385,7 +428,7 @@
                 <!-- Live Stream Feeds and Telemetry -->
                 <div class="stream-layout">
                     <div class="card stream-preview-card">
-                        <h3>Live Camera Preview</h3>
+                        <h3>Camera preview</h3>
                         <div class="video-preview-wrapper">
                             <video id="webcam-preview-element" autoplay playsinline muted style="display: none;"></video>
                             <canvas id="stream-feed-canvas" width="640" height="360" style="display: none;"></canvas>
@@ -415,7 +458,7 @@
             </section>
 
             <!-- SECTION 5: ANOMALY & ENERGY MONITOR -->
-            <section class="content-section" id="section-anomaly-monitor">
+            <section class="content-section" id="section-anomaly-monitor" role="tabpanel" aria-labelledby="tab-anomaly-monitor">
                 <div class="section-title">
                     <h2>Energy &amp; anomaly monitor</h2>
                     <p>Detect physical state changes by measuring continuous latent energy distance against a locked nominal baseline.</p>
@@ -424,21 +467,21 @@
                 <div class="card anomaly-controls-card">
                     <div class="anomaly-controls-row">
                         <button class="btn btn-primary" id="btn-lock-baseline">
-                            <span class="btn-icon">&#128274;</span> Lock Current State as Nominal Baseline
+                            <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-lock"></use></svg> Use current frame as baseline
                         </button>
                         <div class="baseline-status">
                             <span>Nominal Baseline:</span>
                             <strong id="baseline-status-label">Not Locked</strong>
                         </div>
                         <div class="threshold-control-group">
-                            <label>Alert Threshold (Energy Distance):</label>
-                            <input type="range" id="slider-threshold" min="0.05" max="1.5" step="0.01" value="0.45" class="slider">
+                            <label for="slider-threshold">Alert Threshold (Energy Distance):</label>
+                            <input type="range" id="slider-threshold" min="0.05" max="1.5" step="0.01" value="0.45" class="slider" aria-label="Anomaly alert threshold">
                             <span class="threshold-val" id="val-threshold">0.45</span>
                         </div>
                     </div>
 
                     <div class="webhook-row">
-                        <label>Alert Webhook Trigger (Optional POST URL):</label>
+                        <label for="input-webhook-url">Alert Webhook Trigger (Optional POST URL):</label>
                         <input type="url" id="input-webhook-url" placeholder="https://api.external.com/alerts/webhook" class="input-text">
                         <button class="btn btn-secondary" id="btn-save-webhook">Save Webhook</button>
                     </div>
@@ -447,7 +490,7 @@
                 <!-- Real-time Energy Chart -->
                 <div class="card">
                     <div class="chart-header">
-                        <h3>Continuous Latent Energy Distance</h3>
+                        <h3>Distance from baseline</h3>
                         <div class="chart-legend">
                             <span class="legend-item"><span class="legend-dot dot-energy"></span> Energy Distance (L2 / Cosine)</span>
                             <span class="legend-item"><span class="legend-dot dot-threshold"></span> Alert Threshold</span>
@@ -460,7 +503,7 @@
             </section>
 
             <!-- SECTION 6: SECURITY & API KEYS -->
-            <section class="content-section" id="section-security">
+            <section class="content-section" id="section-security" role="tabpanel" aria-labelledby="tab-security">
                 <div class="section-title">
                     <h2>Integration &amp; API keys</h2>
                     <p>Everything you need to call this daemon from your own application: base URL, tokens, working examples.</p>
@@ -491,14 +534,14 @@
 
                 <!-- Network Binding Policy -->
                 <div class="card">
-                    <h3>Network Binding &amp; Access Policy</h3>
+                    <h3>Network access</h3>
                     <div class="policy-row">
                         <div class="policy-info">
                             <strong>Local Loopback Only (127.0.0.1)</strong>
                             <p>Restrict runtime access exclusively to localhost connections. Maximum security.</p>
                         </div>
                         <label class="switch">
-                            <input type="checkbox" id="toggle-lan-access">
+                            <input type="checkbox" id="toggle-lan-access" aria-label="Enable LAN access">
                             <span class="slider-round"></span>
                         </label>
                     </div>
@@ -510,10 +553,10 @@
                 <!-- Active API Keys Table -->
                 <div class="card">
                     <div class="card-header-actions">
-                        <h3>Active API Tokens</h3>
+                        <h3>API keys</h3>
                         <button class="btn btn-primary" id="btn-open-create-key">Generate New API Token</button>
                     </div>
-                    <table class="data-table" id="table-api-keys">
+                    <div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable data table"><table class="data-table" id="table-api-keys">
                         <thead>
                             <tr>
                                 <th>Key Prefix</th>
@@ -529,17 +572,17 @@
                                 <td colspan="6" class="text-center">Loading API tokens...</td>
                             </tr>
                         </tbody>
-                    </table>
+                    </table></div>
                 </div>
 
                 <!-- Rolling Audit Log -->
                 <div class="card">
                     <div class="card-header-actions">
-                        <h3>Audit Log (Last 100 API Calls)</h3>
+                        <h3>Recent API activity</h3>
                         <button class="btn btn-sm btn-outline" id="btn-refresh-audit">Refresh Log</button>
                     </div>
                     <div class="audit-log-table-wrap">
-                        <table class="data-table" id="table-audit-log">
+                        <div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable data table"><table class="data-table" id="table-audit-log">
                             <thead>
                                 <tr>
                                     <th>Timestamp</th>
@@ -555,23 +598,23 @@
                                     <td colspan="6" class="text-center">No API calls recorded yet.</td>
                                 </tr>
                             </tbody>
-                        </table>
+                        </table></div>
                     </div>
                 </div>
             </section>
 
             <!-- SECTION 7: SETTINGS -->
-            <section class="content-section" id="section-settings">
+            <section class="content-section" id="section-settings" role="tabpanel" aria-labelledby="tab-settings">
                 <div class="section-title">
                     <h2>Settings</h2>
                     <p>Compute backend, memory ceiling and storage paths. Backend changes need a daemon restart.</p>
                 </div>
 
                 <div class="card">
-                    <h3>Execution &amp; Memory Settings</h3>
+                    <h3>Runtime preferences</h3>
                     <div class="form-grid">
                         <div class="form-group">
-                            <label>Compute Acceleration Backend:</label>
+                            <label for="settings-backend">Compute Acceleration Backend:</label>
                             <select id="settings-backend" class="select-input">
                                 <option value="auto">Auto-Detect (Metal -> CUDA -> CPU)</option>
                                 <option value="metal">Force Apple Silicon Metal</option>
@@ -582,13 +625,13 @@
                         </div>
 
                         <div class="form-group">
-                            <label>GPU Memory High-Watermark Ratio:</label>
+                            <label for="settings-mem-watermark">GPU Memory High-Watermark Ratio:</label>
                             <input type="number" id="settings-mem-watermark" min="0.1" max="0.95" step="0.05" value="0.80" class="input-text">
                             <span class="field-hint">Fraction of total unified memory/VRAM allowed before eviction (e.g. 0.80 = 80%).</span>
                         </div>
 
                         <div class="form-group">
-                            <label>Idle Model Unload Timeout:</label>
+                            <label for="settings-idle-timeout">Idle Model Unload Timeout:</label>
                             <select id="settings-idle-timeout" class="select-input">
                                 <option value="5">5 Minutes</option>
                                 <option value="30" selected>30 Minutes</option>
@@ -597,7 +640,7 @@
                         </div>
 
                         <div class="form-group">
-                            <label>Local Storage Directory (~/.jepctl):</label>
+                            <label for="settings-storage-dir">Local Storage Directory (~/.jepctl):</label>
                             <input type="text" id="settings-storage-dir" class="input-text" readonly value="~/.jepctl">
                             <span class="field-hint">Configured via dirs cross-platform resolution.</span>
                         </div>
@@ -611,10 +654,10 @@
 
 
             <!-- SECTION: ROBOT TWIN -->
-            <section class="content-section" id="section-robot">
+            <section class="content-section" id="section-robot" role="tabpanel" aria-labelledby="tab-robot">
                 <div class="section-title">
                     <h2>Robot Twin</h2>
-                    <p>A 6 DOF arm with a gripper. It learns from what the <strong>camera</strong> sees: every move is followed by a JEPA embedding of the scene, and those transitions train a latent world model the arm plans in (Mode C). Gestures can drive it (Mode A); hardware is gated behind approval (Mode B). API: <code>/api/robot/*</code>, telemetry over <code>/api/robot/ws</code>.</p>
+                    <p>Explore a digital twin, teach it a visual goal, and control movement with confidence.</p>
                 </div>
 
                 <div class="robot-topbar card">
@@ -641,7 +684,7 @@
                     </div>
                     <div class="robot-topbar-group robot-topbar-right">
                         <button class="btn btn-sm btn-outline" id="btn-robot-camera">
-                            <span class="btn-icon" aria-hidden="true">&#128249;</span> <span id="robot-camera-btn-text">Start camera</span>
+                            <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-video"></use></svg> <span id="robot-camera-btn-text">Start camera</span>
                         </button>
                         <span class="status-chip" id="robot-ws-chip"><span class="chip-dot" id="robot-ws-dot"></span><span id="robot-ws-text">telemetry off</span></span>
                         <button class="btn btn-estop" id="btn-robot-estop" aria-label="Emergency stop">EMERGENCY STOP</button>
@@ -696,9 +739,10 @@
                             <div class="agent-view-row">
                                 <div class="agent-view-box">
                                     <img id="robot-agent-view" alt="What the agent observes" width="224" height="224">
+                                    <span class="agent-view-badge" id="robot-agent-view-badge" style="display: none;">FROZEN SNAPSHOT</span>
                                     <div class="model-view-placeholder" id="robot-agent-view-placeholder">Camera stopped</div>
                                 </div>
-                                <p class="card-subtitle" id="robot-agent-view-caption">What the agent observes. With the virtual backend the twin is drawn into the camera frame so the picture depends on the joints; with the physical arm it is the raw camera (ROI applied).</p>
+                                <p class="card-subtitle" id="robot-agent-view-caption">What the agent observes.</p>
                             </div>
                             <ol class="slots-tips robot-steps" id="robot-steps">
                                 <li id="robot-step-camera">Start the camera and point it at the arm.</li>
@@ -753,12 +797,13 @@
             </section>
 
             <!-- SECTION: GESTURES -->
-            <section class="content-section" id="section-gestures">
+            <section class="content-section" id="section-gestures" role="tabpanel" aria-labelledby="tab-gestures">
                 <div class="section-title">
                     <h2>Gestures</h2>
-                    <p>Few-shot pose recognition without training: each gesture is a prototype (mean of reference embeddings) compared to the current frame in the model's latent space. Tune it here, then ship the bundle to <code>POST /api/gestures/match</code>.</p>
+                    <p>Teach a few poses. See what the model recognizes and understand every decision.</p>
                 </div>
 
+                <ol class="flow-guide" aria-label="Gesture setup"><li><span>1</span> Load a model</li><li><span>2</span> Start the camera</li><li><span>3</span> Capture neutral, then gestures</li><li><span>4</span> Tune &amp; export</li></ol>
                 <div class="card gesture-model-bar">
                     <div class="gesture-model-bar-row">
                         <div class="gesture-model-bar-left">
@@ -785,7 +830,7 @@
                             <div class="gesture-card-header">
                                 <div>
                                     <h3>Model view</h3>
-                                    <p class="card-subtitle">Exactly what the network receives: the 224&times;224 centre crop of the server camera.</p>
+                                    <p class="card-subtitle">The camera frame as your active model sees it, with the current crop applied.</p>
                                 </div>
                                 <div class="gesture-header-actions">
                                     <label class="toggle-label compact" for="toggle-gesture-heatmap">
@@ -793,7 +838,7 @@
                                         <span>Difference map</span>
                                     </label>
                                     <button class="btn btn-sm btn-primary" id="btn-gesture-camera-toggle">
-                                        <span class="btn-icon" aria-hidden="true">&#128249;</span> <span id="gesture-cam-btn-text">Start camera</span>
+                                        <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-video"></use></svg> <span id="gesture-cam-btn-text">Start camera</span>
                                     </button>
                                 </div>
                             </div>
@@ -885,7 +930,7 @@
                                 <p><strong>Combined</strong> = 0.35 &times; raw + 0.65 &times; contrastive. Detected when combined &ge; threshold <em>and</em> the lead over the runner-up &ge; margin. A winning Neutral slot blocks detection.</p>
                             </details>
 
-                            <table class="reasoning-table" id="gesture-reasoning-table">
+                            <div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable data table"><table class="reasoning-table" id="gesture-reasoning-table">
                                 <thead>
                                     <tr>
                                         <th scope="col">Gesture</th>
@@ -898,7 +943,7 @@
                                 <tbody id="gesture-reasoning-body">
                                     <tr><td colspan="5" class="reasoning-empty">Waiting for the stream and at least one registered gesture.</td></tr>
                                 </tbody>
-                            </table>
+                            </table></div>
 
                             <div class="reasoning-decision" id="gesture-reasoning-decision" role="status" aria-live="polite">Decision: --</div>
 
@@ -917,7 +962,7 @@
                             <div class="gesture-actions-grid">
                                 <div class="action-item">
                                     <div class="action-item-header">
-                                        <span class="action-icon" aria-hidden="true">&#128266;</span>
+                                        <svg class="ui-icon action-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-sound"></use></svg>
                                         <label class="toggle-label" for="toggle-gesture-audio">
                                             <span>Audio cue</span>
                                             <input type="checkbox" id="toggle-gesture-audio" checked class="checkbox-input">
@@ -927,7 +972,7 @@
                                 </div>
                                 <div class="action-item">
                                     <div class="action-item-header">
-                                        <span class="action-icon" aria-hidden="true">&#127912;</span>
+                                        <svg class="ui-icon action-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-palette"></use></svg>
                                         <span class="action-name">Visual theme</span>
                                     </div>
                                     <div class="theme-pill-preview" id="gesture-theme-pill">
@@ -936,7 +981,7 @@
                                 </div>
                                 <div class="action-item">
                                     <div class="action-item-header">
-                                        <span class="action-icon" aria-hidden="true">&#9201;</span>
+                                        <svg class="ui-icon action-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-clock"></use></svg>
                                         <span class="action-name">Hold (&gt; 1 s)</span>
                                     </div>
                                     <div class="hold-progress-box">
@@ -965,6 +1010,37 @@
                             </div>
 
                             <div class="slots-container">
+                                <div class="slot-card slot-neutral" id="slot-card-4" data-slot="4">
+                                    <div class="slot-header">
+                                        <span class="slot-number">Neutral · start here</span>
+                                        <span class="slot-state-badge" id="slot-state-4">Empty</span>
+                                    </div>
+                                    <div class="slot-body">
+                                        <label class="visually-hidden" for="gesture-name-4">Gesture name</label>
+                                        <input type="text" id="gesture-name-4" class="input-text slot-name-input" value="Rest" placeholder="Gesture name" maxlength="64">
+                                        <div class="slot-thumb-box" id="slot-thumb-box-4">
+                                            <img id="slot-img-4" src="" alt="" style="display: none;">
+                                            <div class="slot-empty-placeholder" id="slot-empty-4">No capture yet</div>
+                                        </div>
+                                        <div class="slot-meta" id="slot-meta-4">Rest pose: absorbs frames with no intentional gesture. Never reported as a detection.</div>
+                                        <div class="slot-buttons">
+                                            <button class="btn btn-sm btn-primary btn-capture-slot" id="btn-capture-4" data-slot="4">
+                                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-camera"></use></svg> Capture
+                                            </button>
+                                            <button class="btn btn-sm btn-outline-danger btn-delete-slot" id="btn-delete-4" data-slot="4" style="display: none;">
+                                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-delete"></use></svg> Delete
+                                            </button>
+                                        </div>
+                                        <div class="slot-live-meter" id="slot-live-meter-4">
+                                            <div class="slot-live-meter-row">
+                                                <span>Combined score</span>
+                                                <strong id="slot-score-val-4" class="mono">--%</strong>
+                                            </div>
+                                            <div class="slot-live-track"><div id="slot-score-bar-4" class="slot-live-fill"></div></div>
+                                        </div>
+
+                                    </div>
+                                </div>
                                 <div class="slot-card" id="slot-card-1" data-slot="1">
                                     <div class="slot-header">
                                         <span class="slot-number">Slot 1 (gesture A)</span>
@@ -980,10 +1056,10 @@
                                         <div class="slot-meta" id="slot-meta-1">Capture 3 to 5 samples while moving slightly.</div>
                                         <div class="slot-buttons">
                                             <button class="btn btn-sm btn-primary btn-capture-slot" id="btn-capture-1" data-slot="1">
-                                                <span class="btn-icon" aria-hidden="true">&#128247;</span> Capture
+                                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-camera"></use></svg> Capture
                                             </button>
                                             <button class="btn btn-sm btn-outline-danger btn-delete-slot" id="btn-delete-1" data-slot="1" style="display: none;">
-                                                <span class="btn-icon" aria-hidden="true">&#128465;</span> Delete
+                                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-delete"></use></svg> Delete
                                             </button>
                                         </div>
                                         <div class="slot-live-meter" id="slot-live-meter-1">
@@ -1011,10 +1087,10 @@
                                         <div class="slot-meta" id="slot-meta-2">Capture 3 to 5 samples while moving slightly.</div>
                                         <div class="slot-buttons">
                                             <button class="btn btn-sm btn-primary btn-capture-slot" id="btn-capture-2" data-slot="2">
-                                                <span class="btn-icon" aria-hidden="true">&#128247;</span> Capture
+                                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-camera"></use></svg> Capture
                                             </button>
                                             <button class="btn btn-sm btn-outline-danger btn-delete-slot" id="btn-delete-2" data-slot="2" style="display: none;">
-                                                <span class="btn-icon" aria-hidden="true">&#128465;</span> Delete
+                                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-delete"></use></svg> Delete
                                             </button>
                                         </div>
                                         <div class="slot-live-meter" id="slot-live-meter-2">
@@ -1042,10 +1118,10 @@
                                         <div class="slot-meta" id="slot-meta-3">Capture 3 to 5 samples while moving slightly.</div>
                                         <div class="slot-buttons">
                                             <button class="btn btn-sm btn-primary btn-capture-slot" id="btn-capture-3" data-slot="3">
-                                                <span class="btn-icon" aria-hidden="true">&#128247;</span> Capture
+                                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-camera"></use></svg> Capture
                                             </button>
                                             <button class="btn btn-sm btn-outline-danger btn-delete-slot" id="btn-delete-3" data-slot="3" style="display: none;">
-                                                <span class="btn-icon" aria-hidden="true">&#128465;</span> Delete
+                                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-delete"></use></svg> Delete
                                             </button>
                                         </div>
                                         <div class="slot-live-meter" id="slot-live-meter-3">
@@ -1058,37 +1134,7 @@
                                         <div class="slot-counter-badge">Held triggers: <strong id="slot-counter-3">0</strong></div>
                                     </div>
                                 </div>
-                                <div class="slot-card slot-neutral" id="slot-card-4" data-slot="4">
-                                    <div class="slot-header">
-                                        <span class="slot-number">Slot 4 (Neutral)</span>
-                                        <span class="slot-state-badge" id="slot-state-4">Empty</span>
-                                    </div>
-                                    <div class="slot-body">
-                                        <label class="visually-hidden" for="gesture-name-4">Gesture name</label>
-                                        <input type="text" id="gesture-name-4" class="input-text slot-name-input" value="Rest" placeholder="Gesture name" maxlength="64">
-                                        <div class="slot-thumb-box" id="slot-thumb-box-4">
-                                            <img id="slot-img-4" src="" alt="" style="display: none;">
-                                            <div class="slot-empty-placeholder" id="slot-empty-4">No capture yet</div>
-                                        </div>
-                                        <div class="slot-meta" id="slot-meta-4">Rest pose: absorbs frames with no intentional gesture. Never reported as a detection.</div>
-                                        <div class="slot-buttons">
-                                            <button class="btn btn-sm btn-primary btn-capture-slot" id="btn-capture-4" data-slot="4">
-                                                <span class="btn-icon" aria-hidden="true">&#128247;</span> Capture
-                                            </button>
-                                            <button class="btn btn-sm btn-outline-danger btn-delete-slot" id="btn-delete-4" data-slot="4" style="display: none;">
-                                                <span class="btn-icon" aria-hidden="true">&#128465;</span> Delete
-                                            </button>
-                                        </div>
-                                        <div class="slot-live-meter" id="slot-live-meter-4">
-                                            <div class="slot-live-meter-row">
-                                                <span>Combined score</span>
-                                                <strong id="slot-score-val-4" class="mono">--%</strong>
-                                            </div>
-                                            <div class="slot-live-track"><div id="slot-score-bar-4" class="slot-live-fill"></div></div>
-                                        </div>
-                                        
-                                    </div>
-                                </div>
+
                             </div>
                             <div class="slots-footer">
                                 <button class="btn btn-sm btn-outline" id="btn-gestures-export" title="Download a bundle to deploy elsewhere">Export bundle</button>
@@ -1111,12 +1157,12 @@
             <p>Create a new cryptographically secure Bearer token for client applications.</p>
 
             <div class="form-group">
-                <label>Token Description / Name:</label>
+                <label for="modal-key-name">Token Description / Name:</label>
                 <input type="text" id="modal-key-name" placeholder="e.g. Video Ingestion Client" class="input-text">
             </div>
 
             <div class="form-group">
-                <label>Access Scope (Role):</label>
+                <label for="modal-key-role">Access Scope (Role):</label>
                 <select id="modal-key-role" class="select-input">
                     <option value="inference">Inference Only (/api/embed, /api/stream, /api/energy)</option>
                     <option value="admin">Administrator (Full Access including /api/pull, /api/rm)</option>
@@ -1124,7 +1170,7 @@
             </div>
 
             <div class="form-group">
-                <label>Expiration Period:</label>
+                <label for="modal-key-expire">Expiration Period:</label>
                 <select id="modal-key-expire" class="select-input">
                     <option value="30">30 Days</option>
                     <option value="90">90 Days</option>

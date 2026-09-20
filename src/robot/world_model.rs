@@ -250,8 +250,8 @@ impl LatentWorldModel {
             .map(|t| {
                 // Pose after the action is where z_next was observed.
                 let mut pose = t.joints;
-                for i in 0..DOF {
-                    pose[i] += t.action[i];
+                for (p, a) in pose.iter_mut().zip(t.action.iter()) {
+                    *p += a;
                 }
                 (pose, energy(&t.z_next, goal))
             })

@@ -170,10 +170,10 @@ impl LatentWorldModel {
         for (idx, t) in self.transitions.iter().enumerate() {
             let w = 0.5 + 0.5 * (idx as f32 + 1.0) / n as f32;
             let f = features(&t.action);
-            for d in 0..self.dim {
+            for (d, row) in atb.iter_mut().enumerate() {
                 let dz = t.z_next[d] - t.z[d];
                 for i in 0..FEATURES {
-                    atb[d][i] += w * f[i] * dz;
+                    row[i] += w * f[i] * dz;
                 }
             }
         }
@@ -211,9 +211,9 @@ impl LatentWorldModel {
         }
         let f = features(action);
         let mut out = z.to_vec();
-        for d in 0..self.dim {
+        for (d, o) in out.iter_mut().enumerate() {
             let row = &self.weights[d * FEATURES..(d + 1) * FEATURES];
-            out[d] += row.iter().zip(f.iter()).map(|(w, x)| w * x).sum::<f32>();
+            *o += row.iter().zip(f.iter()).map(|(w, x)| w * x).sum::<f32>();
         }
         normalize_l2(&out)
     }

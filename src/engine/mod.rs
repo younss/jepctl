@@ -8,6 +8,7 @@ pub mod vjepa2;
 
 use candle_core::{DType, Device, Tensor};
 use candle_nn::{VarBuilder, VarMap};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -18,11 +19,9 @@ use crate::engine::vit::{load_safetensors_into_backbone, VitBackbone, VitConfig}
 use crate::engine::vjepa2::VJepa2Model;
 use crate::types::{HardwareInfo, JepaError, ModelManifest, ModelModality, Preprocessing, WeightReport};
 
-/// Instantiate a randomly initialised backbone matching a manifest.
-pub(crate) fn build_backbone(manifest: &ModelManifest, device: &Device) -> Result<(VarMap, VitBackbone), JepaError> {
-    let varmap = VarMap::new();
-    let vb = VarBuilder::from_varmap(&varmap, DType::F32, device);
-    let cfg = VitConfig {
+/// Backbone geometry described by a manifest.
+pub(crate) fn vit_config(manifest: &ModelManifest) -> VitConfig {
+    VitConfig {
         img_size: manifest.image_size,
         img_w: manifest.input_width,
         patch_size: manifest.patch_size,
@@ -33,9 +32,43 @@ pub(crate) fn build_backbone(manifest: &ModelManifest, device: &Device) -> Resul
         mlp_ratio: manifest.mlp_ratio(),
         variant: manifest.backbone_variant(),
         pooling: manifest.pooling(),
-    };
-    let backbone = VitBackbone::new(&cfg, vb)?;
+    }
+}
+
+/// Instantiate a randomly initialised backbone matching a manifest.
+pub(crate) fn build_backbone(manifest: &ModelManifest, device: &Device) -> Result<(VarMap, VitBackbone), JepaError> {
+    let varmap = VarMap::new();
+    let vb = VarBuilder::from_varmap(&varmap, DType::F32, device);
+    let backbone = VitBackbone::new(&vit_config(manifest), vb)?;
     Ok((varmap, backbone))
+}
+
+/// A builder over plain, detached copies of every tensor in `varmap`.
+///
+/// Weights are loaded through `Var`s so that a checkpoint can be copied into a
+/// pre-built architecture. But a forward pass through `Var`s records an autograd
+/// graph, and that graph keeps every intermediate of every layer alive until the
+/// output is dropped. For a video clip that was more than 10 GB of GPU buffers per
+/// forward. Models are therefore rebuilt from detached tensors once loaded; the
+/// storage is shared, so nothing is copied.
+pub(crate) fn frozen_builder(varmap: &VarMap, device: &Device) -> Result<VarBuilder<'static>, JepaError> {
+    let vars = varmap.data().lock().map_err(|_| JepaError::InferenceError("VarMap lock poisoned".into()))?;
+    let tensors: HashMap<String, Tensor> =
+        vars.iter().map(|(name, var)| (name.clone(), var.as_tensor().detach())).collect();
+    Ok(VarBuilder::from_tensors(tensors, DType::F32, device))
+}
+
+/// Rebuild a loaded backbone from frozen weights (see [`frozen_builder`]), keeping
+/// the positional embedding that the checkpoint loader adapted in place.
+pub(crate) fn freeze_backbone(
+    manifest: &ModelManifest,
+    varmap: &VarMap,
+    loaded: &VitBackbone,
+    device: &Device,
+) -> Result<VitBackbone, JepaError> {
+    let mut frozen = VitBackbone::new(&vit_config(manifest), frozen_builder(varmap, device)?)?;
+    frozen.pos_embed = loaded.pos_embed.detach();
+    Ok(frozen)
 }
 
 /// Load a checkpoint into a backbone and refuse anything less than full coverage.
@@ -226,11 +259,19 @@ pub struct EngineManager {
     active_model: RwLock<Option<Box<dyn JepaModelTrait>>>,
     pub device: Device,
     pub hardware_info: RwLock<HardwareInfo>,
+    /// One forward pass at a time: concurrent passes each need their own working set
+    /// of GPU buffers and can multiply memory use until the machine swaps.
+    inference: tokio::sync::Mutex<()>,
 }
 
 impl EngineManager {
     pub fn new(device: Device, hardware_info: HardwareInfo) -> Arc<Self> {
-        Arc::new(Self { active_model: RwLock::new(None), device, hardware_info: RwLock::new(hardware_info) })
+        Arc::new(Self {
+            active_model: RwLock::new(None),
+            device,
+            hardware_info: RwLock::new(hardware_info),
+            inference: tokio::sync::Mutex::new(()),
+        })
     }
 
     /// Load a model into active GPU/system memory. `weights_path` must point to a
@@ -326,6 +367,7 @@ impl EngineManager {
         &self,
         img: &Tensor,
     ) -> Result<(String, usize, Vec<f32>, Option<Vec<Vec<f32>>>, f64), JepaError> {
+        let _serial = self.inference.lock().await;
         let lock = self.active_model.read().await;
         let model = lock.as_ref().ok_or_else(|| {
             JepaError::ModelNotFound("No model currently loaded in memory. Load a model first.".to_string())
@@ -342,6 +384,7 @@ impl EngineManager {
         &self,
         vid: &Tensor,
     ) -> Result<(String, usize, Vec<f32>, Option<Vec<Vec<f32>>>, f64), JepaError> {
+        let _serial = self.inference.lock().await;
         let lock = self.active_model.read().await;
         let model = lock.as_ref().ok_or_else(|| {
             JepaError::ModelNotFound("No model currently loaded in memory. Load a model first.".to_string())
@@ -358,6 +401,7 @@ impl EngineManager {
         &self,
         clip: &crate::media::audio::AudioClip,
     ) -> Result<(String, usize, Vec<f32>, Option<Vec<Vec<f32>>>, f64), JepaError> {
+        let _serial = self.inference.lock().await;
         let lock = self.active_model.read().await;
         let model = lock.as_ref().ok_or_else(|| {
             JepaError::ModelNotFound("No model currently loaded in memory. Load a model first.".to_string())
@@ -378,6 +422,7 @@ impl EngineManager {
         if frames.is_empty() {
             return Err(JepaError::InvalidPayload("Clip has no frames".into()));
         }
+        let _serial = self.inference.lock().await;
         let lock = self.active_model.read().await;
         let model = lock.as_ref().ok_or_else(|| {
             JepaError::ModelNotFound("No model currently loaded in memory. Load a model first.".to_string())

@@ -2501,6 +2501,7 @@ dependencies = [
  "hex",
  "image",
  "nokhwa",
+ "objc2-metal",
  "rand 0.10.2",
  "reqwest",
  "serde",

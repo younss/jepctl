@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use crate::engine::vit::VitBackbone;
-use crate::engine::{build_backbone, load_checkpoint_strict};
+use crate::engine::{build_backbone, freeze_backbone, load_checkpoint_strict};
 use crate::types::{JepaError, ModelManifest, WeightReport};
 
 /// `(pooled embedding, per-patch tokens, latency in ms)`.
@@ -25,6 +25,7 @@ impl IJepaModel {
     pub fn load(manifest: ModelManifest, weights_path: &Path, device: Device) -> Result<Self, JepaError> {
         let (varmap, mut backbone) = build_backbone(&manifest, &device)?;
         let weights = load_checkpoint_strict(&varmap, &mut backbone, weights_path, &device, &manifest.name)?;
+        let backbone = freeze_backbone(&manifest, &varmap, &backbone, &device)?;
         Ok(Self { manifest, backbone, device, weights })
     }
 

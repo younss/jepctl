@@ -10,7 +10,7 @@ use std::path::Path;
 use candle_core::{Device, Tensor};
 
 use crate::engine::vit::VitBackbone;
-use crate::engine::{build_backbone, load_checkpoint_strict};
+use crate::engine::{build_backbone, freeze_backbone, load_checkpoint_strict};
 use crate::media::audio::{clip_to_spectrogram_tensor, AudioClip};
 use crate::types::{AudioSpec, JepaError, ModelManifest, WeightReport};
 
@@ -37,6 +37,7 @@ impl AudioModel {
     pub fn load(manifest: ModelManifest, weights_path: &Path, device: Device) -> Result<Self, JepaError> {
         let (varmap, mut backbone) = build_backbone(&manifest, &device)?;
         let weights = load_checkpoint_strict(&varmap, &mut backbone, weights_path, &device, &manifest.name)?;
+        let backbone = freeze_backbone(&manifest, &varmap, &backbone, &device)?;
         let spec = Self::spec_for(&manifest);
         Ok(Self { manifest, backbone, device, weights, spec })
     }

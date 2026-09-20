@@ -18,6 +18,7 @@ use std::time::Instant;
 use candle_core::{DType, Device, Module, Tensor, D};
 use candle_nn::{layer_norm, linear, LayerNorm, Linear, VarBuilder, VarMap};
 
+use crate::engine::frozen_builder;
 use crate::engine::vit::map_checkpoint_vars;
 use crate::types::{JepaError, ModelManifest, WeightReport};
 
@@ -179,29 +180,33 @@ pub struct VJepa2Model {
 
 impl VJepa2Model {
     fn build(manifest: ModelManifest, device: &Device) -> Result<(VarMap, Self), JepaError> {
+        let varmap = VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, device);
+        let mut model = Self::build_with(manifest, vb, device)?;
+        model.weights.expected = varmap.data().lock().map(|d| d.len()).unwrap_or(0);
+        Ok((varmap, model))
+    }
+
+    fn build_with(manifest: ModelManifest, vb: VarBuilder, device: &Device) -> Result<Self, JepaError> {
         let cfg = VJepa2Config::from_manifest(&manifest);
         if !cfg.img_size.is_multiple_of(cfg.patch_size) {
             return Err(JepaError::InvalidPayload("image_size must be a multiple of patch_size".into()));
         }
-        let varmap = VarMap::new();
-        let vb = VarBuilder::from_varmap(&varmap, DType::F32, device);
         let patch_in = cfg.in_chans * cfg.tubelet_size * cfg.patch_size * cfg.patch_size;
         let patch_proj = linear(patch_in, cfg.embed_dim, vb.pp("patch_embed").pp("proj"))?;
         let blocks_vb = vb.pp("blocks");
         let blocks =
             (0..cfg.depth).map(|i| Block::new(&cfg, blocks_vb.pp(i))).collect::<candle_core::Result<Vec<_>>>()?;
         let norm = layer_norm(cfg.embed_dim, 1e-6, vb.pp("norm"))?;
-        let expected = varmap.data().lock().map(|d| d.len()).unwrap_or(0);
-        let model = Self {
+        Ok(Self {
             manifest,
             cfg,
             device: device.clone(),
-            weights: WeightReport { loaded: 0, expected, source: "random".into() },
+            weights: WeightReport { loaded: 0, expected: 0, source: "random".into() },
             patch_proj,
             blocks,
             norm,
-        };
-        Ok((varmap, model))
+        })
     }
 
     /// Load from a Hugging Face `VJEPA2Model` safetensors file (encoder weights only;
@@ -216,7 +221,7 @@ impl VJepa2Model {
                 name
             )));
         }
-        let (varmap, mut model) = Self::build(manifest, &device)?;
+        let (varmap, model) = Self::build(manifest, &device)?;
         let mmap = unsafe {
             candle_core::safetensors::MmapedSafetensors::new(weights_path)
                 .map_err(|e| JepaError::InferenceError(format!("Could not mmap safetensors: {}", e)))?
@@ -236,6 +241,9 @@ impl VJepa2Model {
             return Err(JepaError::WeightsIncomplete { loaded, expected });
         }
         tracing::info!("Loaded {}/{} tensors into '{}' from {}", loaded, expected, name, weights_path.display());
+        // Rebuild on detached weights so that inference records no autograd graph
+        // (see `engine::frozen_builder`).
+        let mut model = Self::build_with(model.manifest, frozen_builder(&varmap, &device)?, &device)?;
         model.weights = WeightReport { loaded, expected, source: "safetensors".into() };
         Ok(model)
     }
@@ -310,6 +318,9 @@ impl VJepa2Model {
         debug_assert_eq!(tables.tokens, tokens.dim(1)?);
         for block in &self.blocks {
             tokens = block.forward(&tokens, &tables)?;
+            // Let the GPU catch up and release this layer's buffers before the next
+            // one allocates its own; the working set then stays at one layer.
+            self.device.synchronize()?;
         }
         let normalized = self.norm.forward(&tokens)?; // [B, N, D]
 

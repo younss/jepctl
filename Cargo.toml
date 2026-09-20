@@ -16,7 +16,7 @@ exclude = ["packaging/", ".github/", "docs/"]
 # No accelerator by default so `cargo build` works on every platform.
 # Enable one explicitly: `--features metal` (Apple Silicon) or `--features cuda` (NVIDIA).
 default = []
-metal = ["candle-core/metal", "candle-nn/metal"]
+metal = ["candle-core/metal", "candle-nn/metal", "dep:objc2-metal"]
 cuda = ["candle-core/cuda", "candle-nn/cuda"]
 # Physical robot arm over USB serial (Feetech STS / Dynamixel 1.0 style frames).
 serial = ["dep:serialport"]
@@ -63,6 +63,9 @@ sysinfo = "0.39.6"
 
 # Hub Client & Network (Hugging Face resolve URLs are fetched directly)
 reqwest = { version = "0.13.5", features = ["json", "stream"] }
+
+# GPU memory diagnostics on Metal (optional, pulled in by the metal feature)
+objc2-metal = { version = "0.3", optional = true }
 
 # Robotics (optional)
 serialport = { version = "4.3", optional = true }

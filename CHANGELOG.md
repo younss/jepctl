@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Inference no longer records an autograd graph: models are rebuilt on detached weights after loading. A V-JEPA 2 clip forward peaked at 13 GB of GPU buffers (and froze the machine during gesture capture); it now peaks under 2 GB.
+- Embedding requests are serialized on one inference lock, so concurrent captures and the stream cannot multiply the working set.
+- Status on Metal can report live GPU allocation (`gpu_allocated_bytes` helper).
+
 ### Added
 - **Robot Twin**: `src/robot/` hardware abstraction layer (virtual arm feeding a raw WebGL
   twin, serial backend behind `--features serial` with Feetech STS style frames), safety

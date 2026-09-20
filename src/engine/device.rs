@@ -79,6 +79,19 @@ pub fn query_telemetry(backend: HardwareBackend, device_name_override: Option<&s
     }
 }
 
+/// Bytes currently allocated on the GPU by this process (Metal only; `None` elsewhere).
+pub fn gpu_allocated_bytes(device: &Device) -> Option<u64> {
+    #[cfg(feature = "metal")]
+    {
+        if let Device::Metal(m) = device {
+            use objc2_metal::MTLDevice as _;
+            return Some(m.metal_device().as_ref().currentAllocatedSize() as u64);
+        }
+    }
+    let _ = device;
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -698,16 +698,16 @@ fn print_embedding(
 fn print_startup_banner(config: &RuntimeConfig, auth: &AuthManager) {
     println!(
         r#"
-       ___ _____ ___   _   
-      |_  |  ___| ___ \ /_\  
-        | | |__ | |_/ // _ \ 
-        | |  __||  __/ / _ \ 
-    /\__/ / |___| |   / ___ \
-    \____/\____/\_|  /_/   \_\  v{version}
+        _                 _   _ 
+       (_) ___ _ __   ___| |_| |
+       | |/ _ \ '_ \ / __| __| |
+       | |  __/ |_) | (__| |_| |
+      _/ |\___| .__/ \___|\__|_|
+     |__/     |_|          v{version}
 "#,
         version = env!("CARGO_PKG_VERSION")
     );
-    println!("  Joint-Embedding Predictive Architecture Local Runtime");
+    println!("  jepctl: local runtime for JEPA style encoders");
     println!("  Serving web testbench at: http://{}:{}", config.host, config.port);
     println!("  Root Storage: {}", config.home_dir.display());
 

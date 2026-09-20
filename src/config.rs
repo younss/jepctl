@@ -44,19 +44,20 @@ pub struct RuntimeConfig {
 
 impl RuntimeConfig {
     /// Resolve default root storage directory:
-    /// - macOS and Linux: ~/.jepa/
-    /// - Windows: %USERPROFILE%/.jepa/
+    /// - macOS and Linux: ~/.jepctl/
+    /// - Windows: %USERPROFILE%/.jepctl/
     pub fn default_root_dir() -> PathBuf {
         if let Some(home) = dirs::home_dir() {
-            home.join(".jepa")
+            home.join(".jepctl")
         } else {
-            PathBuf::from(".jepa")
+            PathBuf::from(".jepctl")
         }
     }
 
     /// Initialize directory structure and create required subfolders
     pub fn init(host: String, port: u16, no_auth: bool) -> Result<Self, JepaError> {
         let home_dir = Self::default_root_dir();
+        Self::migrate_legacy_home(&home_dir);
         let models_dir = home_dir.join("models");
         let logs_dir = home_dir.join("logs");
         let auth_token_path = home_dir.join("auth.token");
@@ -89,6 +90,22 @@ impl RuntimeConfig {
             no_auth,
             cors_origins: Vec::new(),
         })
+    }
+
+    /// Installs created before the rename stored everything under `~/.jepa`. Move that
+    /// directory once so models, keys and gestures are kept.
+    fn migrate_legacy_home(home_dir: &Path) {
+        if home_dir.exists() {
+            return;
+        }
+        let Some(parent) = home_dir.parent() else { return };
+        let legacy = parent.join(".jepa");
+        if legacy.is_dir() {
+            match fs::rename(&legacy, home_dir) {
+                Ok(()) => tracing::info!("Migrated data directory {} -> {}", legacy.display(), home_dir.display()),
+                Err(e) => tracing::warn!("Could not migrate {}: {}", legacy.display(), e),
+            }
+        }
     }
 
     /// Load runtime settings from disk if available, or return defaults.

@@ -210,7 +210,7 @@ impl VJepa2Model {
         let name = manifest.name.clone();
         if !weights_path.is_file() {
             return Err(JepaError::ModelNotFound(format!(
-                "Weights for '{}' not found at {}. Run `jepa pull {}` first.",
+                "Weights for '{}' not found at {}. Run `jepctl pull {}` first.",
                 name,
                 weights_path.display(),
                 name

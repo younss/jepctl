@@ -14,16 +14,16 @@ body:
     attributes:
       label: Steps to reproduce
       placeholder: |
-        1. jepa pull facebook/dinov2-small
-        2. jepa serve --no-auth
+        1. jepctl pull facebook/dinov2-small
+        2. jepctl serve --no-auth
         3. POST /api/gestures ...
     validations:
       required: true
   - type: input
     id: version
     attributes:
-      label: jepa version / commit
-      placeholder: "jepa --version"
+      label: jepctl version / commit
+      placeholder: "jepctl --version"
     validations:
       required: true
   - type: input
@@ -42,5 +42,5 @@ body:
     id: logs
     attributes:
       label: Logs
-      description: Run with `RUST_LOG=debug jepa serve` and paste the relevant lines. The `weights` field of `GET /api/status` is useful too.
+      description: Run with `RUST_LOG=debug jepctl serve` and paste the relevant lines. The `weights` field of `GET /api/status` is useful too.
       render: shell

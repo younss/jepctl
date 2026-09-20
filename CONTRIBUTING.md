@@ -1,4 +1,4 @@
-# Contributing to jepa
+# Contributing to jepctl
 
 Thanks for helping. This document is short on purpose: the code and the tests are the
 source of truth, and the rules below exist so that the project stays *honest*: a model

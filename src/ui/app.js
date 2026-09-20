@@ -1,4 +1,4 @@
-// JEPA Runtime - Testbench Client Application Logic
+// jepctl testbench client
 // Zero-dependency pure vanilla JavaScript (ES6+)
 
 (function () {
@@ -24,7 +24,7 @@
         lastAlertSoundTime: 0,
         currentVector: null,
         patchGridSize: 14,
-        authToken: localStorage.getItem("jepa_auth_token") || "",
+        authToken: localStorage.getItem("jepctl_auth_token") || "",
         gestureThreshold: 0.70,
         gestureMargin: 0.04,
         gestureSmoothing: 3,
@@ -244,7 +244,7 @@
                 const data = await res.json();
                 if (data.token) {
                     state.authToken = data.token;
-                    localStorage.setItem("jepa_auth_token", data.token);
+                    localStorage.setItem("jepctl_auth_token", data.token);
                     return data.token;
                 }
             }
@@ -397,7 +397,7 @@
     }
 
     let currentApiRequest = null;
-    let currentApiLang = localStorage.getItem("jepa_snippet_lang") || "curl";
+    let currentApiLang = localStorage.getItem("jepctl_snippet_lang") || "curl";
 
     function showApiDialog(title, description, request) {
         if (!el.apiDialog) return;
@@ -423,7 +423,7 @@
         el.apiDialog.querySelectorAll(".snippet-lang").forEach((b) => {
             b.addEventListener("click", () => {
                 currentApiLang = b.dataset.lang;
-                localStorage.setItem("jepa_snippet_lang", currentApiLang);
+                localStorage.setItem("jepctl_snippet_lang", currentApiLang);
                 renderApiDialogCode();
                 renderIntegrationExample();
             });
@@ -458,7 +458,7 @@
         document.querySelectorAll("#section-security .snippet-lang").forEach((b) => {
             b.addEventListener("click", () => {
                 currentApiLang = b.dataset.lang;
-                localStorage.setItem("jepa_snippet_lang", currentApiLang);
+                localStorage.setItem("jepctl_snippet_lang", currentApiLang);
                 renderIntegrationExample();
             });
         });
@@ -1085,7 +1085,7 @@
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement("a");
                     a.href = url;
-                    a.download = `jepa-embedding-${Date.now()}.json`;
+                    a.download = `jepctl-embedding-${Date.now()}.json`;
                     a.click();
                 }
             });
@@ -1955,12 +1955,12 @@
                     const a = document.createElement("a");
                     a.href = URL.createObjectURL(blob);
                     const model = (state.activeModel || "gestures").replace(/[^a-z0-9]+/gi, "-");
-                    a.download = `jepa-gestures-${model}.json`;
+                    a.download = `jepctl-gestures-${model}.json`;
                     document.body.appendChild(a);
                     a.click();
                     a.remove();
                     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-                    notify(`Exported ${bundle.gestures.length} gesture(s). Import it with POST /api/gestures/import or \`jepa gestures import\`.`, "success", 7000);
+                    notify(`Exported ${bundle.gestures.length} gesture(s). Import it with POST /api/gestures/import or \`jepctl gestures import\`.`, "success", 7000);
                 } catch (e) {
                     notify(`Export failed: ${e.message}`, "error");
                 }

@@ -52,7 +52,7 @@ pub(crate) fn load_checkpoint_strict(
 ) -> Result<WeightReport, JepaError> {
     if !path.is_file() {
         return Err(JepaError::ModelNotFound(format!(
-            "Weights for '{}' not found at {}. Run `jepa pull {}` first.",
+            "Weights for '{}' not found at {}. Run `jepctl pull {}` first.",
             model_name,
             path.display(),
             model_name
@@ -242,7 +242,7 @@ impl EngineManager {
     ) -> Result<WeightReport, JepaError> {
         let name = manifest.name.clone();
         let path = weights_path.ok_or_else(|| {
-            JepaError::ModelNotFound(format!("'{}' is not downloaded. Run `jepa pull {}` first.", name, name))
+            JepaError::ModelNotFound(format!("'{}' is not downloaded. Run `jepctl pull {}` first.", name, name))
         })?;
 
         // Model construction is CPU-heavy (mmap + copies); keep it off the async executor.

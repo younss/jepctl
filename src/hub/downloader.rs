@@ -22,7 +22,12 @@ impl Default for ModelDownloader {
 
 impl ModelDownloader {
     pub fn new() -> Self {
-        Self { client: Client::builder().user_agent("jepa-runtime/0.1.0 (pure-rust)").build().unwrap_or_default() }
+        Self {
+            client: Client::builder()
+                .user_agent(concat!("jepctl/", env!("CARGO_PKG_VERSION"), " (pure-rust)"))
+                .build()
+                .unwrap_or_default(),
+        }
     }
 
     /// Stream download model weights from Hugging Face hub into target directory

@@ -1,4 +1,4 @@
-//! Build script for jepa runtime.
+//! Build script for jepctl runtime.
 //! Handles platform entitlement verification, asset change detection,
 //! and compile-time metadata injection.
 
@@ -11,8 +11,8 @@ fn main() {
     println!("cargo:rerun-if-changed=src/ui/app.js");
     println!("cargo:rerun-if-changed=src/ui/styles.css");
     println!("cargo:rerun-if-changed=packaging/macos/Info.plist");
-    println!("cargo:rerun-if-changed=packaging/macos/com.jepa.daemon.plist");
-    println!("cargo:rerun-if-changed=packaging/linux/jepa.service");
+    println!("cargo:rerun-if-changed=packaging/macos/com.jepctl.daemon.plist");
+    println!("cargo:rerun-if-changed=packaging/linux/jepctl.service");
     println!("cargo:rerun-if-changed=packaging/windows/installer.iss");
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();

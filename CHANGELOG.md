@@ -14,24 +14,24 @@ All notable changes to this project are documented here. The format follows
   `/api/robot/*` endpoints and a 30 Hz WebSocket; new Robot Twin tab.
 - **Latent world model learned from the camera**: transitions `(z, action, z next)` from
   JEPA embeddings of camera frames train a ridge dynamics model in embedding space; Mode C
-  plans inside it (96 candidates per step), persisted in `~/.jepa/robot_world_model.json`.
+  plans inside it (96 candidates per step), persisted in `~/.jepctl/robot_world_model.json`.
 - **V-JEPA 2** (`facebook/vjepa2-vitl-fpc64-256`): 3D tubelet embedding, 3D rotary attention,
   encoder-only strict loading (388/388), per-head attention to bound memory (2.5 GB peak vs.
   70 GB with full score tensors). Camera stream and gestures embed a 16-frame clip.
 - **Audio modality** with AudioMAE (`gaunernst/vit_base_patch16_1024_128.audiomae_as2m`):
   Kaldi-style log-mel front-end, WAV decoding, rectangular single-channel ViT, mean pooling.
-- **Clip and audio files** in `POST /api/embed`, the Embed tab and `jepa embed`: GIF / animated
+- **Clip and audio files** in `POST /api/embed`, the Embed tab and `jepctl embed`: GIF / animated
   WebP / WAV natively, MP4 / WebM / MP3 / FLAC / OGG through `ffmpeg` when present.
 - **Region of interest**: `GET/PUT/DELETE /api/camera/roi`, editor in the Gestures tab, applied
   to every camera embedding and carried in gesture bundles.
 - Manifest fields `tubelet_size`, `input_width`, `in_chans`, `audio`, `pooling`.
 - Gesture bundles: `GET /api/gestures/export`, `POST /api/gestures/import`, and
-  `jepa gestures list|export|import|match|remove`: tune on one machine, deploy on many.
+  `jepctl gestures list|export|import|match|remove`: tune on one machine, deploy on many.
 - `{ } API` controls throughout the testbench showing the exact request (curl / JS / Python)
   behind each action, and an Integration page with a quick-start example.
 - Header status bar (model, checkpoint coverage, camera, latency); `camera_active` on `/api/status`.
 - Event console in Live (filter errors/detections, copy).
-- `jepa tags --json`; logs on stderr so CLI output pipes cleanly.
+- `jepctl tags --json`; logs on stderr so CLI output pipes cleanly.
 
 ### Changed
 - Testbench ergonomics for desktop/integrator use: English everywhere, honest section titles,
@@ -44,7 +44,7 @@ All notable changes to this project are documented here. The format follows
 ### Added
 - **Explainable few-shot gestures** (`src/gestures.rs`): multi-sample prototypes, neutral pose,
   contrastive scoring, runner-up margin, per-frame decision trace and per-patch difference map.
-  Registry persisted per model in `~/.jepa/gestures.json`.
+  Registry persisted per model in `~/.jepctl/gestures.json`.
 - **Model view**: `GET /api/camera/frame` returns exactly what the network receives; the
   sandbox shows it with a heatmap and a reasoning table.
 - **Backbone variants** (`plain` / `cls` / `dinov2`) with LayerScale, CLS pooling, fused-QKV

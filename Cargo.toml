@@ -1,8 +1,8 @@
 [package]
-name = "jepa"
+name = "jepctl"
 version = "0.2.0"
 edition = "2021"
-description = "Local runtime, CLI and testbench for JEPA-style vision encoders (I-JEPA, DINOv2, ViT) — like Ollama, for representation learning"
+description = "jepctl: local runtime, CLI and testbench for JEPA style encoders (I-JEPA, V-JEPA 2, DINOv2, ViT, AudioMAE), like Ollama for representation learning"
 authors = ["Younss <younssiga@gmail.com>", "jepctl contributors"]
 license = "Apache-2.0"
 repository = "https://github.com/younss/jepctl"

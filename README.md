@@ -1,13 +1,16 @@
-# Jepctl: local runtime for JEPA-style vision encoders
+# jepctl: local runtime for JEPA style encoders
 
 [![CI](https://github.com/younss/jepctl/actions/workflows/ci.yml/badge.svg)](https://github.com/younss/jepctl/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-`jepctl` is to **representation-learning encoders** what Ollama is to LLMs: a single pure-Rust binary that pulls a checkpoint from Hugging Face, runs it locally (Metal, CUDA or CPU), and exposes it through a CLI, a REST/SSE API and an embedded web testbench.
+`jepctl` is to **representation-learning encoders** what Ollama is to LLMs: a single pure-Rust binary that pulls a checkpoint from Hugging Face, runs it locally (Metal, CUDA or CPU), and exposes it through a CLI, a REST/SSE API and an embedded desktop testbench.
 
-It targets *non-generative* vision models: **I-JEPA**, **DINOv2**, plain **ViT**: whose output is an embedding, not text. On top of raw embeddings it ships an explainable **few-shot gesture sandbox**: register a few reference poses from your webcam, then watch, frame by frame, *why* the model does or does not recognise them.
+It targets *non-generative* encoders whose output is an embedding, not text: **I-JEPA**, **V-JEPA 2**, **DINOv2**, plain **ViT** for images and video, **AudioMAE** for audio. On top of raw embeddings it ships:
 
-> **Status:** early (0.2). The engine, catalog, API and gesture pipeline are tested and honest about what they can do. Video encoders (V-JEPA) are not supported yet: see [Roadmap](#roadmap).
+- an explainable **few-shot gesture sandbox**: register a few reference poses from your webcam, then watch, frame by frame, *why* the model does or does not recognise them;
+- a **robot twin**: a 6 DOF arm that learns a latent world model from what the camera sees and plans inside it, previewed in WebGL and gated before it touches hardware.
+
+> **Status:** early (0.2). Every model in the catalog loads with verified checkpoint coverage and every entry point is tested; see [Verification](#verification) for what is and is not checked numerically.
 
 ---
 
@@ -20,8 +23,8 @@ cargo build --release --features cuda    # NVIDIA
 cargo build --release                    # CPU only
 
 # Pull a verified model and start the daemon + testbench
-./target/release/jepa pull facebook/dinov2-small
-./target/release/jepa serve --no-auth      # http://127.0.0.1:11435
+./target/release/jepctl pull facebook/dinov2-small
+./target/release/jepctl serve --no-auth      # http://127.0.0.1:11435
 ```
 
 Open the testbench, go to **8. Gesture Sandbox**, start the camera, register a *Neutral* pose and two or three gestures with 3-5 samples each, and read the reasoning table.
@@ -36,10 +39,12 @@ Open the testbench, go to **8. Gesture Sandbox**, start the camera, register a *
 
 ## Verified model catalog
 
-Every entry below has been loaded end-to-end with **100 % checkpoint coverage** (`GET /api/status → weights.loaded == weights.expected`). A model that does not fully load is refused: `jepa` never runs on random weights.
+Every entry below has been loaded end-to-end with **100 % checkpoint coverage** (`GET /api/status → weights.loaded == weights.expected`). A model that does not fully load is refused: `jepctl` never runs on random weights.
 
 | Model | Family | Dim | Params | Input | Pooled output | Notes |
 |---|---|---|---|---|---|---|
+| `facebook/vjepa2-vitl-fpc64-256` | **V-JEPA 2** ViT-L/16 (video) | 1024 | 300M | 16 frames x 256 px, ImageNet norm | mean of space-time tokens | 3D tubelets + 3D RoPE; about 0.9 s per clip on Apple Silicon, about 10 s on CPU |
+| `gaunernst/vit_base_patch16_1024_128.audiomae_as2m` | **AudioMAE** ViT-B/16 (audio) | 768 | 86M | 10.24 s log-mel 1024x128 @ 16 kHz | mean of patches | Kaldi fbank front-end built in; CC-BY-4.0 |
 | `facebook/ijepa_vith14_1k` | I-JEPA ViT-H/14 | 1280 | 632M | 224, ImageNet norm | mean of patches | the reference JEPA encoder |
 | `facebook/ijepa_vith14_22k` | I-JEPA ViT-H/14 | 1280 | 632M | 224, ImageNet norm | mean of patches | IN-22k pre-training |
 | `facebook/dinov2-small` | DINOv2 ViT-S/14 | 384 | 22M | 224, ImageNet norm | CLS | **best default for gestures**: fast and very discriminative |
@@ -49,31 +54,46 @@ Every entry below has been loaded end-to-end with **100 % checkpoint coverage** 
 
 DINOv2 checkpoints ship a 37×37 positional grid (518 px); it is bicubically resampled to the 16×16 grid used at 224 px, as in the reference implementation.
 
-Anything else can be tried through a custom [Jepafile](#jepafile-custom-models); if its layout is not one of the four the loader understands (HF ViT/I-JEPA, HF DINOv2, timm/Meta fused-QKV), loading fails with the list of missing tensors.
+V-JEPA 2's predictor is ignored (encoder only). AudioMAE pools by **mean**: its CLS token was never trained as a summary and yields identical vectors for every input.
+
+Anything else can be tried through a custom [Jepafile](#jepafile-custom-models); if its layout is not one of the five the loader understands (HF ViT/I-JEPA, HF DINOv2, HF V-JEPA 2, timm/Meta fused-QKV, AudioMAE), loading fails with the list of missing tensors.
+
+### Verification
+
+Each catalog entry was pulled and loaded (`weights.loaded == weights.expected`), embedded twice for determinism, and compared across clearly different inputs. Implementations follow the reference code line by line (see `docs/ARCHITECTURE.md`), including V-JEPA 2's tiled-sin/interleaved-rotation quirk and Kaldi's Povey window. What has **not** been done: a bit-for-bit comparison with PyTorch outputs, because this repository has no Python dependency. If you run one, please open an issue with the numbers.
+
+### Inputs
+
+| Kind | Formats | Notes |
+|---|---|---|
+| Image | PNG, JPEG, WebP | centre crop + resize to the model input |
+| Clip | GIF, animated WebP natively; MP4/WebM/MOV with `ffmpeg` on `PATH` (or `JEPA_FFMPEG`) | uniformly sub-sampled to the model's clip length (16 for V-JEPA 2); image models embed each frame and average |
+| Audio | WAV natively; MP3/FLAC/OGG with `ffmpeg` | any sample rate, down-mixed to mono, resampled to 16 kHz, 10.24 s window (zero-padded / cropped) |
+| Camera | server camera via `nokhwa` | optional **region of interest** crop, see Gestures |
 
 ---
 
 ## CLI
 
 ```bash
-jepa serve [--host 127.0.0.1] [--port 11435] [--no-auth] [--device auto|metal|cuda|cpu] [--cors-origins a,b]
-jepa app | jepa gui                 # daemon + native desktop window
-jepa run <model>                    # daemon with a model preloaded
-jepa pull <hf-repo>                 # download model.safetensors + Jepafile.json into ~/.jepa/models
-jepa tags | jepa list               # installed models
-jepa rm <model>
-jepa embed <image> [--model m] [--format json|raw]
-jepa stream [--camera 0] [--fps 10] [--model m]
-jepa key generate --name "CI" --role admin|inference [--days 90]
-jepa key list | jepa key revoke <prefix>
-jepa gestures list [--json]
-jepa gestures export [--model m] [-o bundle.json] [--threshold 0.7] [--margin 0.04] [--no-thumbnails]
-jepa gestures import bundle.json [--replace]
-jepa gestures match photo.jpg [--model m] [--threshold] [--margin]   # exit 0 detected, 1 not detected
-jepa gestures remove <name> | --model m
+jepctl serve [--host 127.0.0.1] [--port 11435] [--no-auth] [--device auto|metal|cuda|cpu] [--cors-origins a,b]
+jepctl app | jepctl gui                 # daemon + native desktop window
+jepctl run <model>                    # daemon with a model preloaded
+jepctl pull <hf-repo>                 # download model.safetensors + Jepafile.json into ~/.jepctl/models
+jepctl tags | jepctl list               # installed models
+jepctl rm <model>
+jepctl embed <image|clip|audio> [--model m] [--format json|raw]
+jepctl stream [--camera 0] [--fps 10] [--model m]
+jepctl key generate --name "CI" --role admin|inference [--days 90]
+jepctl key list | jepctl key revoke <prefix>
+jepctl gestures list [--json]
+jepctl gestures export [--model m] [-o bundle.json] [--threshold 0.7] [--margin 0.04] [--no-thumbnails]
+jepctl gestures import bundle.json [--replace]
+jepctl gestures match photo.jpg [--model m] [--threshold] [--margin]   # exit 0 detected, 1 not detected
+jepctl gestures remove <name> | --model m
 ```
 
-Logs go to stderr, so `jepa tags --json | jq` works. Gesture commands read and write the same `~/.jepa/gestures.json` as the GUI and the API (stop the daemon before `import`, or use the API).
+Logs go to stderr, so `jepctl tags --json | jq` works. Gesture commands read and write the same `~/.jepctl/gestures.json` as the GUI and the API (stop the daemon before `import`, or use the API).
 
 `--no-auth` is refused on any host other than `127.0.0.1`/`localhost`.
 
@@ -81,7 +101,7 @@ Logs go to stderr, so `jepa tags --json | jq` works. Gesture commands read and w
 
 ## REST & SSE API
 
-All endpoints live under `/api`. With authentication enabled (the default) send `Authorization: Bearer <token>`; the admin token is printed at first start and stored in `~/.jepa/auth.token`. Roles: `admin` (models, keys, settings) and `inference` (everything else).
+All endpoints live under `/api`. With authentication enabled (the default) send `Authorization: Bearer <token>`; the admin token is printed at first start and stored in `~/.jepctl/auth.token`. Roles: `admin` (models, keys, settings) and `inference` (everything else).
 
 ### System & catalog
 
@@ -100,7 +120,7 @@ All endpoints live under `/api`. With authentication enabled (the default) send 
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/api/embed` | inference | multipart `file` (PNG/JPEG/WebP) → `{ model, dimension, latency_ms, embedding, patch_embeddings }`. Video files: `501`. |
+| POST | `/api/embed` | inference | multipart `file`: image, clip (GIF/WebP/MP4/WebM) or audio (WAV/MP3/FLAC/OGG) → `{ model, dimension, latency_ms, embedding, patch_embeddings }`. The active model must match the modality (`400` otherwise). |
 | GET | `/api/embed/stream?fps=10&threshold=0.70&margin=0.04[&token=]` | inference | SSE, one event per new camera frame: `{ frame_index, model, latency_ms, embedding, gesture_match? }`. Failures arrive as `event: error`. `token=` exists because `EventSource` cannot set headers. |
 | POST | `/api/energy` | inference | `{ vector1, vector2, threshold }` → L2 / cosine distance, anomaly flag |
 
@@ -112,11 +132,13 @@ All endpoints live under `/api`. With authentication enabled (the default) send 
 | POST | `/api/camera/start?device=0&fps=10` | inference | |
 | POST | `/api/camera/stop` | inference | |
 | GET | `/api/camera/frame` | inference | JPEG of **exactly what the model receives** (centre crop, model input size); `X-Frame-Sequence` header |
+| GET | `/api/camera/frame?full=true` | inference | full downscaled frame for the ROI editor (`X-Frame-Width/Height`) |
+| GET / PUT / DELETE | `/api/camera/roi` | inference | region of interest `{ x, y, w, h }` normalised on the raw frame; applied before every camera embedding and stored in exported bundles |
 | GET | `/api/ring-buffer` | inference | last 16 frame thumbnails |
 
 ### Few-shot gestures
 
-A gesture is a *prototype*: the L2-normalised mean of one or more reference embeddings, bound to the model that produced them. The registry persists in `~/.jepa/gestures.json`.
+A gesture is a *prototype*: the L2-normalised mean of one or more reference embeddings, bound to the model that produced them. The registry persists in `~/.jepctl/gestures.json`.
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
@@ -153,7 +175,7 @@ The API is **same-origin by default**: no CORS headers are sent, so a web page f
 
 ## Desktop app / testbench
 
-`jepa app` opens the testbench in a native window; `jepa serve` serves the same page at `http://127.0.0.1:11435/`. No build step, no external assets, keyboard-navigable (↑/↓ between sections, Esc closes dialogs).
+`jepctl app` opens the testbench in a native window; `jepctl serve` serves the same page at `http://127.0.0.1:11435/`. No build step, no external assets, keyboard-navigable (↑/↓ between sections, Esc closes dialogs).
 
 The header is the single source of truth: **model · checkpoint coverage · camera · last latency**.
 
@@ -178,7 +200,7 @@ Tips for good detections: register the neutral pose first, take 3-5 samples per 
 
 ## Robot Twin (digital twin and arm control)
 
-`jepa` can drive a 6 DOF arm with a gripper. Everything is previewed on a WebGL twin rendered in the desktop window (raw WebGL, no library, works offline) and gated before it reaches hardware.
+`jepctl` can drive a 6 DOF arm with a gripper. Everything is previewed on a WebGL twin rendered in the desktop window (raw WebGL, no library, works offline) and gated before it reaches hardware.
 
 ```bash
 cargo run --release --features metal              # virtual arm only
@@ -196,7 +218,7 @@ cargo run --release --features "metal serial"     # plus the physical arm over U
 - **Manual**: sliders (or the API) set targets.
 - **Mode A, gesture shadowing**: detections from the Gestures tab are mapped to actions through an editable map (`open_gripper`, `close_gripper`, `joint_delta`, `pose`, `approve`, `stop`). Defaults: Open Hand opens the gripper, Fist closes it, Victory approves the pending command.
 - **Mode B, safety gate**: forced on with the physical backend. Commands are held as a pending pose, drawn as an amber ghost on the twin, and sent to the hardware only after "Approve and execute" (or the approve gesture).
-- **Learn (exploring)**: the arm babbles with small random actions. After every move, once settled, the **camera** frame is embedded with the active JEPA model; the transition `(z_t, a, z_{t+1})` trains a latent world model `z_{t+1} = z_t + W[a; 1]` (ridge regression in embedding space, refit after every observation, persisted in `~/.jepa/robot_world_model.json`). Nothing is predicted in pixel space: that is the JEPA principle applied to control.
+- **Learn (exploring)**: the arm babbles with small random actions. After every move, once settled, the **camera** frame is embedded with the active JEPA model; the transition `(z_t, a, z_{t+1})` trains a latent world model `z_{t+1} = z_t + W[a; 1]` (ridge regression in embedding space, refit after every observation, persisted in `~/.jepctl/robot_world_model.json`). Nothing is predicted in pixel space: that is the JEPA principle applied to control.
 - **Mode C, reach a visual goal**: `POST /api/robot/goal` embeds what the camera sees now as `z_goal`. At each step the controller samples 96 candidate actions, predicts their outcome **inside the learned model**, executes the one with the lowest predicted energy `E = ||z - z_goal||_2 / sqrt(dim)` (the `/api/energy` metric, plus a little exploration noise), observes the real result and learns from it. Until 12 transitions exist the policy is random; the telemetry says which one is in use, and shows predicted versus observed energy so you can judge the model.
 
 The camera must see the arm for any of this to mean something. With the virtual backend the loop runs and the model only learns what changes in front of the camera; the tab says so. Use the physical arm, or aim the camera at the screen for a demonstration.
@@ -218,11 +240,11 @@ The camera must see the arm for any of this to mean something. With the virtual 
 | GET / PUT | `/api/robot/gesture-map` | gesture name to action mapping |
 | GET | `/api/robot/ws[?token=]` | WebSocket: telemetry at 30 Hz, accepts `{ joints, gripper, approved }` back |
 
-Serial settings (port, baud, servo IDs, tick calibration, direction) live under `robot_hardware` in `~/.jepa/settings.json`; defaults target `/dev/ttyUSB0` at 1 000 000 baud with IDs 1 to 7. The physical protocol has been written from the STS3215 register map and is unit tested at the frame level, but it has not been run against a real arm here: treat the first connection as a bench test with the E-stop within reach.
+Serial settings (port, baud, servo IDs, tick calibration, direction) live under `robot_hardware` in `~/.jepctl/settings.json`; defaults target `/dev/ttyUSB0` at 1 000 000 baud with IDs 1 to 7. The physical protocol has been written from the STS3215 register map and is unit tested at the frame level, but it has not been run against a real arm here: treat the first connection as a bench test with the E-stop within reach.
 
 ## Jepafile (custom models)
 
-`~/.jepa/models/<org>/<name>/Jepafile.json` next to `model.safetensors`:
+`~/.jepctl/models/<org>/<name>/Jepafile.json` next to `model.safetensors`:
 
 ```json
 {
@@ -238,7 +260,7 @@ Serial settings (port, baud, servo IDs, tick calibration, direction) live under 
 }
 ```
 
-Register it with `POST /api/manifests` or the Models tab, then `jepa pull` / load. `image_size` must be a multiple of `patch_size`; positional embeddings are resampled if the checkpoint was trained at another resolution.
+Register it with `POST /api/manifests` or the Models tab, then `jepctl pull` / load. `image_size` must be a multiple of `patch_size`; positional embeddings are resampled if the checkpoint was trained at another resolution.
 
 ---
 
@@ -247,13 +269,13 @@ Register it with `POST /api/manifests` or the Models tab, then `jepa pull` / loa
 ```
 src/
 ├── main.rs              CLI (clap) and daemon bootstrap
-├── engine/              candle backbone: vit.rs (variants, weight mapping), ijepa.rs, vjepa.rs, device.rs
+├── engine/              candle: vit.rs (2D backbone, weight mapping), ijepa.rs, vjepa2.rs (3D tubelets + RoPE), audio.rs, device.rs
 ├── gestures.rs          prototypes, contrastive matching, decision trace, persistence
 ├── robot/               HAL (virtual + serial), safety guard, controller (modes A, B, C)
 ├── hub/                 verified catalog, Jepafile schema, safetensors downloader
-├── media/               image preprocessing, camera capture (nokhwa), ring buffer + "model view"
+├── media/               image/video/audio decoding & preprocessing, camera capture (nokhwa), ring buffer + "model view" + ROI
 ├── server/              axum routes, handlers, gesture handlers, auth middleware, integration tests
-├── auth.rs / config.rs  bearer tokens + RBAC, ~/.jepa layout
+├── auth.rs / config.rs  bearer tokens + RBAC, ~/.jepctl layout
 └── ui/                  embedded single-page testbench (vanilla JS, no build)
 ```
 
@@ -263,12 +285,12 @@ src/
 
 ## Roadmap
 
-- **V-JEPA / V-JEPA 2**: the current `VJepaModel` is a frame-wise ViT with mean pooling and cannot load Meta's checkpoints (3D tubelet embedding, RoPE). No verified video model is offered until it can. Contributions welcome: start from `docs/ARCHITECTURE.md § Adding a model family`.
-- Region of interest for gestures (crop around the hand before embedding).
-- `jepa embed` for video files.
-- Audio-JEPA.
-
----
+- **Audio-JEPA**: the audio modality is in place (front-end, rectangular ViT, catalog), but no Audio-JEPA checkpoint is published in a loadable format today (`ltuncay/Audio-JEPA` is a PyTorch Lightning pickle). AudioMAE is the verified audio encoder; an Audio-JEPA safetensors release would be a manifest entry away.
+- Numerical parity tests against PyTorch reference outputs (needs a contributor with a Python environment, see Verification).
+- Larger V-JEPA 2 variants (`vith`, `vitg`) once someone can verify memory and latency on their hardware.
+- Native H.264 decoding without `ffmpeg`, if a dependable pure-Rust decoder appears.
+- Microphone capture for live audio, mirroring the camera pipeline.
+- Running the serial robot backend against a real SO-100 arm (the protocol is frame-tested only).
 
 ## Contributing
 

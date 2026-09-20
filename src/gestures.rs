@@ -314,7 +314,7 @@ pub fn match_gestures(
 }
 
 /// Portable set of gestures: what `GET /api/gestures/export` returns and
-/// `POST /api/gestures/import` / `jepa gestures import` accept. Train prototypes on one
+/// `POST /api/gestures/import` / `jepctl gestures import` accept. Train prototypes on one
 /// machine, deploy them on many.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GestureBundle {
@@ -341,7 +341,7 @@ pub struct ImportReport {
     pub models: Vec<String>,
 }
 
-/// Persistent gesture registry (`~/.jepa/gestures.json`).
+/// Persistent gesture registry (`~/.jepctl/gestures.json`).
 #[derive(Default, Serialize, Deserialize)]
 pub struct GestureStore {
     #[serde(default)]

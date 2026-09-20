@@ -8,7 +8,7 @@ use std::path::Path;
 use crate::engine::vit::{Pooling, VitVariant};
 use crate::types::{AudioSpec, JepaError, ModelManifest, ModelModality, Normalization};
 
-/// Parsable manifest file schema (.jepa or Jepafile)
+/// Parsable manifest file schema (Jepafile.json)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JepafileConfig {
     pub name: String,

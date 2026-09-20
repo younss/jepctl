@@ -34,7 +34,7 @@ impl AuthManager {
             }
         }
 
-        // 2. Check or create ~/.jepa/auth.token (default admin token)
+        // 2. Check or create ~/.jepctl/auth.token (default admin token)
         let admin_token = if auth_token_path.exists() {
             fs::read_to_string(auth_token_path)
                 .map(|s| s.trim().to_string())

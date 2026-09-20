@@ -42,13 +42,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          name="jepa-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          name="jepctl-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir -p "dist/$name"
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            cp "target/${{ matrix.target }}/release/jepa.exe" "dist/$name/"
+            cp "target/${{ matrix.target }}/release/jepctl.exe" "dist/$name/"
             (cd dist && 7z a "$name.zip" "$name" > /dev/null)
           else
-            cp "target/${{ matrix.target }}/release/jepa" "dist/$name/"
+            cp "target/${{ matrix.target }}/release/jepctl" "dist/$name/"
             (cd dist && tar czf "$name.tar.gz" "$name")
           fi
           cp LICENSE README.md "dist/$name/"

@@ -1,11 +1,11 @@
 [Unit]
-Description=JEPA Local Machine Learning Representation Daemon
-Documentation=https://github.com/facebookresearch/jepa
+Description=jepctl local representation daemon
+Documentation=https://github.com/younss/jepctl
 After=network.target sound.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/jepa serve --host 127.0.0.1 --port 11435
+ExecStart=/usr/bin/jepctl serve --host 127.0.0.1 --port 11435
 Restart=on-failure
 RestartSec=5s
 Environment=RUST_LOG=info
@@ -15,7 +15,7 @@ StandardError=journal
 # Security and Sandbox Restrictions
 ProtectSystem=strict
 ProtectHome=read-write
-ReadWritePaths=%h/.jepa
+ReadWritePaths=%h/.jepctl
 NoNewPrivileges=true
 DevicePolicy=auto
 

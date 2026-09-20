@@ -34,7 +34,7 @@ pub fn list_camera_devices() -> Vec<CameraDeviceInfo> {
 
     // Always include a synthetic test bench camera for headless/CI/testing environments
     if devices.is_empty() {
-        devices.push(CameraDeviceInfo { index: 0, name: "Virtual Synthetic JEPA Test Camera".to_string() });
+        devices.push(CameraDeviceInfo { index: 0, name: "Virtual synthetic test camera".to_string() });
     }
 
     devices

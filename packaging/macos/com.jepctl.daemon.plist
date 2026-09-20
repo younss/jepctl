@@ -3,10 +3,10 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.jepa.daemon</string>
+    <string>com.jepctl.daemon</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/jepa</string>
+        <string>/usr/local/bin/jepctl</string>
         <string>serve</string>
         <string>--host</string>
         <string>127.0.0.1</string>

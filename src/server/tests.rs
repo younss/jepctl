@@ -313,7 +313,7 @@ async fn unknown_model_load_is_404_and_missing_weights_409() {
     let (status, body) =
         call(&t.router, "POST", "/api/models/load", Some(json!({ "model_name": "facebook/dinov2-small" }))).await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    assert!(body["error"].as_str().unwrap().contains("jepa pull"));
+    assert!(body["error"].as_str().unwrap().contains("jepctl pull"));
 }
 
 #[tokio::test]

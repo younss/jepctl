@@ -1,10 +1,10 @@
-//! Shared data transfer objects, schemas, and error definitions for JEPA runtime.
+//! Shared data transfer objects, schemas, and error definitions for jepctl.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Core error types across the JEPA runtime.
+/// Core error types across jepctl.
 #[derive(Error, Debug)]
 pub enum JepaError {
     #[error("Model not found: {0}")]

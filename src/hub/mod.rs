@@ -50,7 +50,7 @@ impl ModelCatalog {
             }
         }
 
-        // 2. Scan custom Jepafile manifests in ~/.jepa/models/ recursively
+        // 2. Scan custom Jepafile manifests in ~/.jepctl/models/ recursively
         let mut manifests = Vec::new();
         scan_manifests_recursive(models_dir, 0, &mut manifests);
         for manifest_file in manifests {
@@ -146,7 +146,7 @@ impl ModelCatalog {
         }
 
         if deleted {
-            // Prune empty parent directories up to models_dir (e.g. ~/.jepa/models/google/)
+            // Prune empty parent directories up to models_dir (e.g. ~/.jepctl/models/google/)
             if let Some(parent) = safe_path.parent() {
                 if parent != self.config.models_dir && parent.starts_with(&self.config.models_dir) {
                     if let Ok(mut read) = fs::read_dir(parent) {

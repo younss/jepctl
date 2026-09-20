@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.jepa.runtime</string>
+    <string>com.jepctl.runtime</string>
     <key>CFBundleName</key>
-    <string>JEPA Runtime</string>
+    <string>jepctl</string>
     <key>CFBundleDisplayName</key>
-    <string>JEPA</string>
+    <string>jepctl</string>
     <key>CFBundleVersion</key>
     <string>0.2.0</string>
     <key>CFBundleShortVersionString</key>
@@ -17,12 +17,12 @@
     <key>CFBundleSignature</key>
     <string>????</string>
     <key>CFBundleExecutable</key>
-    <string>jepa</string>
+    <string>jepctl</string>
     <key>LSMinimumSystemVersion</key>
     <string>12.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSCameraUsageDescription</key>
-    <string>JEPA requires camera access to compute real-time spatio-temporal video embeddings and visual anomaly detection.</string>
+    <string>jepctl requires camera access to compute real-time spatio-temporal video embeddings and visual anomaly detection.</string>
 </dict>
 </plist>

@@ -26,7 +26,7 @@ pub async fn start_daemon(state: AppState, host: &str, port: u16) -> Result<(), 
         addr_str.parse().map_err(|e| JepaError::InvalidPayload(format!("Invalid socket address: {}", e)))?;
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!("JEPA daemon listening on http://{}", addr);
+    tracing::info!("jepctl daemon listening on http://{}", addr);
 
     // Same-origin by default: the embedded testbench needs no CORS, and a permissive
     // policy would let any web page in the user's browser read the API (camera frames,
@@ -50,7 +50,7 @@ pub async fn start_daemon(state: AppState, host: &str, port: u16) -> Result<(), 
         .await
         .map_err(|e| JepaError::Io(std::io::Error::other(e)))?;
 
-    tracing::info!("JEPA daemon shutdown cleanly.");
+    tracing::info!("jepctl daemon shutdown cleanly.");
     Ok(())
 }
 

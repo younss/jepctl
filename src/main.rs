@@ -1,4 +1,4 @@
-//! JEPA - Local runtime, CLI, and testbench for Joint-Embedding Predictive Architectures.
+//! jepctl: local runtime, CLI, and testbench for Joint-Embedding Predictive Architectures.
 
 pub mod auth;
 pub mod config;
@@ -34,8 +34,8 @@ use crate::types::{CreateKeyRequest, Role};
 
 #[derive(Parser)]
 #[command(
-    name = "jepa",
-    about = "Local runtime, CLI and testbench for JEPA-style vision encoders (I-JEPA, DINOv2, ViT)",
+    name = "jepctl",
+    about = "jepctl: local runtime, CLI and testbench for JEPA style encoders (I-JEPA, V-JEPA 2, DINOv2, ViT, AudioMAE)",
     version
 )]
 struct Cli {
@@ -260,8 +260,8 @@ enum KeyCommands {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,jepa=debug".into()))
-        // Logs go to stderr so `jepa tags --json | jq` and friends stay parseable.
+        .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,jepctl=debug".into()))
+        // Logs go to stderr so `jepctl tags --json | jq` and friends stay parseable.
         .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
         .init();
 
@@ -504,8 +504,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if json {
                 println!("{}", serde_json::to_string_pretty(&models)?);
             } else if models.is_empty() {
-                println!("No installed models found in ~/.jepa/models.");
-                println!("Run 'jepa pull <model>' to download a model.");
+                println!("No installed models found in ~/.jepctl/models.");
+                println!("Run 'jepctl pull <model>' to download a model.");
                 println!("\nVerified models available:");
                 for v in get_verified_manifests() {
                     println!("  - {:<40} ({} | {} dims)", v.name, v.architecture, v.embed_dim);
@@ -676,7 +676,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// `jepa embed` output: `raw` comma-separated floats, or JSON.
+/// `jepctl embed` output: `raw` comma-separated floats, or JSON.
 fn print_embedding(
     format: &str,
     model: &str,

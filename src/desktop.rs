@@ -11,7 +11,7 @@ use crate::types::JepaError;
 pub fn launch_desktop_window(target_url: &str) -> Result<(), JepaError> {
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
-        .with_title(format!("JEPA v{}", env!("CARGO_PKG_VERSION")))
+        .with_title(format!("jepctl v{}", env!("CARGO_PKG_VERSION")))
         .with_inner_size(tao::dpi::LogicalSize::new(1360.0, 900.0))
         .with_min_inner_size(tao::dpi::LogicalSize::new(1100.0, 700.0))
         .build(&event_loop)

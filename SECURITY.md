@@ -10,18 +10,18 @@ credited unless you prefer otherwise.
 
 ## Threat model (what the daemon protects against)
 
-`jepa serve` is a local service that can read your camera. The defaults are chosen so that
+`jepctl serve` is a local service that can read your camera. The defaults are chosen so that
 **a web page open in your browser cannot use it**:
 
 - Binds to `127.0.0.1` only. `--host 0.0.0.0` requires authentication (`--no-auth` is refused).
-- Bearer tokens (`~/.jepa/auth.token`, plus `jepa key …` scoped tokens) with constant-time comparison; roles `admin` and `inference`.
+- Bearer tokens (`~/.jepctl/auth.token`, plus `jepctl key …` scoped tokens) with constant-time comparison; roles `admin` and `inference`.
 - **No CORS headers by default.** Cross-origin pages cannot read responses. Opt in per origin with `--cors-origins`.
 - `/api/auth/token` (testbench bootstrap) answers only same-origin requests (`Sec-Fetch-Site`) on loopback.
 - Camera control, camera frames, ring buffer, embeddings stream and gesture data require an `inference` token. The SSE stream accepts `?token=` because `EventSource` cannot set headers: do not put that URL in logs.
-- Model files are confined to `~/.jepa/models` (path-traversal checks), uploads are format-sniffed and size-capped (20 MB images, 200 MB request body).
+- Model files are confined to `~/.jepctl/models` (path-traversal checks), uploads are format-sniffed and size-capped (20 MB images, 200 MB request body).
 
-Known gaps (help welcome): `GET /api/status`, `/api/tags`, `/api/cameras` and `/api/settings` are readable without a token (no sensitive content, but they reveal that the service exists); there is no rate limiting; tokens are stored in plain files under `~/.jepa` with `0700` permissions on Unix only.
+Known gaps (help welcome): `GET /api/status`, `/api/tags`, `/api/cameras` and `/api/settings` are readable without a token (no sensitive content, but they reveal that the service exists); there is no rate limiting; tokens are stored in plain files under `~/.jepctl` with `0700` permissions on Unix only.
 
 ## Model weights
 
-`jepa pull` downloads `model.safetensors` from Hugging Face over HTTPS into a temporary file and renames it atomically. Safetensors are memory-mapped and never executed. Checksums are not verified yet.
+`jepctl pull` downloads `model.safetensors` from Hugging Face over HTTPS into a temporary file and renames it atomically. Safetensors are memory-mapped and never executed. Checksums are not verified yet.

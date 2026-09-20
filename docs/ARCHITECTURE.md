@@ -1,6 +1,6 @@
 # Architecture
 
-This document explains how `jepa` is put together and, more importantly, the contracts
+This document explains how `jepctl` is put together and, more importantly, the contracts
 that keep it trustworthy. Read it before touching the engine, the media pipeline or the
 gesture logic.
 
@@ -57,7 +57,7 @@ checkpoint ──► candidate_sources(target) ──► first shape-compatible 
 - Every trainable parameter of the backbone must be filled. `loaded != expected` is a hard
   error (`JepaError::WeightsIncomplete`) that names the missing tensors in the log and maps
   to HTTP `422`.
-- A missing file maps to `ModelNotFound` → HTTP `409` with a "run `jepa pull`" hint.
+- A missing file maps to `ModelNotFound` → HTTP `409` with a "run `jepctl pull`" hint.
 - The result is a `WeightReport { loaded, expected, source }` stored on the model and
   exposed by `/api/status`. `source == "random"` exists only for tests
   (`IJepaModel::load_random`, `EngineManager::load_random_for_test`).
@@ -72,9 +72,9 @@ wondering why gestures are not recognised. That happened; hence the contract.
 inferred from the model name otherwise). `EngineManager::preprocessing()` returns it for the
 active model and **every** producer of an input tensor uses it:
 
-- `POST /api/embed` and `jepa embed` → `preprocess_image_bytes`
+- `POST /api/embed` and `jepctl embed` → `preprocess_image_bytes`
 - gestures from `image_base64` → `preprocess_image_bytes`
-- camera paths (`embed_current_view`, `jepa stream`) → `RingBuffer::latest_image_tensor` /
+- camera paths (`embed_current_view`, `jepctl stream`) → `RingBuffer::latest_image_tensor` /
   `to_video_tensor` → `preprocess_dynamic_image`
 
 Centre-crop to a square, bicubic resize to `size`, per-channel `(x/255 − mean)/std`.
@@ -135,7 +135,7 @@ RegisteredGesture {
 
 Gestures are keyed by name and bound to `model_name`; matching only considers gestures of
 the active model (embeddings from different models live in different spaces). The store is
-written atomically to `~/.jepa/gestures.json` after each change.
+written atomically to `~/.jepctl/gestures.json` after each change.
 
 ### 3.2 Why registration and matching share one pipeline
 
@@ -173,7 +173,7 @@ in the SSE query. Both decisions and their reasons are displayed side by side.
 
 `types::Roi { x, y, w, h }` (normalised on the raw frame) lives in `AppState::camera_roi`,
 is persisted in `settings.json` and travels inside gesture bundles. Every camera path -
-`embed_current_view`, `/api/camera/frame`, `jepa stream`: crops to it *before* the centre
+`embed_current_view`, `/api/camera/frame`, `jepctl stream`: crops to it *before* the centre
 square crop, so the hand can fill the model input. Because prototypes captured with a crop
 only match frames cropped the same way, importing a bundle restores its ROI.
 
@@ -240,7 +240,7 @@ RobotCore   { backend: Box<dyn RobotBackend>, safety: SafetyGuard, mode, safety_
 | V-JEPA 2 rotary tables and rotation, shapes | `engine/vjepa2.rs` tests | reference formulas on tiny configs |
 | audio front-end (WAV, FFT, fbank), clip decoding | `media/audio.rs`, `media/video.rs` tests | synthetic tones, in-memory GIFs |
 | preprocessing, ring buffer | `media/*` tests | shapes, crops, normalisation values |
-| HTTP behaviour | `server/tests.rs` | full router, random 32-d model, temp `~/.jepa`, auth on/off |
+| HTTP behaviour | `server/tests.rs` | full router, random 32-d model, temp `~/.jepctl`, auth on/off |
 | UI/HTML consistency | `types.rs` | every static DOM id used by `app.js` exists |
 
 Real checkpoints are verified manually (see CONTRIBUTING → "Adding a model") because CI does

@@ -102,7 +102,7 @@ pub async fn ensure_model_loaded(state: &AppState) -> Result<String, ApiError> {
         }
         None => Err(api_error(
             StatusCode::CONFLICT,
-            "No model loaded and no downloaded model available. Pull a model first (e.g. `jepa pull facebook/ijepa_vith14_1k`).",
+            "No model loaded and no downloaded model available. Pull a model first (e.g. `jepctl pull facebook/ijepa_vith14_1k`).",
         )),
     }
 }
@@ -728,7 +728,7 @@ pub async fn handle_get_session_token(
 
     // Only the embedded testbench (same origin) may bootstrap a session this way.
     // Browsers send `Sec-Fetch-Site` on every fetch; a cross-site page gets refused
-    // even if CORS were misconfigured. Non-browser clients must use `jepa key`.
+    // even if CORS were misconfigured. Non-browser clients must use `jepctl key`.
     let fetch_site = headers.get("sec-fetch-site").and_then(|h| h.to_str().ok()).unwrap_or("same-origin");
     if !matches!(fetch_site, "same-origin" | "none") {
         return Err((

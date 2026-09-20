@@ -1,12 +1,12 @@
-; Inno Setup Script for JEPA Runtime
+; Inno Setup Script for jepctl
 ; Generates Windows installer executable with PATH registration, desktop shortcuts,
 ; and optional Windows service setup.
 
-#define MyAppName "JEPA Runtime"
+#define MyAppName "jepctl"
 #define MyAppVersion "0.2.0"
-#define MyAppPublisher "JEPA Engineering Team"
-#define MyAppURL "https://github.com/facebookresearch/jepa"
-#define MyAppExeName "jepa.exe"
+#define MyAppPublisher "jepctl contributors"
+#define MyAppURL "https://github.com/younss/jepctl"
+#define MyAppExeName "jepctl.exe"
 
 [Setup]
 AppId={{D37F8A6B-9B41-45A0-9A92-6F8E80C9C25F}
@@ -16,11 +16,11 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
-DefaultDirName={autopf}\JEPA
+DefaultDirName={autopf}\jepctl
 DisableProgramGroupPage=yes
 LicenseFile=..\..\LICENSE
 OutputDir=..\..\target
-OutputBaseFilename=jepa-setup-x86_64
+OutputBaseFilename=jepctl-setup-x86_64
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
@@ -31,8 +31,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
-Name: "envPath"; Description: "Add JEPA installation folder to system PATH"; GroupDescription: "System Integration:"
-Name: "winService"; Description: "Register JEPA as a background Windows Service (port 11435)"; GroupDescription: "System Integration:"; Flags: unchecked
+Name: "envPath"; Description: "Add jepctl installation folder to system PATH"; GroupDescription: "System Integration:"
+Name: "winService"; Description: "Register jepctl as a background Windows Service (port 11435)"; GroupDescription: "System Integration:"; Flags: unchecked
 
 [Files]
 Source: "..\..\target\release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion

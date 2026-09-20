@@ -350,3 +350,37 @@ async fn auth_mode_protects_camera_stream_and_token_bootstrap() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn gesture_bundle_export_import_over_http() {
+    let t = app(true).await;
+    let r = &t.router;
+    for (name, i) in [("a", 0), ("b", 1)] {
+        let (status, _) =
+            call(r, "POST", "/api/gestures", Some(json!({ "name": name, "embedding": unit(i, 32) }))).await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+
+    let (status, bundle) = call(r, "GET", "/api/gestures/export?threshold=0.6&thumbnails=false", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(bundle["version"], 1);
+    assert_eq!(bundle["threshold"], 0.6);
+    assert_eq!(bundle["gestures"].as_array().unwrap().len(), 2);
+    assert!(bundle["gestures"][0]["thumbnail"].is_null());
+
+    // Fresh instance, import with replace, then match works immediately.
+    let t2 = app(true).await;
+    let (status, report) = call(&t2.router, "POST", "/api/gestures/import?replace=true", Some(bundle.clone())).await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    assert_eq!(report["imported"], 2);
+    let (_, m) =
+        call(&t2.router, "POST", "/api/gestures/match", Some(json!({ "embedding": unit(1, 32), "threshold": 0.5 })))
+            .await;
+    assert_eq!(m["matched"], "b", "{m}");
+
+    // Corrupt bundle → 400
+    let mut bad = bundle;
+    bad["gestures"][0]["dimension"] = json!(3);
+    let (status, _) = call(&t2.router, "POST", "/api/gestures/import", Some(bad)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}

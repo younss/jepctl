@@ -7,7 +7,10 @@ use base64::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::gestures::{match_gestures, GestureMatchResult, RegisteredGesture, DEFAULT_MARGIN, DEFAULT_THRESHOLD};
+use crate::gestures::{
+    match_gestures, GestureBundle, GestureMatchResult, ImportReport, RegisteredGesture, DEFAULT_MARGIN,
+    DEFAULT_THRESHOLD,
+};
 use crate::media::image::preprocess_image_bytes;
 use crate::server::handlers::{api_error, embed_current_view, engine_error, ensure_model_loaded, ApiError, AppState};
 use crate::server::middleware::authenticate_request;
@@ -269,6 +272,64 @@ pub async fn handle_match_gesture(
         )));
     }
     Ok(Json(match_gestures(&input.embedding, input.patches.as_deref(), &registered, threshold, margin)))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExportQuery {
+    pub model: Option<String>,
+    #[serde(default)]
+    pub all: bool,
+    /// Decision parameters to record in the bundle (defaults otherwise).
+    pub threshold: Option<f32>,
+    pub margin: Option<f32>,
+    /// Include thumbnails (default true; they dominate the bundle size).
+    pub thumbnails: Option<bool>,
+}
+
+/// GET /api/gestures/export - Portable bundle of the active model's gestures (or `?all=true`).
+pub async fn handle_export_gestures(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<ExportQuery>,
+) -> Result<Json<GestureBundle>, ApiError> {
+    let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
+    let model = match (q.model, q.all) {
+        (_, true) => None,
+        (Some(m), false) => Some(m),
+        (None, false) => state.engine.get_active_model_name().await,
+    };
+    let store = state.gestures.read().await;
+    Ok(Json(store.export(
+        model.as_deref(),
+        q.threshold.unwrap_or(DEFAULT_THRESHOLD),
+        q.margin.unwrap_or(DEFAULT_MARGIN),
+        q.thumbnails.unwrap_or(true),
+        now_secs(),
+    )))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImportQuery {
+    /// Remove existing gestures of the bundle's models first.
+    #[serde(default)]
+    pub replace: bool,
+}
+
+/// POST /api/gestures/import - Load a bundle produced by `/api/gestures/export`.
+pub async fn handle_import_gestures(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<ImportQuery>,
+    Json(bundle): Json<GestureBundle>,
+) -> Result<Json<ImportReport>, ApiError> {
+    let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
+    let mut store = state.gestures.write().await;
+    let report = store.import(bundle, q.replace).map_err(engine_error)?;
+    if let Err(e) = store.save() {
+        tracing::warn!("Could not persist gesture registry: {}", e);
+    }
+    tracing::info!("Imported {} gesture(s) for {:?} (removed {})", report.imported, report.models, report.removed);
+    Ok(Json(report))
 }
 
 /// GET /api/camera/frame - JPEG of exactly what the model receives (224x224 centre crop).

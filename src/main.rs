@@ -120,10 +120,24 @@ enum Commands {
     },
 
     /// List all locally installed models and manifests
-    Tags,
+    Tags {
+        /// Machine-readable output
+        #[arg(long)]
+        json: bool,
+    },
 
     /// List all locally installed models and manifests (alias for tags)
-    List,
+    List {
+        /// Machine-readable output
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Manage few-shot gesture prototypes (same registry as the GUI and the API)
+    Gestures {
+        #[command(subcommand)]
+        sub: GestureCommands,
+    },
 
     /// Remove a model from local storage
     Rm {
@@ -143,6 +157,75 @@ struct ServeArgs {
     /// Open native desktop application window
     #[arg(long)]
     gui: bool,
+}
+
+#[derive(Subcommand)]
+enum GestureCommands {
+    /// List registered gestures (all models)
+    List {
+        /// Machine-readable output
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Export gestures as a portable bundle (stdout or file)
+    Export {
+        /// Restrict to one model (default: every model)
+        #[arg(short, long)]
+        model: Option<String>,
+
+        /// Output file (default: stdout)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Decision threshold to record in the bundle
+        #[arg(long, default_value_t = gestures::DEFAULT_THRESHOLD)]
+        threshold: f32,
+
+        /// Runner-up margin to record in the bundle
+        #[arg(long, default_value_t = gestures::DEFAULT_MARGIN)]
+        margin: f32,
+
+        /// Drop thumbnails to keep the bundle small
+        #[arg(long)]
+        no_thumbnails: bool,
+    },
+
+    /// Import a bundle produced by `export` (or GET /api/gestures/export)
+    Import {
+        /// Bundle file
+        path: PathBuf,
+
+        /// Remove existing gestures of the bundle's models first
+        #[arg(long)]
+        replace: bool,
+    },
+
+    /// Match an image file against the registered gestures of a model
+    Match {
+        /// Image file (PNG, JPEG, WebP)
+        path: PathBuf,
+
+        /// Model to embed with (default: facebook/ijepa_vith14_1k)
+        #[arg(short, long)]
+        model: Option<String>,
+
+        #[arg(long, default_value_t = gestures::DEFAULT_THRESHOLD)]
+        threshold: f32,
+
+        #[arg(long, default_value_t = gestures::DEFAULT_MARGIN)]
+        margin: f32,
+    },
+
+    /// Delete one gesture, or all gestures of a model with --model
+    Remove {
+        /// Gesture name
+        name: Option<String>,
+
+        /// Remove every gesture registered with this model
+        #[arg(short, long)]
+        model: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -177,7 +260,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,jepa=debug".into()))
-        .with(tracing_subscriber::fmt::layer())
+        // Logs go to stderr so `jepa tags --json | jq` and friends stay parseable.
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
         .init();
 
     let cli = Cli::parse();
@@ -222,7 +306,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         camera_supervisor: camera_supervisor.clone(),
         ring_buffer: ring_buffer.clone(),
         embeddings_total,
-        gestures,
+        gestures: gestures.clone(),
         start_time: Instant::now(),
         config: config.clone(),
     };
@@ -384,9 +468,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        Some(Commands::Tags) | Some(Commands::List) => {
+        Some(Commands::Tags { json }) | Some(Commands::List { json }) => {
             let models = catalog.list_installed();
-            if models.is_empty() {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&models)?);
+            } else if models.is_empty() {
                 println!("No installed models found in ~/.jepa/models.");
                 println!("Run 'jepa pull <model>' to download a model.");
                 println!("\nVerified models available:");
@@ -413,6 +499,113 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             true => println!("Successfully removed model '{}'.", model),
             false => println!("Model '{}' was not found on disk.", model),
         },
+
+        Some(Commands::Gestures { sub }) => {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+            match sub {
+                GestureCommands::List { json } => {
+                    let store = gestures.read().await;
+                    let mut all: Vec<&gestures::RegisteredGesture> = store.gestures.values().collect();
+                    all.sort_by_key(|g| (g.model_name.clone(), g.created_at));
+                    if json {
+                        let items: Vec<serde_json::Value> = all
+                            .iter()
+                            .map(|g| {
+                                serde_json::json!({
+                                    "name": g.name, "model_name": g.model_name, "dimension": g.dimension,
+                                    "sample_count": g.samples.len(), "is_neutral": g.is_neutral,
+                                    "created_at": g.created_at, "updated_at": g.updated_at
+                                })
+                            })
+                            .collect();
+                        println!("{}", serde_json::to_string_pretty(&items)?);
+                    } else if all.is_empty() {
+                        println!("No gestures registered. Use the GUI (Gestures tab) or POST /api/gestures.");
+                    } else {
+                        println!("{:<24} {:<40} {:<6} {:<8} NEUTRAL", "NAME", "MODEL", "DIMS", "SAMPLES");
+                        for g in all {
+                            println!(
+                                "{:<24} {:<40} {:<6} {:<8} {}",
+                                g.name,
+                                g.model_name,
+                                g.dimension,
+                                g.samples.len(),
+                                if g.is_neutral { "yes" } else { "" }
+                            );
+                        }
+                    }
+                }
+
+                GestureCommands::Export { model, output, threshold, margin, no_thumbnails } => {
+                    let store = gestures.read().await;
+                    let bundle = store.export(model.as_deref(), threshold, margin, !no_thumbnails, now);
+                    let json = serde_json::to_string_pretty(&bundle)?;
+                    match output {
+                        Some(path) => {
+                            std::fs::write(&path, json)?;
+                            eprintln!("Exported {} gesture(s) to {}", bundle.gestures.len(), path.display());
+                        }
+                        None => println!("{json}"),
+                    }
+                }
+
+                GestureCommands::Import { path, replace } => {
+                    let text = std::fs::read_to_string(&path)?;
+                    let bundle: gestures::GestureBundle = serde_json::from_str(&text)?;
+                    let mut store = gestures.write().await;
+                    let report = store.import(bundle, replace)?;
+                    store.save()?;
+                    println!(
+                        "Imported {} gesture(s) for {:?} (removed {}).",
+                        report.imported, report.models, report.removed
+                    );
+                }
+
+                GestureCommands::Match { path, model, threshold, margin } => {
+                    let model_name = model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
+                    let Some(m) = catalog.get_manifest(&model_name) else {
+                        eprintln!("Model '{}' not found in catalog.", model_name);
+                        std::process::exit(2);
+                    };
+                    let weights = catalog.get_weights_path(&model_name);
+                    engine.load_model(m, weights.as_deref()).await?;
+                    let prep = engine.preprocessing().await;
+                    let bytes = std::fs::read(&path)?;
+                    let tensor = preprocess_image_bytes(&bytes, &prep, &engine.device)?;
+                    let (_m, _d, embedding, patches, _lat) = engine.embed_image(&tensor).await?;
+                    let store = gestures.read().await;
+                    let registered = store.for_model(&model_name);
+                    if registered.is_empty() {
+                        eprintln!("No gestures registered for '{}'.", model_name);
+                        std::process::exit(2);
+                    }
+                    let result =
+                        gestures::match_gestures(&embedding, patches.as_deref(), &registered, threshold, margin);
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                    if !result.detected {
+                        std::process::exit(1);
+                    }
+                }
+
+                GestureCommands::Remove { name, model } => {
+                    let mut store = gestures.write().await;
+                    let removed = match (name, model) {
+                        (Some(n), _) => usize::from(store.remove(&n).is_some()),
+                        (None, Some(m)) => {
+                            let before = store.gestures.len();
+                            store.gestures.retain(|_, g| g.model_name != m);
+                            before - store.gestures.len()
+                        }
+                        (None, None) => {
+                            eprintln!("Give a gesture name or --model <name>.");
+                            std::process::exit(2);
+                        }
+                    };
+                    store.save()?;
+                    println!("Removed {} gesture(s).", removed);
+                }
+            }
+        }
 
         Some(Commands::Key { sub }) => match sub {
             KeyCommands::Generate { name, role, days } => {

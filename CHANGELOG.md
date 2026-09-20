@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Gesture bundles: `GET /api/gestures/export`, `POST /api/gestures/import`, and
+  `jepa gestures list|export|import|match|remove` — tune on one machine, deploy on many.
+- `{ } API` controls throughout the testbench showing the exact request (curl / JS / Python)
+  behind each action, and an Integration page with a quick-start example.
+- Header status bar (model, checkpoint coverage, camera, latency); `camera_active` on `/api/status`.
+- Event console in Live (filter errors/detections, copy).
+- `jepa tags --json`; logs on stderr so CLI output pipes cleanly.
+
+### Changed
+- Testbench ergonomics for desktop/integrator use: English everywhere, honest section titles,
+  Workspace/Admin navigation with keyboard support (`role="tab"`, arrows), toasts and accessible
+  dialogs instead of `alert()`/`confirm()`, focus rings, WCAG AA contrast tokens, no horizontal
+  overflow down to 1100 px, larger click targets. Desktop window titled with the version.
+
 ## [0.2.0] — 2026-09-20
 
 ### Added

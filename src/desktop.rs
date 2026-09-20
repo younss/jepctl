@@ -11,9 +11,9 @@ use crate::types::JepaError;
 pub fn launch_desktop_window(target_url: &str) -> Result<(), JepaError> {
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
-        .with_title("JEPA - Joint-Embedding Predictive Architecture")
-        .with_inner_size(tao::dpi::LogicalSize::new(1280.0, 860.0))
-        .with_min_inner_size(tao::dpi::LogicalSize::new(960.0, 640.0))
+        .with_title(format!("JEPA v{}", env!("CARGO_PKG_VERSION")))
+        .with_inner_size(tao::dpi::LogicalSize::new(1360.0, 900.0))
+        .with_min_inner_size(tao::dpi::LogicalSize::new(1100.0, 700.0))
         .build(&event_loop)
         .map_err(|e| JepaError::InvalidPayload(format!("Failed to create native desktop window: {}", e)))?;
 

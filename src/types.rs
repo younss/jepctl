@@ -226,6 +226,9 @@ pub struct StatusResponse {
     /// How the active model's weights were obtained (checkpoint coverage).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub weights: Option<WeightReport>,
+    /// Whether the server camera capture thread is running.
+    #[serde(default)]
+    pub camera_active: bool,
     pub embeddings_computed_total: u64,
     pub uptime_seconds: u64,
 }

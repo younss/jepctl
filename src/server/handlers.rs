@@ -155,6 +155,7 @@ pub async fn handle_status(State(state): State<AppState>) -> Json<StatusResponse
         hardware: hw,
         active_model,
         weights,
+        camera_active: state.camera_supervisor.is_active(),
         embeddings_computed_total: embeddings,
         uptime_seconds: uptime,
     })

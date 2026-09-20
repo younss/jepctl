@@ -397,7 +397,14 @@ impl GestureStore {
     }
 
     /// Export gestures (of one model, or all) as a portable bundle.
-    pub fn export(&self, model: Option<&str>, threshold: f32, margin: f32, with_thumbnails: bool, now: u64) -> GestureBundle {
+    pub fn export(
+        &self,
+        model: Option<&str>,
+        threshold: f32,
+        margin: f32,
+        with_thumbnails: bool,
+        now: u64,
+    ) -> GestureBundle {
         let mut gestures: Vec<RegisteredGesture> = self
             .gestures
             .values()

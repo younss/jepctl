@@ -4,8 +4,8 @@ use axum::routing::{delete, get, post};
 use axum::Router;
 
 use crate::server::gesture_handlers::{
-    handle_camera_frame, handle_clear_gestures, handle_create_gesture, handle_delete_gesture, handle_list_gestures,
-    handle_match_gesture,
+    handle_camera_frame, handle_clear_gestures, handle_create_gesture, handle_delete_gesture, handle_export_gestures,
+    handle_import_gestures, handle_list_gestures, handle_match_gesture,
 };
 use crate::server::handlers::{
     handle_audit, handle_camera_start, handle_camera_stop, handle_cameras, handle_catalog, handle_create_key,
@@ -54,6 +54,8 @@ pub fn create_router(state: AppState) -> Router {
         // API: Gestures (Few-Shot Latent Matching)
         .route("/api/gestures", post(handle_create_gesture).get(handle_list_gestures).delete(handle_clear_gestures))
         .route("/api/gestures/match", post(handle_match_gesture))
+        .route("/api/gestures/export", get(handle_export_gestures))
+        .route("/api/gestures/import", post(handle_import_gestures))
         .route("/api/gestures/{name}", delete(handle_delete_gesture))
         // Fallback for SPA routing
         .fallback(serve_index)

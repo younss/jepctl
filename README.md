@@ -66,7 +66,14 @@ jepa embed <image> [--model m] [--format json|raw]
 jepa stream [--camera 0] [--fps 10] [--model m]
 jepa key generate --name "CI" --role admin|inference [--days 90]
 jepa key list | jepa key revoke <prefix>
+jepa gestures list [--json]
+jepa gestures export [--model m] [-o bundle.json] [--threshold 0.7] [--margin 0.04] [--no-thumbnails]
+jepa gestures import bundle.json [--replace]
+jepa gestures match photo.jpg [--model m] [--threshold] [--margin]   # exit 0 detected, 1 not detected
+jepa gestures remove <name> | --model m
 ```
+
+Logs go to stderr, so `jepa tags --json | jq` works. Gesture commands read and write the same `~/.jepa/gestures.json` as the GUI and the API (stop the daemon before `import`, or use the API).
 
 `--no-auth` is refused on any host other than `127.0.0.1`/`localhost`.
 
@@ -118,6 +125,8 @@ A gesture is a *prototype*: the L2-normalised mean of one or more reference embe
 | DELETE | `/api/gestures/{name}` | inference | |
 | DELETE | `/api/gestures[?all=true]` | inference | clear the active model's gestures |
 | POST | `/api/gestures/match` | inference | `{ "from_camera": true \| "embedding" \| "image_base64", "threshold"?, "margin"? }` → decision trace below |
+| GET | `/api/gestures/export[?model=…\|?all=true][&threshold=&margin=&thumbnails=false]` | inference | portable bundle `{ version, threshold, margin, gestures[] }` — train on one machine, deploy on many |
+| POST | `/api/gestures/import[?replace=true]` | inference | load a bundle; `replace` removes existing gestures of the bundle's models first |
 
 ```json
 {
@@ -142,18 +151,25 @@ The API is **same-origin by default**: no CORS headers are sent, so a web page f
 
 ---
 
-## Web testbench
+## Desktop app / testbench
 
-Served from the binary at `http://127.0.0.1:11435/` — no build step, no external assets.
+`jepa app` opens the testbench in a native window; `jepa serve` serves the same page at `http://127.0.0.1:11435/`. No build step, no external assets, keyboard-navigable (↑/↓ between sections, Esc closes dialogs).
 
-1. **Overview** — latency, FPS, embeddings count, hardware telemetry.
-2. **Models** — catalog, pull with progress, load/unload, delete, Jepafile editor.
-3. **Image Playground** — drop an image, see the patch grid and the pooled vector.
-4. **Video & Camera** — server camera control, ring-buffer scrubber, SSE log.
-5. **Anomaly & Energy** — lock a baseline, chart the drift, alerts and webhook.
-6. **Security & Keys** — scoped tokens, audit trail.
-7. **Settings** — backend override, memory watermark, storage paths.
-8. **Gesture Sandbox** — *model view* (the exact frame the network receives) with a per-patch difference heatmap; 3 gesture slots + 1 neutral slot fed by the server camera; a per-frame **reasoning table** (raw / contrastive / combined per gesture, margin, threshold, server and client decisions with their reasons); threshold, margin and smoothing controls; audio/theme/hold actions.
+The header is the single source of truth: **model · checkpoint coverage · camera · last latency**.
+
+**Workspace**
+- **Overview** — latency, FPS, embeddings count, hardware telemetry.
+- **Models** — verified catalog (served by `/api/catalog`), pull with progress, load/unload, Jepafile editor.
+- **Embed** — drop an image, see the patch grid and the pooled vector.
+- **Live** — server camera, ring-buffer scrubber, and an **event console** (filter errors / detections, copy a line).
+- **Energy** — lock a baseline, chart the drift, alerts and webhook.
+- **Gestures** — *model view* (the exact frame the network receives) with a per-patch difference heatmap; 3 gesture slots + 1 neutral slot; a per-frame **"Why this decision"** table (raw / contrastive / combined per gesture, margin, threshold, server and client decisions with their reasons); threshold, margin and smoothing; **Export / Import bundle**.
+
+**Admin**
+- **Integration & Keys** — base URL, auth mode, active model, a quick-start example in curl / JavaScript / Python, scoped tokens, audit trail.
+- **Settings** — backend override, memory watermark, storage paths.
+
+Every action button has a **`{ } API`** control that shows the exact request the app sends — with the threshold and margin you just tuned — in curl, JavaScript or Python, ready to paste into your application.
 
 Tips for good detections: register the neutral pose first, take 3–5 samples per gesture while moving slightly, keep the hand large in the frame, and prefer `facebook/dinov2-small`.
 

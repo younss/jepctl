@@ -62,6 +62,35 @@
         memProgress: document.getElementById("mem-progress"),
         headerActiveModel: document.getElementById("header-active-model"),
         btnHeaderUnload: document.getElementById("btn-header-unload"),
+        headerWeightsBadge: document.getElementById("header-weights-badge"),
+        headerCameraChip: document.getElementById("header-camera-chip"),
+        headerCameraText: document.getElementById("header-camera-text"),
+        headerLatencyText: document.getElementById("header-latency-text"),
+        toastRegion: document.getElementById("toast-region"),
+        confirmDialog: document.getElementById("confirm-dialog"),
+        confirmTitle: document.getElementById("confirm-title"),
+        confirmMessage: document.getElementById("confirm-message"),
+        confirmOk: document.getElementById("confirm-ok"),
+        confirmCancel: document.getElementById("confirm-cancel"),
+        apiDialog: document.getElementById("api-dialog"),
+        apiDialogTitle: document.getElementById("api-dialog-title"),
+        apiDialogDesc: document.getElementById("api-dialog-desc"),
+        apiDialogCode: document.getElementById("api-dialog-code"),
+        apiDialogClose: document.getElementById("api-dialog-close"),
+        apiDialogCopy: document.getElementById("api-dialog-copy"),
+        integrationBaseUrl: document.getElementById("integration-base-url"),
+        integrationAuthMode: document.getElementById("integration-auth-mode"),
+        integrationModel: document.getElementById("integration-model"),
+        integrationExample: document.getElementById("integration-example"),
+        btnCopyIntegration: document.getElementById("btn-copy-integration"),
+        sseFilter: document.getElementById("sse-filter"),
+        btnCopySse: document.getElementById("btn-copy-sse"),
+        btnApiLoadModel: document.getElementById("btn-api-load-model"),
+        btnApiMatch: document.getElementById("btn-api-match"),
+        btnApiRegister: document.getElementById("btn-api-register"),
+        btnGesturesExport: document.getElementById("btn-gestures-export"),
+        btnGesturesImport: document.getElementById("btn-gestures-import"),
+        inputGesturesImport: document.getElementById("input-gestures-import"),
 
         // Overview
         kpiLatency: document.getElementById("kpi-latency"),
@@ -212,6 +241,219 @@
         return state.authToken;
     }
 
+    // ------------------------------------------------------------------
+    // Feedback primitives: toasts (non-blocking), accessible confirm dialog,
+    // and the API request viewer. Replaces window.alert/confirm everywhere.
+    // ------------------------------------------------------------------
+
+    function notify(message, kind = "info", timeoutMs = 5000) {
+        if (!el.toastRegion) {
+            console[kind === "error" ? "error" : "log"](message);
+            return;
+        }
+        while (el.toastRegion.children.length >= 3) {
+            el.toastRegion.removeChild(el.toastRegion.firstChild);
+        }
+        const toast = document.createElement("div");
+        toast.className = `toast ${kind}`;
+        toast.setAttribute("role", kind === "error" ? "alert" : "status");
+        const icons = { success: "\u2713", error: "\u2717", warning: "!", info: "i" };
+        toast.innerHTML = `<span class="toast-icon" aria-hidden="true">${icons[kind] || "i"}</span><span class="toast-msg"></span><button class="toast-close" aria-label="Dismiss">\u00d7</button>`;
+        toast.querySelector(".toast-msg").textContent = message;
+        const remove = () => { if (toast.parentNode) toast.parentNode.removeChild(toast); };
+        toast.querySelector(".toast-close").addEventListener("click", remove);
+        el.toastRegion.appendChild(toast);
+        if (timeoutMs > 0) setTimeout(remove, kind === "error" ? Math.max(timeoutMs, 8000) : timeoutMs);
+    }
+
+    // Focus management shared by every dialog: trap Tab, close on Escape, restore focus.
+    function openDialog(overlay, { initialFocus, onClose } = {}) {
+        const previouslyFocused = document.activeElement;
+        overlay.style.display = "flex";
+        const focusables = () => [...overlay.querySelectorAll("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])")].filter((n) => !n.disabled && n.offsetParent !== null);
+        const onKey = (e) => {
+            if (e.key === "Escape") {
+                e.preventDefault();
+                close();
+            } else if (e.key === "Tab") {
+                const f = focusables();
+                if (!f.length) return;
+                const first = f[0], last = f[f.length - 1];
+                if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+                else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+            }
+        };
+        const onBackdrop = (e) => { if (e.target === overlay) close(); };
+        function close() {
+            overlay.style.display = "none";
+            overlay.removeEventListener("keydown", onKey);
+            overlay.removeEventListener("click", onBackdrop);
+            if (onClose) onClose();
+            if (previouslyFocused && previouslyFocused.focus) previouslyFocused.focus();
+        }
+        overlay.addEventListener("keydown", onKey);
+        overlay.addEventListener("click", onBackdrop);
+        (initialFocus || focusables()[0] || overlay).focus();
+        return close;
+    }
+
+    function confirmDialog(message, { title = "Confirm", okLabel = "Confirm", danger = true } = {}) {
+        if (!el.confirmDialog) return Promise.resolve(window.confirm(message));
+        return new Promise((resolve) => {
+            el.confirmTitle.textContent = title;
+            el.confirmMessage.textContent = message;
+            el.confirmOk.textContent = okLabel;
+            el.confirmOk.className = danger ? "btn btn-danger" : "btn btn-primary";
+            let settled = false;
+            const close = openDialog(el.confirmDialog, { initialFocus: el.confirmCancel, onClose: () => { if (!settled) { settled = true; resolve(false); } } });
+            const ok = () => { settled = true; cleanup(); close(); resolve(true); };
+            const cancel = () => { settled = true; cleanup(); close(); resolve(false); };
+            function cleanup() {
+                el.confirmOk.removeEventListener("click", ok);
+                el.confirmCancel.removeEventListener("click", cancel);
+            }
+            el.confirmOk.addEventListener("click", ok);
+            el.confirmCancel.addEventListener("click", cancel);
+        });
+    }
+
+    async function copyText(text, label = "Copied to clipboard") {
+        try {
+            await navigator.clipboard.writeText(text);
+            notify(label, "success", 2500);
+        } catch (e) {
+            notify(`Copy failed: ${e.message}`, "error");
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // API snippets: the exact request behind a UI action, in three languages.
+    // ------------------------------------------------------------------
+
+    function apiBaseUrl() {
+        return window.location.origin;
+    }
+
+    function tokenPlaceholder() {
+        return state.authToken === "no_auth" ? null : "$JEPA_TOKEN";
+    }
+
+    // request = { method, path, json?, multipartFile?, query? }
+    function renderSnippet(lang, request) {
+        const url = `${apiBaseUrl()}${request.path}`;
+        const token = tokenPlaceholder();
+        const bodyJson = request.json !== undefined ? JSON.stringify(request.json, null, 2) : null;
+
+        if (lang === "curl") {
+            const lines = [`curl -s -X ${request.method} "${url}" \\`];
+            if (token) lines.push(`  -H "Authorization: Bearer ${token}" \\`);
+            if (request.multipartFile) {
+                lines.push(`  -F "file=@${request.multipartFile}"`);
+            } else if (bodyJson) {
+                lines.push(`  -H "Content-Type: application/json" \\`);
+                lines.push(`  -d '${bodyJson.replace(/'/g, "'\\''")}'`);
+            } else {
+                lines[lines.length - 1] = lines[lines.length - 1].replace(/ \\$/, "");
+            }
+            return lines.join("\n");
+        }
+
+        if (lang === "js") {
+            const headers = [];
+            if (token) headers.push(`    "Authorization": \`Bearer \${process.env.JEPA_TOKEN}\``);
+            if (bodyJson && !request.multipartFile) headers.push(`    "Content-Type": "application/json"`);
+            let body = "";
+            if (request.multipartFile) {
+                body = `\nconst form = new FormData();\nform.append("file", fileBlob, "${request.multipartFile}");\n`;
+            }
+            return `${body}const res = await fetch("${url}", {\n  method: "${request.method}",\n  headers: {\n${headers.join(",\n")}\n  }${request.multipartFile ? ",\n  body: form" : bodyJson ? `,\n  body: JSON.stringify(${bodyJson.replace(/\n/g, "\n  ")})` : ""}\n});\nif (!res.ok) throw new Error(\`\${res.status} \${await res.text()}\`);\nconst data = await res.json();\nconsole.log(data);`;
+        }
+
+        // python
+        const headers = [];
+        if (token) headers.push(`"Authorization": f"Bearer {os.environ['JEPA_TOKEN']}"`);
+        let call;
+        if (request.multipartFile) {
+            call = `requests.${request.method.toLowerCase()}(url, headers=headers, files={"file": open("${request.multipartFile}", "rb")})`;
+        } else if (bodyJson) {
+            call = `requests.${request.method.toLowerCase()}(url, headers=headers, json=${bodyJson.replace(/\btrue\b/g, "True").replace(/\bfalse\b/g, "False").replace(/\bnull\b/g, "None")})`;
+        } else {
+            call = `requests.${request.method.toLowerCase()}(url, headers=headers)`;
+        }
+        return `import os, requests\n\nurl = "${url}"\nheaders = {${headers.join(", ")}}\nres = ${call}\nres.raise_for_status()\nprint(res.json())`;
+    }
+
+    let currentApiRequest = null;
+    let currentApiLang = localStorage.getItem("jepa_snippet_lang") || "curl";
+
+    function showApiDialog(title, description, request) {
+        if (!el.apiDialog) return;
+        currentApiRequest = request;
+        el.apiDialogTitle.textContent = title;
+        el.apiDialogDesc.textContent = description;
+        renderApiDialogCode();
+        openDialog(el.apiDialog, { initialFocus: el.apiDialogClose });
+    }
+
+    function renderApiDialogCode() {
+        if (!currentApiRequest) return;
+        el.apiDialogCode.textContent = renderSnippet(currentApiLang, currentApiRequest);
+        el.apiDialog.querySelectorAll(".snippet-lang").forEach((b) => {
+            const on = b.dataset.lang === currentApiLang;
+            b.classList.toggle("active", on);
+            b.setAttribute("aria-selected", on ? "true" : "false");
+        });
+    }
+
+    function setupApiDialog() {
+        if (!el.apiDialog) return;
+        el.apiDialog.querySelectorAll(".snippet-lang").forEach((b) => {
+            b.addEventListener("click", () => {
+                currentApiLang = b.dataset.lang;
+                localStorage.setItem("jepa_snippet_lang", currentApiLang);
+                renderApiDialogCode();
+                renderIntegrationExample();
+            });
+        });
+        el.apiDialogCopy.addEventListener("click", () => copyText(el.apiDialogCode.textContent, "Snippet copied"));
+        el.apiDialogClose.addEventListener("click", () => { el.apiDialog.style.display = "none"; });
+    }
+
+    function gestureMatchRequest() {
+        return {
+            method: "POST",
+            path: "/api/gestures/match",
+            json: { image_base64: "data:image/jpeg;base64,<...>", threshold: Number(state.gestureThreshold.toFixed(2)), margin: Number(state.gestureMargin.toFixed(2)) }
+        };
+    }
+
+    function renderIntegrationExample() {
+        if (!el.integrationExample) return;
+        el.integrationBaseUrl.textContent = apiBaseUrl();
+        el.integrationAuthMode.textContent = state.authToken === "no_auth" ? "disabled (--no-auth, loopback only)" : "Bearer token (inference or admin role)";
+        el.integrationModel.textContent = state.activeModel || "none — load one in Models";
+        const req = state.registeredGestures.length ? gestureMatchRequest() : { method: "POST", path: "/api/embed", multipartFile: "photo.jpg" };
+        el.integrationExample.textContent = renderSnippet(currentApiLang, req);
+        document.querySelectorAll("#section-security .snippet-lang").forEach((b) => {
+            const on = b.dataset.lang === currentApiLang;
+            b.classList.toggle("active", on);
+            b.setAttribute("aria-selected", on ? "true" : "false");
+        });
+    }
+
+    function setupIntegration() {
+        document.querySelectorAll("#section-security .snippet-lang").forEach((b) => {
+            b.addEventListener("click", () => {
+                currentApiLang = b.dataset.lang;
+                localStorage.setItem("jepa_snippet_lang", currentApiLang);
+                renderIntegrationExample();
+            });
+        });
+        if (el.btnCopyIntegration) {
+            el.btnCopyIntegration.addEventListener("click", () => copyText(el.integrationExample.textContent, "Example copied"));
+        }
+    }
+
     async function apiFetch(url, options = {}) {
         const opts = Object.assign({}, options);
         opts.headers = Object.assign({}, opts.headers);
@@ -241,6 +483,8 @@
         await fetchSessionToken();
 
         setupNavigation();
+        setupApiDialog();
+        setupIntegration();
         setupImagePlayground();
         setupVideoStream();
         setupAnomalyMonitor();
@@ -267,10 +511,20 @@
 
     // Navigation Switcher
     function setupNavigation() {
-        el.navItems.forEach((item) => {
-            item.addEventListener("click", () => {
-                const section = item.getAttribute("data-section");
-                switchSection(section);
+        const items = [...el.navItems];
+        items.forEach((item, idx) => {
+            item.addEventListener("click", () => switchSection(item.getAttribute("data-section")));
+            item.addEventListener("keydown", (e) => {
+                let next = null;
+                if (e.key === "ArrowDown") next = items[(idx + 1) % items.length];
+                if (e.key === "ArrowUp") next = items[(idx - 1 + items.length) % items.length];
+                if (e.key === "Home") next = items[0];
+                if (e.key === "End") next = items[items.length - 1];
+                if (next) {
+                    e.preventDefault();
+                    next.focus();
+                    switchSection(next.getAttribute("data-section"));
+                }
             });
         });
 
@@ -290,11 +544,10 @@
         state.activeSection = sectionId;
 
         el.navItems.forEach((item) => {
-            if (item.getAttribute("data-section") === sectionId) {
-                item.classList.add("active");
-            } else {
-                item.classList.remove("active");
-            }
+            const on = item.getAttribute("data-section") === sectionId;
+            item.classList.toggle("active", on);
+            item.setAttribute("aria-selected", on ? "true" : "false");
+            item.tabIndex = on ? 0 : -1;
         });
 
         el.sections.forEach((sec) => {
@@ -310,6 +563,7 @@
         } else if (sectionId === "security") {
             fetchApiKeys();
             fetchAuditLog();
+            renderIntegrationExample();
         } else if (sectionId === "gestures") {
             fetchGesturesList();
         }
@@ -355,6 +609,12 @@
             el.memProgress.style.width = `${percent}%`;
 
             if (el.appVersion && data.version) el.appVersion.textContent = `v${data.version}`;
+            if (el.headerCameraChip) {
+                const on = !!data.camera_active;
+                el.headerCameraChip.classList.toggle("on", on);
+                el.headerCameraText.textContent = on ? `Camera ${state.streamFps || 10} fps` : "Camera off";
+            }
+            if (el.integrationModel) el.integrationModel.textContent = data.active_model || "none — load one in Models";
 
             // Active Model
             const modelChanged = state.activeModel !== data.active_model;
@@ -366,6 +626,11 @@
             if (data.active_model) {
                 el.headerActiveModel.textContent = data.active_model;
                 el.btnHeaderUnload.style.display = "inline-flex";
+                if (el.headerWeightsBadge && data.weights) {
+                    const ok = data.weights.loaded === data.weights.expected && data.weights.expected > 0;
+                    el.headerWeightsBadge.textContent = `${data.weights.loaded}/${data.weights.expected}`;
+                    el.headerWeightsBadge.className = `weights-badge ${ok ? "ok" : "bad"}`;
+                }
                 if (el.gestureModelIndicator) el.gestureModelIndicator.className = "status-indicator status-active";
                 if (el.gestureModelNameText) el.gestureModelNameText.textContent = data.active_model;
                 if (el.selectGestureActiveModel && el.selectGestureActiveModel.value !== data.active_model) {
@@ -378,10 +643,14 @@
                     }
                 }
             } else {
-                el.headerActiveModel.textContent = "None";
+                el.headerActiveModel.textContent = "none loaded";
                 el.btnHeaderUnload.style.display = "none";
+                if (el.headerWeightsBadge) {
+                    el.headerWeightsBadge.textContent = "--";
+                    el.headerWeightsBadge.className = "weights-badge";
+                }
                 if (el.gestureModelIndicator) el.gestureModelIndicator.className = "status-indicator status-idle";
-                if (el.gestureModelNameText) el.gestureModelNameText.textContent = "Aucun modele charge";
+                if (el.gestureModelNameText) el.gestureModelNameText.textContent = "No model loaded";
             }
 
             // Overview KPIs
@@ -496,7 +765,7 @@
         if (!models || models.length === 0) {
             const opt = document.createElement("option");
             opt.value = "";
-            opt.textContent = "Aucun modele installe (Telechargez-en un dans Modeles)";
+            opt.textContent = "No model installed — pull one in Models";
             el.selectGestureActiveModel.appendChild(opt);
         } else {
             models.forEach((m) => {
@@ -516,7 +785,7 @@
                 el.gestureModelNameText.textContent = state.activeModel;
             } else {
                 el.gestureModelIndicator.className = "status-indicator status-idle";
-                el.gestureModelNameText.textContent = "Aucun modele charge";
+                el.gestureModelNameText.textContent = "No model loaded";
             }
         }
     }
@@ -572,21 +841,25 @@
                 body: JSON.stringify({ model_name: name })
             });
             if (res.ok) {
+                const data = await res.json().catch(() => ({}));
+                const w = data.weights;
+                notify(w ? `${name} loaded — ${w.loaded}/${w.expected} tensors from ${w.source}` : `${name} loaded`, "success");
                 await pollStatus();
                 await fetchModels();
             } else {
                 const err = await res.json().catch(() => ({}));
-                alert(`Erreur de chargement du modele : ${err.error || "Erreur inconnue"}`);
+                notify(`Could not load model: ${err.error || "unknown error"}`, "error");
             }
         } catch (e) {
             console.error("Load model error:", e);
-            alert(`Erreur de communication : ${e.message}`);
+            notify(`Network error: ${e.message}`, "error");
         }
     }
 
     async function unloadModel() {
         try {
             await apiFetch("/api/models/unload", { method: "POST" });
+            notify("Model unloaded", "info", 2500);
             await pollStatus();
             await fetchModels();
         } catch (e) {
@@ -595,7 +868,7 @@
     }
 
     async function deleteModel(name) {
-        if (!confirm(`Confirmer la suppression complete du modele "${name}" du stockage local ?`)) return;
+        if (!(await confirmDialog(`Delete model "${name}" from local storage? The checkpoint will have to be pulled again.`, { title: "Delete model", okLabel: "Delete" }))) return;
         try {
             let res = await apiFetch(`/api/models?name=${encodeURIComponent(name)}`, { method: "DELETE" });
             if (!res.ok) {
@@ -603,7 +876,7 @@
             }
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
-                alert(`Erreur lors de la suppression : ${err.error || "Erreur inconnue"}`);
+                notify(`Delete failed: ${err.error || "unknown error"}`, "error");
             } else {
                 console.log(`Modele ${name} supprime avec succes.`);
             }
@@ -611,7 +884,7 @@
             await fetchModels();
         } catch (e) {
             console.error("Delete error:", e);
-            alert(`Erreur reseau lors de la suppression : ${e.message}`);
+            notify(`Network error: ${e.message}`, "error");
         }
     }
 
@@ -622,7 +895,7 @@
             if (chosen) {
                 loadModel(chosen);
             } else {
-                alert("Veuillez selectionner un modele installe valide.");
+                notify("Select an installed model first.", "warning");
             }
         });
     }
@@ -722,14 +995,14 @@
                     body: JSON.stringify(parsed)
                 });
                 if (res.ok) {
-                    alert("Custom Jepafile manifest registered successfully!");
+                    notify("Jepafile registered.", "success");
                     fetchModels();
                 } else {
                     const err = await res.json().catch(() => ({}));
-                    alert(`Failed to register manifest: ${err.error || "Unknown error"}`);
+                    notify(`Could not register manifest: ${err.error || "unknown error"}`, "error");
                 }
             } catch (e) {
-                alert(`Invalid JSON format: ${e.message}`);
+                notify(`Invalid JSON: ${e.message}`, "error");
             }
         });
     }
@@ -777,7 +1050,7 @@
             el.btnCopyVector.addEventListener("click", () => {
                 if (state.currentVector) {
                     navigator.clipboard.writeText(JSON.stringify(state.currentVector));
-                    alert("Vector copied to clipboard!");
+                    notify("Vector copied", "success", 2500);
                 }
             });
         }
@@ -846,7 +1119,7 @@
                 calculateAndRecordEnergy(data.embedding);
             }
         } catch (e) {
-            alert(`Inference failed: ${e.message}`);
+            notify(`Inference failed: ${e.message}`, "error");
         }
     }
 
@@ -997,6 +1270,7 @@
 
                     state.lastLatencyMs = event.latency_ms;
                     el.kpiLatency.textContent = `${event.latency_ms.toFixed(1)} ms`;
+                    if (el.headerLatencyText) el.headerLatencyText.textContent = `${event.latency_ms.toFixed(0)} ms`;
 
                     if (event.embedding) {
                         state.currentVector = event.embedding;
@@ -1013,9 +1287,10 @@
                 if (evt && evt.data) {
                     try {
                         const err = JSON.parse(evt.data);
-                        showStreamError(err.error || "Erreur de flux");
+                        showStreamError(err.error || "Stream error");
+                        logSseEvent({ error: err.error || "Stream error" });
                     } catch (_) {
-                        showStreamError("Erreur de flux");
+                        showStreamError("Stream error");
                     }
                 } else {
                     console.warn("SSE connection interrupted.");
@@ -1030,7 +1305,7 @@
             el.btnStreamToggle.classList.add("btn-danger");
             el.kpiFps.textContent = `${fps} FPS`;
 
-            if (el.gestureCamBtnText) el.gestureCamBtnText.textContent = "Arreter la Camera";
+            if (el.gestureCamBtnText) el.gestureCamBtnText.textContent = "Stop camera";
             if (el.btnGestureCameraToggle) {
                 el.btnGestureCameraToggle.classList.remove("btn-primary");
                 el.btnGestureCameraToggle.classList.add("btn-danger");
@@ -1040,7 +1315,7 @@
             // wait on a permission prompt, so it must never block the stream itself.
             attachBrowserPreview(camIdx);
         } catch (e) {
-            alert(`Failed to start stream: ${e.message}`);
+            notify(`Could not start the stream: ${e.message}`, "error");
         }
     }
 
@@ -1137,7 +1412,7 @@
         el.btnStreamToggle.classList.add("btn-primary");
         el.kpiFps.textContent = "-- FPS";
 
-        if (el.gestureCamBtnText) el.gestureCamBtnText.textContent = "Demarrer la Camera";
+        if (el.gestureCamBtnText) el.gestureCamBtnText.textContent = "Start camera";
         if (el.btnGestureCameraToggle) {
             el.btnGestureCameraToggle.classList.remove("btn-danger");
             el.btnGestureCameraToggle.classList.add("btn-primary");
@@ -1163,9 +1438,28 @@
         }
 
         const entry = document.createElement("div");
-        entry.className = "sse-log-entry";
+        entry.className = "sse-log-entry sse-entry";
         const time = new Date().toLocaleTimeString();
-        entry.textContent = `[${time}] Frame #${ev.frame_index} | Latency: ${ev.latency_ms.toFixed(1)}ms | Latent Dims: ${ev.embedding ? ev.embedding.length : 0}`;
+        let kind = "frame";
+        let text = `[${time}] frame #${ev.frame_index} · ${ev.latency_ms.toFixed(1)} ms · ${ev.embedding ? ev.embedding.length : 0}d`;
+        if (ev.error) {
+            kind = "error";
+            text = `[${time}] error · ${ev.error}`;
+            entry.classList.add("is-error");
+        } else if (ev.gesture_match && ev.gesture_match.detected) {
+            kind = "detection";
+            text += ` · detected ${ev.gesture_match.matched} (${ev.gesture_match.confidence.toFixed(2)})`;
+            entry.classList.add("is-detection");
+        } else if (ev.gesture_match) {
+            text += ` · ${ev.gesture_match.reason}`;
+        }
+        entry.dataset.kind = kind;
+        entry.textContent = text;
+        state.lastSseLine = text;
+        const filter = el.sseFilter ? el.sseFilter.value : "all";
+        if ((filter === "errors" && kind !== "error") || (filter === "detections" && kind !== "detection")) {
+            entry.style.display = "none";
+        }
         el.sseStreamLog.prepend(entry);
 
         // Limit log entries
@@ -1220,9 +1514,9 @@
                     state.nominalBaselineVector = [...state.currentVector];
                     el.baselineStatusLabel.textContent = "Locked (Active)";
                     el.baselineStatusLabel.style.color = "var(--accent-green)";
-                    alert("Current visual state locked as Nominal Baseline latent representation.");
+                    notify("Baseline locked on the current frame.", "success");
                 } else {
-                    alert("No embedding available. Run an image or start camera stream first.");
+                    notify("No embedding yet: embed an image or start the camera first.", "warning");
                 }
             });
         }
@@ -1238,7 +1532,7 @@
         if (el.btnSaveWebhook) {
             el.btnSaveWebhook.addEventListener("click", () => {
                 state.webhookUrl = el.inputWebhookUrl.value.trim();
-                alert("Alert webhook URL saved.");
+                notify("Webhook URL saved.", "success");
             });
         }
     }
@@ -1371,16 +1665,18 @@
 
     // SECTION 6: SECURITY & KEYS
     function setupSecurityAndKeys() {
+        let closeKeyModal = null;
         if (el.btnOpenCreateKey) {
             el.btnOpenCreateKey.addEventListener("click", () => {
-                el.createKeyModal.style.display = "flex";
                 el.generatedTokenDisplay.style.display = "none";
+                closeKeyModal = openDialog(el.createKeyModal, { initialFocus: el.modalKeyName, onClose: () => { closeKeyModal = null; } });
             });
         }
 
         if (el.btnCloseKeyModal) {
             el.btnCloseKeyModal.addEventListener("click", () => {
-                el.createKeyModal.style.display = "none";
+                if (closeKeyModal) closeKeyModal();
+                else el.createKeyModal.style.display = "none";
             });
         }
 
@@ -1406,7 +1702,7 @@
                     el.generatedTokenDisplay.style.display = "block";
                     fetchApiKeys();
                 } catch (e) {
-                    alert(`Error creating key: ${e.message}`);
+                    notify(`Could not create key: ${e.message}`, "error");
                 }
             });
         }
@@ -1414,18 +1710,20 @@
         if (el.btnCopyRawToken) {
             el.btnCopyRawToken.addEventListener("click", () => {
                 navigator.clipboard.writeText(el.rawTokenValue.value);
-                alert("Bearer token copied to clipboard!");
+                notify("Token copied", "success", 2500);
             });
         }
 
         if (el.toggleLanAccess) {
             el.toggleLanAccess.addEventListener("change", (e) => {
                 if (e.target.checked) {
-                    if (!confirm("Enabling LAN access binds the daemon to 0.0.0.0, allowing network clients to call inference. Keep authentication enabled. Proceed?")) {
-                        e.target.checked = false;
-                        return;
-                    }
-                    el.lanWarningBox.style.display = "block";
+                    confirmDialog("Binding to 0.0.0.0 lets other machines on your network call inference. Authentication stays required. Continue?", { title: "Enable LAN access", okLabel: "Enable" }).then((ok) => {
+                        if (!ok) {
+                            e.target.checked = false;
+                            return;
+                        }
+                        el.lanWarningBox.style.display = "block";
+                    });
                 } else {
                     el.lanWarningBox.style.display = "none";
                 }
@@ -1457,8 +1755,9 @@
                 `;
 
                 tr.querySelector("button").addEventListener("click", async () => {
-                    if (confirm(`Revoke key ${k.key_prefix}?`)) {
+                    if (await confirmDialog(`Revoke key ${k.key_prefix}? Clients using it will get 403 immediately.`, { title: "Revoke key", okLabel: "Revoke" })) {
                         await apiFetch(`/api/keys/${k.key_prefix}`, { method: "DELETE" });
+                        notify(`Key ${k.key_prefix} revoked`, "success");
                         fetchApiKeys();
                     }
                 });
@@ -1535,13 +1834,13 @@
                         })
                     });
                     if (res.ok) {
-                        alert("Settings saved successfully.");
+                        notify("Settings saved.", "success");
                     } else {
                         const err = await res.json().catch(() => ({}));
-                        alert(`Failed to save settings: ${err.error || "Unknown error"}`);
+                        notify(`Could not save settings: ${err.error || "unknown error"}`, "error");
                     }
                 } catch (e) {
-                    alert(`Failed to save settings: ${e.message}`);
+                    notify(`Could not save settings: ${e.message}`, "error");
                 }
             });
         }
@@ -1600,17 +1899,105 @@
             if (btnDel) btnDel.addEventListener("click", () => deleteSlotPose(i));
         }
 
+        if (el.btnApiLoadModel) {
+            el.btnApiLoadModel.addEventListener("click", () => {
+                const chosen = (el.selectGestureActiveModel && el.selectGestureActiveModel.value) || state.activeModel || "facebook/dinov2-small";
+                showApiDialog("Load a model", "Admin role. Returns the checkpoint coverage report; 409 if the model is not pulled, 422 if its layout is unsupported.",
+                    { method: "POST", path: "/api/models/load", json: { model_name: chosen } });
+            });
+        }
+        if (el.btnApiRegister) {
+            el.btnApiRegister.addEventListener("click", () => {
+                const name = slotName(1) || "Open Hand";
+                showApiDialog("Register a gesture sample", "Inference role. Call it several times with the same name to add samples. `from_camera: true` uses the server camera; you can also send `image_base64` or a raw `embedding`.",
+                    { method: "POST", path: "/api/gestures", json: { name, from_camera: true, is_neutral: false } });
+            });
+        }
+        if (el.btnApiMatch) {
+            el.btnApiMatch.addEventListener("click", () => {
+                showApiDialog("Match a frame", "Inference role. Threshold and margin below are the ones currently set in this panel. The response is the same decision trace shown here.", gestureMatchRequest());
+            });
+        }
+        if (el.btnGesturesExport) {
+            el.btnGesturesExport.addEventListener("click", async () => {
+                try {
+                    const q = new URLSearchParams({ threshold: state.gestureThreshold.toFixed(2), margin: state.gestureMargin.toFixed(2) });
+                    const res = await apiFetch(`/api/gestures/export?${q}`);
+                    if (!res.ok) throw new Error(`${res.status}`);
+                    const bundle = await res.json();
+                    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
+                    const a = document.createElement("a");
+                    a.href = URL.createObjectURL(blob);
+                    const model = (state.activeModel || "gestures").replace(/[^a-z0-9]+/gi, "-");
+                    a.download = `jepa-gestures-${model}.json`;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+                    notify(`Exported ${bundle.gestures.length} gesture(s). Import it with POST /api/gestures/import or \`jepa gestures import\`.`, "success", 7000);
+                } catch (e) {
+                    notify(`Export failed: ${e.message}`, "error");
+                }
+            });
+        }
+        if (el.btnGesturesImport && el.inputGesturesImport) {
+            el.btnGesturesImport.addEventListener("click", () => el.inputGesturesImport.click());
+            el.inputGesturesImport.addEventListener("change", async () => {
+                const file = el.inputGesturesImport.files && el.inputGesturesImport.files[0];
+                el.inputGesturesImport.value = "";
+                if (!file) return;
+                try {
+                    const text = await file.text();
+                    const bundle = JSON.parse(text);
+                    const n = Array.isArray(bundle.gestures) ? bundle.gestures.length : 0;
+                    const replace = await confirmDialog(`Import ${n} gesture(s)? Existing gestures of the same models will be replaced.`, { title: "Import bundle", okLabel: "Replace and import", danger: false });
+                    if (!replace) return;
+                    const res = await apiFetch("/api/gestures/import?replace=true", { method: "POST", headers: { "Content-Type": "application/json" }, body: text });
+                    const report = await res.json().catch(() => ({}));
+                    if (!res.ok) throw new Error(report.error || `${res.status}`);
+                    notify(`Imported ${report.imported} gesture(s) for ${(report.models || []).join(", ")}`, "success");
+                    if (typeof bundle.threshold === "number" && el.sliderGestureThreshold) {
+                        el.sliderGestureThreshold.value = bundle.threshold;
+                        el.sliderGestureThreshold.dispatchEvent(new Event("input"));
+                    }
+                    if (typeof bundle.margin === "number" && el.sliderGestureMargin) {
+                        el.sliderGestureMargin.value = bundle.margin;
+                        el.sliderGestureMargin.dispatchEvent(new Event("input"));
+                    }
+                    state.gestureHistory = {};
+                    await fetchGesturesList();
+                } catch (e) {
+                    notify(`Import failed: ${e.message}`, "error");
+                }
+            });
+        }
+        if (el.sseFilter) {
+            el.sseFilter.addEventListener("change", () => {
+                const f = el.sseFilter.value;
+                el.sseStreamLog.querySelectorAll(".sse-entry").forEach((n) => {
+                    const k = n.dataset.kind;
+                    n.style.display = f === "all" || (f === "errors" && k === "error") || (f === "detections" && k === "detection") ? "" : "none";
+                });
+            });
+        }
+        if (el.btnCopySse) {
+            el.btnCopySse.addEventListener("click", () => {
+                if (state.lastSseLine) copyText(state.lastSseLine, "Event copied");
+                else notify("No event yet.", "info", 2500);
+            });
+        }
+
         if (el.btnGesturesClear) {
             el.btnGesturesClear.addEventListener("click", async () => {
-                if (!confirm("Supprimer tous les gestes enregistres pour le modele actif ?")) return;
+                if (!(await confirmDialog("Delete every gesture registered with the active model?", { title: "Clear gestures", okLabel: "Delete all" }))) return;
                 try {
                     const res = await apiFetch("/api/gestures", { method: "DELETE" });
                     if (!res.ok) {
                         const err = await res.json().catch(() => ({}));
-                        alert(`Erreur : ${err.error || "Echec"}`);
+                        notify(`Error: ${err.error || "request failed"}`, "error");
                     }
                 } catch (e) {
-                    alert(`Erreur : ${e.message}`);
+                    notify(`Error: ${e.message}`, "error");
                 }
                 state.gestureHistory = {};
                 await fetchGesturesList();
@@ -1621,17 +2008,17 @@
     function updateWeightsBadge(weights, activeModel) {
         if (!el.gestureWeightsBadge) return;
         if (!activeModel || !weights) {
-            el.gestureWeightsBadge.textContent = "poids : --";
+            el.gestureWeightsBadge.textContent = "weights: --";
             el.gestureWeightsBadge.className = "weights-badge";
-            el.gestureWeightsBadge.title = "Aucun modele charge";
+            el.gestureWeightsBadge.title = "No model loaded";
             return;
         }
         const ok = weights.loaded === weights.expected && weights.expected > 0;
-        el.gestureWeightsBadge.textContent = `poids : ${weights.loaded}/${weights.expected} (${weights.source})`;
+        el.gestureWeightsBadge.textContent = `weights: ${weights.loaded}/${weights.expected} (${weights.source})`;
         el.gestureWeightsBadge.className = `weights-badge ${ok ? "ok" : "bad"}`;
         el.gestureWeightsBadge.title = ok
-            ? "Tous les parametres proviennent du checkpoint"
-            : "Checkpoint incomplet : les embeddings ne sont pas fiables";
+            ? "Every parameter comes from the checkpoint"
+            : "Incomplete checkpoint: embeddings are not reliable";
     }
 
     function showStreamError(message) {
@@ -1640,7 +2027,7 @@
         }
         if (el.gestureBadgeText) el.gestureBadgeText.textContent = `Erreur : ${message}`;
         if (el.gestureReasoningDecision) {
-            el.gestureReasoningDecision.textContent = `Flux interrompu : ${message}`;
+            el.gestureReasoningDecision.textContent = `Stream interrupted: ${message}`;
             el.gestureReasoningDecision.classList.remove("detected");
         }
     }
@@ -1729,7 +2116,7 @@
     async function captureSlotPose(slotIndex) {
         const name = slotName(slotIndex);
         if (!name) {
-            alert("Veuillez saisir un libelle pour ce geste.");
+            notify("Give the gesture a name first.", "warning");
             return;
         }
 
@@ -1738,16 +2125,16 @@
                 await startLiveStream();
                 await new Promise((r) => setTimeout(r, 800));
             } catch (e) {
-                alert("Veuillez demarrer la camera pour capturer un geste de reference.");
+                notify("Start the camera to capture a reference gesture.", "warning");
                 return;
             }
         }
 
         const btnCap = document.getElementById(`btn-capture-${slotIndex}`);
-        const originalHtml = btnCap ? btnCap.innerHTML : "Capturer";
+        const originalHtml = btnCap ? btnCap.innerHTML : "Capture";
         if (btnCap) {
             btnCap.disabled = true;
-            btnCap.innerHTML = `<span class="btn-icon">&#9203;</span> Encodage...`;
+            btnCap.innerHTML = `<span class="btn-icon">&#9203;</span> Encoding...`;
         }
 
         try {
@@ -1764,11 +2151,11 @@
                 await fetchGesturesList();
             } else {
                 const err = await res.json().catch(() => ({}));
-                alert(`Erreur d'enregistrement : ${err.error || "Echec de l'appel API"}`);
+                notify(`Could not register: ${err.error || "request failed"}`, "error");
             }
         } catch (err) {
             console.error("captureSlotPose error:", err);
-            alert(`Erreur lors de la capture : ${err.message}`);
+            notify(`Capture failed: ${err.message}`, "error");
         } finally {
             if (btnCap) {
                 btnCap.disabled = false;
@@ -1780,7 +2167,7 @@
     async function deleteSlotPose(slotIndex) {
         const g = gestureForSlot(slotIndex);
         if (!g) return;
-        if (!confirm(`Supprimer le geste '${g.name}' (${g.sample_count} echantillon(s)) ?`)) return;
+        if (!(await confirmDialog(`Delete gesture "${g.name}" (${g.sample_count} sample(s))?`, { title: "Delete gesture", okLabel: "Delete" }))) return;
 
         try {
             const res = await apiFetch(`/api/gestures/${encodeURIComponent(g.name)}`, { method: "DELETE" });
@@ -1792,11 +2179,11 @@
                 await fetchGesturesList();
             } else {
                 const err = await res.json().catch(() => ({}));
-                alert(`Erreur de suppression : ${err.error || "Echec"}`);
+                notify(`Delete failed: ${err.error || "request failed"}`, "error");
             }
         } catch (e) {
             console.error("deleteSlotPose error:", e);
-            alert(`Erreur : ${e.message}`);
+            notify(`Error: ${e.message}`, "error");
         }
     }
 
@@ -1809,7 +2196,7 @@
 
             if (el.gestureCountBadge) {
                 const n = state.registeredGestures.length;
-                el.gestureCountBadge.textContent = `${n} geste${n > 1 ? "s" : ""}`;
+                el.gestureCountBadge.textContent = `${n} gesture${n === 1 ? "" : "s"}`;
             }
 
             const activeNames = new Set(state.registeredGestures.map((g) => g.name));
@@ -1847,8 +2234,8 @@
 
             if (state.registeredGestures.length === 0 && el.gestureBadgeText) {
                 el.gestureBadgeText.textContent = state.isStreaming
-                    ? "En attente : capturez un slot a droite"
-                    : "Aucun geste enregistre (demarrez la camera)";
+                    ? "Waiting: capture a slot on the right"
+                    : "No gesture registered (start the camera)";
             }
         } catch (e) {
             console.error("fetchGesturesList error:", e);
@@ -1868,7 +2255,7 @@
         if (g) {
             if (card) card.classList.add("has-gesture");
             if (stateBadge) {
-                stateBadge.textContent = `${g.sample_count} ech.`;
+                stateBadge.textContent = `${g.sample_count} sample${g.sample_count === 1 ? "" : "s"}`;
                 stateBadge.className = "slot-state-badge registered";
             }
             if (imgEl) {
@@ -1882,9 +2269,9 @@
             if (emptyEl) emptyEl.style.display = g.thumbnail ? "none" : "flex";
             if (metaEl) {
                 const t = g.updated_at ? new Date(g.updated_at * 1000).toLocaleTimeString() : "--";
-                metaEl.textContent = `${g.dimension}d | ${g.sample_count} echantillon(s) | ${g.model_name} | ${t}`;
+                metaEl.textContent = `${g.dimension}d · ${g.sample_count} sample(s) · ${g.model_name} · ${t}`;
             }
-            if (btnCap) btnCap.innerHTML = `<span class="btn-icon">&#10133;</span> + Echantillon`;
+            if (btnCap) btnCap.innerHTML = `<span class="btn-icon">&#10133;</span> Add sample`;
             if (btnDel) btnDel.style.display = "inline-flex";
         } else {
             if (card) {
@@ -1892,7 +2279,7 @@
                 card.classList.remove("matched-active");
             }
             if (stateBadge) {
-                stateBadge.textContent = "Vide";
+                stateBadge.textContent = "Empty";
                 stateBadge.className = "slot-state-badge";
             }
             if (imgEl) {
@@ -1902,10 +2289,10 @@
             if (emptyEl) emptyEl.style.display = "flex";
             if (metaEl) {
                 metaEl.textContent = isNeutralSlot
-                    ? "Posture de repos : absorbe les frames sans geste. Jamais signalee comme detection."
-                    : "Capturez 3 a 5 echantillons en variant legerement la position.";
+                    ? "Rest pose: absorbs frames with no intentional gesture. Never reported as a detection."
+                    : "Capture 3–5 samples while moving slightly.";
             }
-            if (btnCap) btnCap.innerHTML = `<span class="btn-icon">&#128247;</span> Capturer`;
+            if (btnCap) btnCap.innerHTML = `<span class="btn-icon">&#128247;</span> Capture`;
             if (btnDel) btnDel.style.display = "none";
             const scoreValEl = document.getElementById(`slot-score-val-${i}`);
             const scoreBarEl = document.getElementById(`slot-score-bar-${i}`);
@@ -1925,8 +2312,8 @@
             if (el.gestureDetectionBadge) el.gestureDetectionBadge.className = "gesture-badge gesture-badge-idle";
             if (el.gestureBadgeText) {
                 el.gestureBadgeText.textContent = state.registeredGestures.length
-                    ? "Aucun geste enregistre pour ce modele"
-                    : "Aucun geste enregistre (capturez un slot a droite)";
+                    ? "No gesture registered for this model"
+                    : "No gesture registered (capture a slot on the right)";
             }
             if (el.gestureConfidenceText) el.gestureConfidenceText.textContent = "0.0%";
             if (el.gestureConfidenceBar) el.gestureConfidenceBar.style.width = "0%";
@@ -1956,13 +2343,13 @@
         let recognized = null;
         let waitReason = "";
         if (!best) {
-            waitReason = "Aucun score";
+            waitReason = "no scores";
         } else if (best.is_neutral) {
-            waitReason = `Posture neutre '${best.name}'`;
+            waitReason = `neutral pose '${best.name}'`;
         } else if (best.score < state.gestureThreshold) {
-            waitReason = `${best.name} ${(best.score * 100).toFixed(0)}% < seuil ${(state.gestureThreshold * 100).toFixed(0)}%`;
+            waitReason = `${best.name} ${(best.score * 100).toFixed(0)}% < threshold ${(state.gestureThreshold * 100).toFixed(0)}%`;
         } else if (margin < state.gestureMargin) {
-            waitReason = `${best.name} : marge ${(margin * 100).toFixed(1)}% < ${(state.gestureMargin * 100).toFixed(0)}%`;
+            waitReason = `${best.name}: lead ${(margin * 100).toFixed(1)}% < ${(state.gestureMargin * 100).toFixed(0)}%`;
         } else {
             recognized = best.name;
         }
@@ -1977,7 +2364,7 @@
             el.gestureDetectionBadge.className = recognized ? "gesture-badge gesture-badge-detected" : "gesture-badge gesture-badge-idle";
         }
         if (el.gestureBadgeText) {
-            el.gestureBadgeText.textContent = recognized ? `Identifie : ${recognized}` : `En attente (${waitReason})`;
+            el.gestureBadgeText.textContent = recognized ? `Detected: ${recognized}` : `Waiting (${waitReason})`;
         }
 
         // Live meters on every slot.
@@ -2012,15 +2399,15 @@
         if (!el.gestureReasoningBody) return;
 
         if (el.gestureMethodBadge) {
-            el.gestureMethodBadge.textContent = `methode : ${match ? match.method : "--"}`;
+            el.gestureMethodBadge.textContent = `method: ${match ? match.method : "--"}`;
         }
         if (el.reasonLatency) el.reasonLatency.textContent = event && typeof event.latency_ms === "number" ? `${event.latency_ms.toFixed(1)} ms` : "--";
         if (el.reasonFrame) el.reasonFrame.textContent = event ? String(event.frame_index) : "--";
 
         if (!match) {
-            el.gestureReasoningBody.innerHTML = `<tr><td colspan="5" class="reasoning-empty">En attente de flux et de gestes enregistres.</td></tr>`;
+            el.gestureReasoningBody.innerHTML = `<tr><td colspan="5" class="reasoning-empty">Waiting for the stream and at least one registered gesture.</td></tr>`;
             if (el.gestureReasoningDecision) {
-                el.gestureReasoningDecision.textContent = "Decision : --";
+                el.gestureReasoningDecision.textContent = "Decision: --";
                 el.gestureReasoningDecision.classList.remove("detected");
             }
             if (el.reasonMargin) el.reasonMargin.textContent = "--";
@@ -2045,19 +2432,19 @@
         el.gestureReasoningBody.innerHTML = rows.join("");
 
         if (el.gestureReasoningDecision) {
-            const serverPart = `Serveur : ${escapeHtml(match.reason)}`;
+            const serverPart = `Server: ${escapeHtml(match.reason)}`;
             let clientPart = "";
             if (decision) {
                 clientPart = decision.recognized
-                    ? `UI (lisse sur ${Math.round(state.gestureSmoothing)} frames) : ${escapeHtml(decision.recognized)} detecte`
-                    : `UI (lisse sur ${Math.round(state.gestureSmoothing)} frames) : ${escapeHtml(decision.waitReason)}`;
+                    ? `UI (smoothed over ${Math.round(state.gestureSmoothing)} frames): ${escapeHtml(decision.recognized)} detected`
+                    : `UI (smoothed over ${Math.round(state.gestureSmoothing)} frames): ${escapeHtml(decision.waitReason)}`;
             }
             el.gestureReasoningDecision.innerHTML = `${serverPart}<br>${clientPart}`;
             el.gestureReasoningDecision.classList.toggle("detected", !!(decision && decision.recognized));
         }
-        if (el.reasonMargin) el.reasonMargin.textContent = `${fmtScore(match.margin)} (requis ${fmtScore(match.margin_required)})`;
+        if (el.reasonMargin) el.reasonMargin.textContent = `${fmtScore(match.margin)} (required ${fmtScore(match.margin_required)})`;
         if (el.reasonThreshold) el.reasonThreshold.textContent = fmtScore(match.threshold);
-        if (el.reasonGrid) el.reasonGrid.textContent = match.grid_size ? `${match.grid_size}x${match.grid_size} patches` : "n/a (modele video)";
+        if (el.reasonGrid) el.reasonGrid.textContent = match.grid_size ? `${match.grid_size}x${match.grid_size} patches` : "n/a (video model)";
     }
 
     function escapeHtml(str) {
@@ -2091,7 +2478,7 @@
         if (gesture && activeSlot) {
             const theme = slotThemes[activeSlot] || slotThemes[1];
 
-            if (el.gestureThemeText) el.gestureThemeText.textContent = `${gesture} : ${theme.name} (slot ${activeSlot})`;
+            if (el.gestureThemeText) el.gestureThemeText.textContent = `${gesture}: ${theme.name} (slot ${activeSlot})`;
             if (el.gestureThemePill) {
                 el.gestureThemePill.style.backgroundColor = theme.bg;
                 el.gestureThemePill.style.borderColor = theme.border;
@@ -2112,7 +2499,7 @@
             if (state.activeGestureHold === gesture) {
                 const elapsedSec = (now - state.holdStartTime) / 1000.0;
                 const pct = Math.min(100, (elapsedSec / 1.0) * 100);
-                if (el.gestureHoldTimerText) el.gestureHoldTimerText.textContent = `Maintien : ${Math.min(1.0, elapsedSec).toFixed(1)}s / 1.0s`;
+                if (el.gestureHoldTimerText) el.gestureHoldTimerText.textContent = `Hold: ${Math.min(1.0, elapsedSec).toFixed(1)}s / 1.0s`;
                 if (el.gestureHoldBar) {
                     el.gestureHoldBar.style.width = `${pct}%`;
                     el.gestureHoldBar.style.backgroundColor = theme.color;
@@ -2128,11 +2515,11 @@
                 state.activeGestureHold = gesture;
                 state.holdStartTime = now;
                 state.holdTriggered = false;
-                if (el.gestureHoldTimerText) el.gestureHoldTimerText.textContent = "Maintien : 0.0s / 1.0s";
+                if (el.gestureHoldTimerText) el.gestureHoldTimerText.textContent = "Hold: 0.0s / 1.0s";
                 if (el.gestureHoldBar) el.gestureHoldBar.style.width = "0%";
             }
         } else {
-            if (el.gestureThemeText) el.gestureThemeText.textContent = "Palette neutre";
+            if (el.gestureThemeText) el.gestureThemeText.textContent = "Neutral palette";
             if (el.gestureThemePill) {
                 el.gestureThemePill.style.backgroundColor = "transparent";
                 el.gestureThemePill.style.borderColor = "var(--border-color)";
@@ -2146,7 +2533,7 @@
             state.activeGestureHold = null;
             state.holdStartTime = null;
             state.holdTriggered = false;
-            if (el.gestureHoldTimerText) el.gestureHoldTimerText.textContent = "Maintien : 0.0s / 1.0s";
+            if (el.gestureHoldTimerText) el.gestureHoldTimerText.textContent = "Hold: 0.0s / 1.0s";
             if (el.gestureHoldBar) el.gestureHoldBar.style.width = "0%";
         }
     }

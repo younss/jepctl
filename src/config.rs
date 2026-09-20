@@ -102,6 +102,7 @@ impl RuntimeConfig {
             idle_unload_timeout_minutes: 15,
             storage_dir: self.models_dir.to_string_lossy().to_string(),
             camera_roi: None,
+            robot_hardware: None,
         }
     }
 

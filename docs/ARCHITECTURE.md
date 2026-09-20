@@ -34,7 +34,7 @@ A single ViT implementation covers every supported checkpoint through `VitVarian
 | `Plain` | no | no | mean of patch tokens | I-JEPA |
 | `Cls` | yes | no | CLS token (`mean` for AudioMAE) | HF `ViTModel`, timm ViT, AudioMAE |
 | `DinoV2` | yes | yes | CLS token | HF `Dinov2Model` |
-| `VJepa2` | — | — | mean of space-time tokens | separate struct, see 2.4 |
+| `VJepa2` |: |: | mean of space-time tokens | separate struct, see 2.4 |
 
 `VitBackbone::forward` returns `(patch_tokens [B, N, D], pooled [B, D])`. Patch tokens
 exclude the CLS row so `N == grid_h × grid_w` for every variant; the gesture heatmap relies
@@ -63,7 +63,7 @@ checkpoint ──► candidate_sources(target) ──► first shape-compatible 
   (`IJepaModel::load_random`, `EngineManager::load_random_for_test`).
 
 **Why so strict:** a ViT with random weights still returns vectors of the right size. At the
-API level it is indistinguishable from a working model — until someone spends a day
+API level it is indistinguishable from a working model: until someone spends a day
 wondering why gestures are not recognised. That happened; hence the contract.
 
 ### 2.3 Preprocessing contract (`types.rs::Preprocessing`)
@@ -78,7 +78,7 @@ active model and **every** producer of an input tensor uses it:
   `to_video_tensor` → `preprocess_dynamic_image`
 
 Centre-crop to a square, bicubic resize to `size`, per-channel `(x/255 − mean)/std`.
-The ring buffer also stores a JPEG of the 224 px centre crop of each frame — the
+The ring buffer also stores a JPEG of the 224 px centre crop of each frame: the
 "model view" served by `/api/camera/frame`.
 
 ### 2.4 V-JEPA 2 (`engine/vjepa2.rs`)
@@ -172,8 +172,8 @@ in the SSE query. Both decisions and their reasons are displayed side by side.
 ### 3.4 Region of interest
 
 `types::Roi { x, y, w, h }` (normalised on the raw frame) lives in `AppState::camera_roi`,
-is persisted in `settings.json` and travels inside gesture bundles. Every camera path —
-`embed_current_view`, `/api/camera/frame`, `jepa stream` — crops to it *before* the centre
+is persisted in `settings.json` and travels inside gesture bundles. Every camera path -
+`embed_current_view`, `/api/camera/frame`, `jepa stream`: crops to it *before* the centre
 square crop, so the hand can fill the model input. Because prototypes captured with a crop
 only match frames cropped the same way, importing a bundle restores its ROI.
 
@@ -182,6 +182,37 @@ only match frames cropped the same way, importing a bundle restores its ROI.
 A gesture flagged `is_neutral` competes in scoring (it contributes to the centroid and can
 win) but is never reported as a detection. It absorbs "nothing is being shown" frames that
 would otherwise be forced onto the nearest real gesture.
+
+## 3b. Robot subsystem (`robot/`)
+
+```
+RobotHandle { core: Arc<Mutex<RobotCore>>, telemetry_tx: watch::Sender<RobotTelemetry> }
+RobotCore   { backend: Box<dyn RobotBackend>, safety: SafetyGuard, mode, safety_gate,
+              joints/gripper (actual), targets (commanded), pending (gated), explorer, gesture_map }
+```
+
+- `controller::spawn_control_loop` ticks at 30 Hz: `RobotCore::tick(dt)` ramps the actual
+  position toward the targets under `SafetyGuard::ramp` (max 1.5 rad/s, clamped to the
+  limits, frozen under E-stop), pushes it to the backend and publishes telemetry. The
+  WebSocket handler forwards every telemetry change and accepts joint commands back.
+- `RobotCore::submit` validates against the limits and, when the physical backend is
+  active and the command is not approved (Mode B), parks it in `pending` instead of
+  `targets`. The twin draws `pending` as a ghost; `approve_pending` promotes it.
+- Mode A: the SSE stream handler calls `apply_gesture(name)` for every detection it
+  emits, so the arm follows exactly what the Gestures tab shows. Gesture moves are
+  always gated on the physical arm.
+- Mode C (`GoalExplorer`): a state machine `MeasureBase -> Candidate(0..8) -> finish_round`.
+  Each observation embedding yields an energy; the best candidate below the base energy
+  becomes the new base (step x1.1), otherwise the step shrinks x0.6 until 0.01 rad.
+  Observations are pulled, not pushed: `telemetry.goal.awaiting_observation` is true only
+  when the arm has settled at the explorer's pose, and `POST /api/robot/observe` is
+  rejected otherwise. The browser snapshots the WebGL canvas for the virtual arm; the
+  server camera is used for the physical one.
+- Serial protocol (`hal::protocol`): Feetech STS3215 / Dynamixel 1.0 style frames
+  (`FF FF ID LEN INSTR PARAMS CHK`), sync write of goal positions for all servos in one
+  frame, torque enable, present position read back. Tick calibration (`zero_ticks`,
+  `direction`, gripper open/closed ticks) is in `HardwareConfig` under `robot_hardware`
+  in settings.json. Frame encoding is unit tested; no physical arm was available to run it.
 
 ## 4. HTTP layer
 

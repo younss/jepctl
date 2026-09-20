@@ -125,6 +125,11 @@ async fn app_with(with_model: bool, no_auth: bool) -> TestApp {
         embeddings_total: Arc::new(AtomicU64::new(0)),
         gestures: Arc::new(tokio::sync::RwLock::new(GestureStore::load(&config.gestures_path))),
         camera_roi: Arc::new(tokio::sync::RwLock::new(None)),
+        robot: {
+            let r = crate::robot::RobotHandle::new(Default::default());
+            r.core.lock().await.backend.connect().unwrap();
+            r
+        },
         start_time: Instant::now(),
         config,
     };
@@ -546,4 +551,98 @@ async fn embed_accepts_wav_with_an_audio_model_and_rejects_images() {
     let png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D];
     let res = t.router.clone().oneshot(multipart("a.png", "image/png", &png)).await.unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn robot_api_manual_mode_gate_and_estop() {
+    let t = app(true).await;
+    let r = &t.router;
+
+    let (status, st) = call(r, "GET", "/api/robot/status", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(st["backend"], "virtual");
+    assert_eq!(st["connected"], true);
+    assert_eq!(st["estop"], false);
+
+    // Out of range joint is a 400 with the offending joint named.
+    let (status, body) =
+        call(r, "POST", "/api/robot/joints", Some(json!({ "joints": [5.0, 0, 0, 0, 0, 0], "gripper": 0.5 }))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["error"].as_str().unwrap().contains("Joint 1"));
+
+    // Valid command executes immediately on the virtual arm (no gate).
+    let (status, body) =
+        call(r, "POST", "/api/robot/joints", Some(json!({ "joints": [0.5, 0, 0, 0, 0, 0], "gripper": 1.0 }))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["executed"], true);
+
+    // Ramp: a few ticks move the joint by at most 1.5 rad/s.
+    {
+        let mut core = t.state.robot.core.lock().await;
+        for _ in 0..3 {
+            core.tick(1.0 / 30.0);
+        }
+        assert!((core.joints[0] - 0.15).abs() < 1e-5, "{:?}", core.joints);
+    }
+
+    // Physical backend needs the serial feature.
+    let (status, body) = call(r, "POST", "/api/robot/target", Some(json!({ "backend": "physical" }))).await;
+    if cfg!(feature = "serial") {
+        assert!(status == StatusCode::SERVICE_UNAVAILABLE || status == StatusCode::OK, "{body}");
+    } else {
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{body}");
+    }
+
+    // E-stop locks commands; reset re-enables them.
+    let (status, st) = call(r, "POST", "/api/robot/e-stop", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(st["estop"], true);
+    let (status, _) =
+        call(r, "POST", "/api/robot/joints", Some(json!({ "joints": [0, 0, 0, 0, 0, 0], "gripper": 0.5 }))).await;
+    assert_eq!(status, StatusCode::LOCKED);
+    let (status, st) = call(r, "POST", "/api/robot/reset-safety", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(st["estop"], false);
+
+    // Mode A: a detection maps to the gripper through the shared gesture map.
+    let (status, _) = call(r, "POST", "/api/robot/mode", Some(json!({ "mode": "shadowing" }))).await;
+    assert_eq!(status, StatusCode::OK);
+    t.state.robot.core.lock().await.apply_gesture("Fist").unwrap();
+    let (_, st) = call(r, "GET", "/api/robot/status", None).await;
+    assert_eq!(st["gripper_target"], 0.0);
+    assert_eq!(st["last_gesture"], "Fist");
+
+    // Gesture map validation.
+    let (status, _) = call(
+        r,
+        "PUT",
+        "/api/robot/gesture-map",
+        Some(json!({ "Wave": { "action": "joint_delta", "joint": 9, "delta": 0.1 } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) =
+        call(r, "PUT", "/api/robot/gesture-map", Some(json!({ "Wave": { "action": "open_gripper" } }))).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Mode C: capture a goal from an embedding-free image and feed observations.
+    let png_1x1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+    let (status, st) = call(r, "POST", "/api/robot/goal", Some(json!({ "image_base64": png_1x1 }))).await;
+    assert_eq!(status, StatusCode::OK, "{st}");
+    assert_eq!(st["goal"]["has_goal"], true);
+    let (status, _) = call(r, "POST", "/api/robot/mode", Some(json!({ "mode": "goal_seeking" }))).await;
+    assert_eq!(status, StatusCode::OK);
+    // Settle the arm at the explorer's first pose, then observe.
+    {
+        let mut core = t.state.robot.core.lock().await;
+        for _ in 0..200 {
+            core.tick(1.0 / 30.0);
+        }
+        assert!(core.telemetry().goal.awaiting_observation);
+    }
+    let (status, body) = call(r, "POST", "/api/robot/observe", Some(json!({ "image_base64": png_1x1 }))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["accepted"], true);
+    assert_eq!(body["goal"]["candidates_evaluated"], 1);
+    assert!(body["next_pose"].is_array());
 }

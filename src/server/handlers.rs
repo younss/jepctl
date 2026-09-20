@@ -43,6 +43,8 @@ pub struct AppState {
     pub gestures: Arc<tokio::sync::RwLock<GestureStore>>,
     /// Region of interest applied to camera frames (see `types::Roi`).
     pub camera_roi: Arc<tokio::sync::RwLock<Option<Roi>>>,
+    /// Robot arm control and digital twin.
+    pub robot: crate::robot::RobotHandle,
     pub start_time: Instant,
     pub config: Arc<RuntimeConfig>,
 }
@@ -479,6 +481,13 @@ pub async fn handle_embed_stream(
                             match_gestures(&view.embedding, view.patches.as_deref(), &registered, threshold, margin)
                         })
                     };
+                    // Mode A: shadowing follows the same detections the UI shows.
+                    if let Some(name) = gesture_match.as_ref().and_then(|m| m.matched.clone()) {
+                        let mut core = state.robot.core.lock().await;
+                        if let Err(e) = core.apply_gesture(&name) {
+                            core.last_error = Some(e.to_string());
+                        }
+                    }
 
                     let event_data = StreamEvent {
                         frame_index: frame_idx,

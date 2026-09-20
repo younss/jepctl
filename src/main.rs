@@ -7,6 +7,7 @@ pub mod engine;
 pub mod gestures;
 pub mod hub;
 pub mod media;
+pub mod robot;
 pub mod server;
 pub mod types;
 
@@ -298,6 +299,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let embeddings_total = Arc::new(AtomicU64::new(0));
     let gestures = Arc::new(tokio::sync::RwLock::new(crate::gestures::GestureStore::load(&config.gestures_path)));
 
+    let robot = crate::robot::RobotHandle::new(settings.robot_hardware.clone().unwrap_or_default());
+    crate::robot::controller::spawn_control_loop(robot.clone());
+    {
+        // Virtual arm is connected from the start so the twin moves immediately.
+        let mut core = robot.core.lock().await;
+        let _ = core.backend.connect();
+    }
+
     let app_state = AppState {
         engine: engine.clone(),
         catalog: catalog.clone(),
@@ -308,6 +317,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         embeddings_total,
         gestures: gestures.clone(),
         camera_roi: Arc::new(tokio::sync::RwLock::new(settings.camera_roi)),
+        robot: robot.clone(),
         start_time: Instant::now(),
         config: config.clone(),
     };

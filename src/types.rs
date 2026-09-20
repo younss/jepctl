@@ -461,6 +461,9 @@ pub struct SettingsDto {
     /// Region of interest applied to camera frames before embedding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera_roi: Option<Roi>,
+    /// Serial settings for the physical robot arm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub robot_hardware: Option<crate::robot::hal::HardwareConfig>,
 }
 
 /// Compute L2 norm and normalize vector to unit length (norm L2 = 1.0)

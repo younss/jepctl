@@ -1,17 +1,17 @@
 # Contributing to jepa
 
 Thanks for helping. This document is short on purpose: the code and the tests are the
-source of truth, and the rules below exist so that the project stays *honest* — a model
+source of truth, and the rules below exist so that the project stays *honest*: a model
 either loads completely or not at all, an API either does what it says or returns an error.
 
 ## Ground rules
 
 1. **No silent fallbacks.** A missing checkpoint, an unsupported layout, a camera that is
-   not running — all of these are errors with a clear message, never a degraded result.
+   not running: all of these are errors with a clear message, never a degraded result.
    If you add a code path that "keeps working" with random weights or stale data, it will
    be asked to fail loudly instead.
-2. **One preprocessing pipeline.** Everything that produces an embedding — upload, camera,
-   CLI, gesture registration, gesture matching — goes through `EngineManager::preprocessing()`
+2. **One preprocessing pipeline.** Everything that produces an embedding: upload, camera,
+   CLI, gesture registration, gesture matching: goes through `EngineManager::preprocessing()`
    and the media helpers. Do not hard-code `224` or ImageNet constants.
 3. **Explainable decisions.** Anything that decides (gesture match, anomaly) returns the
    numbers it decided on. Extend `GestureMatchResult` rather than hiding a heuristic.
@@ -71,7 +71,7 @@ More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
    `src/engine/vit.rs`. If a new naming scheme is needed, add it there (with a unit test)
    rather than special-casing the model.
 3. Add a `Verified` entry in `src/hub/manifest.rs` with explicit `variant`, `normalization`
-   (check `preprocessor_config.json` on the Hub — `image_mean: [0.5, …]` means `Inception`)
+   (check `preprocessor_config.json` on the Hub: `image_mean: [0.5, …]` means `Inception`)
    and `mlp_ratio`.
 4. Pull it, load it, and confirm `GET /api/status` reports `weights.loaded == weights.expected`
    with no "Shape mismatch" warning in the logs. Then embed two different images and one of
@@ -98,7 +98,7 @@ and returns a `WeightReport`; anything less than full coverage is an error.
 - No framework, no bundler: `index.html`, `app.js`, `styles.css` are embedded at compile time.
 - Every DOM id referenced statically from `app.js` must exist in `index.html`
   (`ui_dom_ids_referenced_by_js_exist_in_html` enforces it).
-- The gesture sandbox never uses browser camera pixels for inference — only the server frame.
+- The gesture sandbox never uses browser camera pixels for inference: only the server frame.
 
 ## Reporting bugs
 

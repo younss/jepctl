@@ -13,7 +13,7 @@
             <div class="brand">
                 <span class="logo-symbol">&#9670;</span>
                 <span class="logo-title">JEPA</span>
-                <span class="version-tag" id="app-version">v—</span>
+                <span class="version-tag" id="app-version">v?</span>
             </div>
             <div class="status-indicator">
                 <span class="pulse-dot" id="status-dot"></span>
@@ -82,6 +82,10 @@
                 <button class="nav-item" role="tab" aria-selected="false" aria-controls="section-gestures" data-section="gestures">
                     <span class="nav-icon" aria-hidden="true">&#9995;</span>
                     <span class="nav-text">Gestures</span>
+                </button>
+                <button class="nav-item" role="tab" aria-selected="false" aria-controls="section-robot" data-section="robot">
+                    <span class="nav-icon" aria-hidden="true">&#129302;</span>
+                    <span class="nav-text">Robot Twin</span>
                 </button>
             </div>
             <div class="nav-group-title" id="nav-admin-title">Admin</div>
@@ -476,7 +480,7 @@
                         <div><span class="fact-label">Base URL</span><code id="integration-base-url">http://127.0.0.1:11435</code></div>
                         <div><span class="fact-label">Auth</span><code id="integration-auth-mode">Bearer token</code></div>
                         <div><span class="fact-label">Active model</span><code id="integration-model">none</code></div>
-                        <div><span class="fact-label">Cross-origin</span><code>same-origin only — start with <span class="mono">--cors-origins</span> to allow a browser app</code></div>
+                        <div><span class="fact-label">Cross-origin</span><code>same-origin only: start with <span class="mono">--cors-origins</span> to allow a browser app</code></div>
                     </div>
                     <p class="integration-hint">Every action button in this app has an <strong>API</strong> control that shows the exact request it sends. Generate an <em>inference</em> token below and replace <code>$JEPA_TOKEN</code>.</p>
                     <pre class="code-block" id="integration-example" tabindex="0"></pre>
@@ -601,6 +605,116 @@
 
                     <div class="form-actions">
                         <button class="btn btn-primary" id="btn-save-settings">Save Settings</button>
+                    </div>
+                </div>
+            </section>
+
+
+            <!-- SECTION: ROBOT TWIN -->
+            <section class="content-section" id="section-robot">
+                <div class="section-title">
+                    <h2>Robot Twin</h2>
+                    <p>A 6 DOF arm with a gripper, driven by hand, by gestures (Mode A) or by latent goal seeking (Mode C), always previewed on the WebGL twin and gated before touching hardware (Mode B). API: <code>/api/robot/*</code>, telemetry over <code>/api/robot/ws</code>.</p>
+                </div>
+
+                <div class="robot-topbar card">
+                    <div class="robot-topbar-group">
+                        <span class="fact-label">Backend</span>
+                        <div class="segmented" role="group" aria-label="Execution backend">
+                            <button class="seg-btn seg-virtual active" id="btn-robot-backend-virtual">WebGL simulator</button>
+                            <button class="seg-btn seg-physical" id="btn-robot-backend-physical">Physical arm (serial)</button>
+                        </div>
+                        <span class="status-chip" id="robot-conn-chip"><span class="chip-dot" id="robot-conn-dot"></span><span id="robot-conn-text">disconnected</span></span>
+                    </div>
+                    <div class="robot-topbar-group">
+                        <label class="fact-label" for="select-robot-mode">Mode</label>
+                        <select id="select-robot-mode" class="select-input select-compact">
+                            <option value="manual">Manual</option>
+                            <option value="shadowing">Mode A: gesture shadowing</option>
+                            <option value="goal_seeking">Mode C: latent goal seeking</option>
+                        </select>
+                        <label class="toggle-label compact" for="toggle-robot-gate">
+                            <input type="checkbox" id="toggle-robot-gate" class="checkbox-input">
+                            <span>Mode B: safety gate</span>
+                        </label>
+                    </div>
+                    <div class="robot-topbar-group robot-topbar-right">
+                        <span class="status-chip" id="robot-ws-chip"><span class="chip-dot" id="robot-ws-dot"></span><span id="robot-ws-text">telemetry off</span></span>
+                        <button class="btn btn-estop" id="btn-robot-estop" aria-label="Emergency stop">EMERGENCY STOP</button>
+                        <button class="btn btn-sm btn-outline" id="btn-robot-reset" style="display: none;">Reset safety</button>
+                    </div>
+                </div>
+
+                <div class="robot-banner robot-banner-estop" id="robot-estop-banner" role="alert" style="display: none;">
+                    Emergency stop engaged. Motion is locked until an admin resets safety after inspection.
+                </div>
+                <div class="robot-banner robot-banner-pending" id="robot-pending-banner" role="status" style="display: none;">
+                    <span>Virtual trajectory waiting: the amber ghost shows the requested pose. Nothing was sent to the hardware.</span>
+                    <div class="robot-banner-actions">
+                        <button class="btn btn-sm btn-primary" id="btn-robot-approve">Approve and execute on hardware</button>
+                        <button class="btn btn-sm btn-outline" id="btn-robot-discard">Discard</button>
+                    </div>
+                </div>
+
+                <div class="robot-layout">
+                    <div class="card robot-scene-card">
+                        <div class="gesture-card-header">
+                            <div>
+                                <h3>Digital twin</h3>
+                                <p class="card-subtitle">Drag to orbit, wheel to zoom. Grey arm: actual position. Amber ghost: pending command. Green dot: effector projection.</p>
+                            </div>
+                            <button class="btn btn-sm btn-api" id="btn-api-robot" title="Show the API request">{ } API</button>
+                        </div>
+                        <canvas id="robot-canvas" width="720" height="440" role="img" aria-label="3D view of the robot arm"></canvas>
+                        <div class="robot-readout" id="robot-readout">J1 0.00  J2 0.00  J3 0.00  J4 0.00  J5 0.00  J6 0.00  gripper 50%</div>
+                    </div>
+
+                    <div class="robot-side-col">
+                        <div class="card">
+                            <h3>Joints</h3>
+                            <div class="joint-sliders" id="robot-joint-sliders"></div>
+                            <div class="sensitivity-row">
+                                <div class="sensitivity-label-row">
+                                    <label for="slider-robot-gripper">Gripper opening</label>
+                                    <span class="threshold-badge" id="val-robot-gripper">50%</span>
+                                </div>
+                                <input type="range" id="slider-robot-gripper" min="0" max="1" step="0.01" value="0.5" class="range-slider">
+                            </div>
+                            <div class="robot-side-actions">
+                                <button class="btn btn-sm btn-outline" id="btn-robot-home">Home pose</button>
+                                <span class="card-subtitle-inline" id="robot-ramp-text">max 1.50 rad/s</span>
+                            </div>
+                        </div>
+
+                        <div class="card" id="robot-goal-card">
+                            <h3>Mode C: latent goal</h3>
+                            <p class="card-subtitle">Capture the current view as the goal embedding, then let the arm explore. Energy is the same metric as <code>/api/energy</code>.</p>
+                            <div class="robot-side-actions">
+                                <button class="btn btn-sm btn-primary" id="btn-robot-goal">Capture goal</button>
+                                <button class="btn btn-sm btn-outline" id="btn-robot-goal-clear">Clear</button>
+                            </div>
+                            <div class="energy-gauge">
+                                <div class="energy-gauge-row"><span>Energy E</span><strong class="mono" id="robot-energy-text">--</strong></div>
+                                <div class="slot-live-track"><div class="slot-live-fill energy-fill" id="robot-energy-bar"></div></div>
+                                <div class="reasoning-meta">
+                                    <span>Best <strong id="robot-energy-best">--</strong></span>
+                                    <span>Rounds <strong id="robot-goal-rounds">0</strong></span>
+                                    <span>Step <strong id="robot-goal-step">--</strong></span>
+                                    <span>Phase <strong id="robot-goal-phase">idle</strong></span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <details class="card">
+                            <summary class="roi-summary"><span><strong>Mode A: gesture map</strong></span><span class="roi-summary-hint">gesture name to action</span></summary>
+                            <p class="card-subtitle">Actions: <code>open_gripper</code>, <code>close_gripper</code>, <code>approve</code>, <code>stop</code>, <code>{"action":"joint_delta","joint":3,"delta":0.05}</code>, <code>{"action":"pose","joints":[...],"gripper":0.5}</code>. Gesture names are those of the Gestures tab.</p>
+                            <label class="visually-hidden" for="robot-gesture-map">Gesture map JSON</label>
+                            <textarea id="robot-gesture-map" class="code-editor" rows="8" spellcheck="false"></textarea>
+                            <div class="robot-side-actions">
+                                <button class="btn btn-sm btn-primary" id="btn-robot-gesture-map-save">Save map</button>
+                                <span class="card-subtitle-inline" id="robot-last-gesture">last gesture: none</span>
+                            </div>
+                        </details>
                     </div>
                 </div>
             </section>
@@ -812,8 +926,8 @@
                                 <ol>
                                     <li>Start the camera and stand as you will in real use.</li>
                                     <li>Register the <em>Neutral</em> slot first (hands down).</li>
-                                    <li>For each gesture, click <em>Capture</em> 3–5 times while moving slightly.</li>
-                                    <li>Read the breakdown: if contrastive stays below 0.3 the hand is too small in the frame — move closer.</li>
+                                    <li>For each gesture, click <em>Capture</em> 3 to 5 times while moving slightly.</li>
+                                    <li>Read the breakdown: if contrastive stays below 0.3 the hand is too small in the frame: move closer.</li>
                                 </ol>
                             </div>
 
@@ -830,7 +944,7 @@
                                             <img id="slot-img-1" src="" alt="" style="display: none;">
                                             <div class="slot-empty-placeholder" id="slot-empty-1">No capture yet</div>
                                         </div>
-                                        <div class="slot-meta" id="slot-meta-1">Capture 3–5 samples while moving slightly.</div>
+                                        <div class="slot-meta" id="slot-meta-1">Capture 3 to 5 samples while moving slightly.</div>
                                         <div class="slot-buttons">
                                             <button class="btn btn-sm btn-primary btn-capture-slot" id="btn-capture-1" data-slot="1">
                                                 <span class="btn-icon" aria-hidden="true">&#128247;</span> Capture
@@ -861,7 +975,7 @@
                                             <img id="slot-img-2" src="" alt="" style="display: none;">
                                             <div class="slot-empty-placeholder" id="slot-empty-2">No capture yet</div>
                                         </div>
-                                        <div class="slot-meta" id="slot-meta-2">Capture 3–5 samples while moving slightly.</div>
+                                        <div class="slot-meta" id="slot-meta-2">Capture 3 to 5 samples while moving slightly.</div>
                                         <div class="slot-buttons">
                                             <button class="btn btn-sm btn-primary btn-capture-slot" id="btn-capture-2" data-slot="2">
                                                 <span class="btn-icon" aria-hidden="true">&#128247;</span> Capture
@@ -892,7 +1006,7 @@
                                             <img id="slot-img-3" src="" alt="" style="display: none;">
                                             <div class="slot-empty-placeholder" id="slot-empty-3">No capture yet</div>
                                         </div>
-                                        <div class="slot-meta" id="slot-meta-3">Capture 3–5 samples while moving slightly.</div>
+                                        <div class="slot-meta" id="slot-meta-3">Capture 3 to 5 samples while moving slightly.</div>
                                         <div class="slot-buttons">
                                             <button class="btn btn-sm btn-primary btn-capture-slot" id="btn-capture-3" data-slot="3">
                                                 <span class="btn-icon" aria-hidden="true">&#128247;</span> Capture

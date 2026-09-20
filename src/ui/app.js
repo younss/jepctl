@@ -444,7 +444,7 @@
         if (!el.integrationExample) return;
         el.integrationBaseUrl.textContent = apiBaseUrl();
         el.integrationAuthMode.textContent = state.authToken === "no_auth" ? "disabled (--no-auth, loopback only)" : "Bearer token (inference or admin role)";
-        el.integrationModel.textContent = state.activeModel || "none — load one in Models";
+        el.integrationModel.textContent = state.activeModel || "none: load one in Models";
         const req = state.registeredGestures.length ? gestureMatchRequest() : { method: "POST", path: "/api/embed", multipartFile: "photo.jpg" };
         el.integrationExample.textContent = renderSnippet(currentApiLang, req);
         document.querySelectorAll("#section-security .snippet-lang").forEach((b) => {
@@ -505,6 +505,7 @@
         setupSettings();
         setupGestureSandbox();
         setupRoiEditor();
+        setupRobotTwin();
         setupHeader();
 
         // Initial fetch
@@ -555,6 +556,7 @@
     }
 
     function switchSection(sectionId) {
+        if (state.activeSection === "robot" && sectionId !== "robot") robotLeaveSection();
         state.activeSection = sectionId;
 
         el.navItems.forEach((item) => {
@@ -580,6 +582,8 @@
             renderIntegrationExample();
         } else if (sectionId === "gestures") {
             fetchGesturesList();
+        } else if (sectionId === "robot") {
+            robotEnterSection();
         }
     }
 
@@ -628,7 +632,7 @@
                 el.headerCameraChip.classList.toggle("on", on);
                 el.headerCameraText.textContent = on ? `Camera ${state.streamFps || 10} fps` : "Camera off";
             }
-            if (el.integrationModel) el.integrationModel.textContent = data.active_model || "none — load one in Models";
+            if (el.integrationModel) el.integrationModel.textContent = data.active_model || "none: load one in Models";
 
             // Active Model
             const modelChanged = state.activeModel !== data.active_model;
@@ -780,7 +784,7 @@
         if (!models || models.length === 0) {
             const opt = document.createElement("option");
             opt.value = "";
-            opt.textContent = "No model installed — pull one in Models";
+            opt.textContent = "No model installed: pull one in Models";
             el.selectGestureActiveModel.appendChild(opt);
         } else {
             models.forEach((m) => {
@@ -858,7 +862,7 @@
             if (res.ok) {
                 const data = await res.json().catch(() => ({}));
                 const w = data.weights;
-                notify(w ? `${name} loaded — ${w.loaded}/${w.expected} tensors from ${w.source}` : `${name} loaded`, "success");
+                notify(w ? `${name} loaded: ${w.loaded}/${w.expected} tensors from ${w.source}` : `${name} loaded`, "success");
                 await pollStatus();
                 await fetchModels();
             } else {
@@ -2167,7 +2171,7 @@
             state.cameraRoi = data.roi || null;
             renderRoi();
             state.gestureHistory = {};
-            notify(roi ? "Region of interest saved — re-capture your samples with this crop." : "Using the full frame.", "success");
+            notify(roi ? "Region of interest saved: re-capture your samples with this crop." : "Using the full frame.", "success");
         } catch (e) {
             notify(`Could not save the region: ${e.message}`, "error");
         }
@@ -2441,7 +2445,7 @@
             if (metaEl) {
                 metaEl.textContent = isNeutralSlot
                     ? "Rest pose: absorbs frames with no intentional gesture. Never reported as a detection."
-                    : "Capture 3–5 samples while moving slightly.";
+                    : "Capture 3 to 5 samples while moving slightly.";
             }
             if (btnCap) btnCap.innerHTML = `<span class="btn-icon">&#128247;</span> Capture`;
             if (btnDel) btnDel.style.display = "none";
@@ -2721,6 +2725,676 @@
             osc.stop(ctx.currentTime + 0.20);
         } catch (e) {
             console.warn("Audio tone playback failed:", e);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Robot Twin
+    //
+    // A raw WebGL renderer (no library, works offline in the desktop window)
+    // draws a 6 DOF arm from the telemetry pushed by /api/robot/ws. Manual
+    // commands go back over the same socket. Mode C snapshots the canvas and
+    // posts it as the observation when the controller asks for one.
+    // ------------------------------------------------------------------
+
+    const ROBOT_DOF = 6;
+    const ROBOT_JOINT_NAMES = ["J1 base", "J2 shoulder", "J3 elbow", "J4 wrist pitch", "J5 wrist roll", "J6 wrist rotate"];
+
+    const robot = {
+        ws: null,
+        wsRetry: null,
+        telemetry: null,
+        shown: [0, 0, 0, 0, 0, 0],
+        shownGripper: 0.5,
+        gl: null,
+        program: null,
+        cube: null,
+        lines: null,
+        orbit: { yaw: 0.8, pitch: 0.45, dist: 1.6, dragging: false, lastX: 0, lastY: 0 },
+        raf: null,
+        lastSend: 0,
+        pendingSend: null,
+        lastObserve: 0,
+        sliderBusy: false
+    };
+
+    // --- Small matrix toolkit (column major, like WebGL expects) -----------
+
+    function m4identity() {
+        return new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+    }
+
+    function m4multiply(a, b) {
+        const o = new Float32Array(16);
+        for (let c = 0; c < 4; c++) {
+            for (let r = 0; r < 4; r++) {
+                o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+            }
+        }
+        return o;
+    }
+
+    function m4translate(x, y, z) {
+        const m = m4identity();
+        m[12] = x; m[13] = y; m[14] = z;
+        return m;
+    }
+
+    function m4scale(x, y, z) {
+        const m = m4identity();
+        m[0] = x; m[5] = y; m[10] = z;
+        return m;
+    }
+
+    function m4rotateX(a) {
+        const c = Math.cos(a), s = Math.sin(a);
+        const m = m4identity();
+        m[5] = c; m[6] = s; m[9] = -s; m[10] = c;
+        return m;
+    }
+
+    function m4rotateY(a) {
+        const c = Math.cos(a), s = Math.sin(a);
+        const m = m4identity();
+        m[0] = c; m[2] = -s; m[8] = s; m[10] = c;
+        return m;
+    }
+
+    function m4rotateZ(a) {
+        const c = Math.cos(a), s = Math.sin(a);
+        const m = m4identity();
+        m[0] = c; m[1] = s; m[4] = -s; m[5] = c;
+        return m;
+    }
+
+    function m4perspective(fovy, aspect, near, far) {
+        const f = 1 / Math.tan(fovy / 2);
+        const m = new Float32Array(16);
+        m[0] = f / aspect; m[5] = f;
+        m[10] = (far + near) / (near - far); m[11] = -1;
+        m[14] = (2 * far * near) / (near - far);
+        return m;
+    }
+
+    function m4lookAt(eye, target, up) {
+        const zx = eye[0] - target[0], zy = eye[1] - target[1], zz = eye[2] - target[2];
+        const zl = Math.hypot(zx, zy, zz) || 1;
+        const z = [zx / zl, zy / zl, zz / zl];
+        const x = [up[1] * z[2] - up[2] * z[1], up[2] * z[0] - up[0] * z[2], up[0] * z[1] - up[1] * z[0]];
+        const xl = Math.hypot(x[0], x[1], x[2]) || 1;
+        x[0] /= xl; x[1] /= xl; x[2] /= xl;
+        const y = [z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]];
+        const m = m4identity();
+        m[0] = x[0]; m[4] = x[1]; m[8] = x[2];
+        m[1] = y[0]; m[5] = y[1]; m[9] = y[2];
+        m[2] = z[0]; m[6] = z[1]; m[10] = z[2];
+        m[12] = -(x[0] * eye[0] + x[1] * eye[1] + x[2] * eye[2]);
+        m[13] = -(y[0] * eye[0] + y[1] * eye[1] + y[2] * eye[2]);
+        m[14] = -(z[0] * eye[0] + z[1] * eye[1] + z[2] * eye[2]);
+        return m;
+    }
+
+    function m4transformPoint(m, p) {
+        const w = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15];
+        return [
+            (m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12]) / w,
+            (m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13]) / w,
+            (m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14]) / w
+        ];
+    }
+
+    // --- WebGL setup -------------------------------------------------------
+
+    const ROBOT_VS = `
+        attribute vec3 a_pos;
+        attribute vec3 a_normal;
+        uniform mat4 u_mvp;
+        uniform mat4 u_model;
+        varying vec3 v_normal;
+        void main() {
+            v_normal = mat3(u_model) * a_normal;
+            gl_Position = u_mvp * vec4(a_pos, 1.0);
+        }`;
+
+    const ROBOT_FS = `
+        precision mediump float;
+        uniform vec4 u_color;
+        uniform float u_lit;
+        varying vec3 v_normal;
+        void main() {
+            vec3 n = normalize(v_normal);
+            vec3 l = normalize(vec3(0.4, 1.0, 0.6));
+            float d = max(dot(n, l), 0.0);
+            float shade = mix(1.0, 0.35 + 0.65 * d, u_lit);
+            gl_FragColor = vec4(u_color.rgb * shade, u_color.a);
+        }`;
+
+    function robotCompile(gl, type, src) {
+        const sh = gl.createShader(type);
+        gl.shaderSource(sh, src);
+        gl.compileShader(sh);
+        if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+            throw new Error(gl.getShaderInfoLog(sh));
+        }
+        return sh;
+    }
+
+    function robotCubeMesh(gl) {
+        // Unit cube centred at the origin, 6 faces x 2 triangles, with normals.
+        const faces = [
+            [[0, 0, 1], [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]],
+            [[0, 0, -1], [1, -1, -1], [-1, -1, -1], [-1, 1, -1], [1, 1, -1]],
+            [[0, 1, 0], [-1, 1, 1], [1, 1, 1], [1, 1, -1], [-1, 1, -1]],
+            [[0, -1, 0], [-1, -1, -1], [1, -1, -1], [1, -1, 1], [-1, -1, 1]],
+            [[1, 0, 0], [1, -1, 1], [1, -1, -1], [1, 1, -1], [1, 1, 1]],
+            [[-1, 0, 0], [-1, -1, -1], [-1, -1, 1], [-1, 1, 1], [-1, 1, -1]]
+        ];
+        const data = [];
+        for (const [n, a, b, c, d] of faces) {
+            for (const v of [a, b, c, a, c, d]) {
+                data.push(v[0] * 0.5, v[1] * 0.5, v[2] * 0.5, n[0], n[1], n[2]);
+            }
+        }
+        const buf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
+        return { buf, count: 36 };
+    }
+
+    function robotGridMesh(gl) {
+        const data = [];
+        const half = 0.6, step = 0.1;
+        for (let i = -half; i <= half + 1e-6; i += step) {
+            data.push(i, 0, -half, 0, 1, 0, i, 0, half, 0, 1, 0);
+            data.push(-half, 0, i, 0, 1, 0, half, 0, i, 0, 1, 0);
+        }
+        const buf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
+        return { buf, count: data.length / 6 };
+    }
+
+    function robotInitGl(canvas) {
+        const gl = canvas.getContext("webgl", { antialias: true, preserveDrawingBuffer: true });
+        if (!gl) return null;
+        const program = gl.createProgram();
+        gl.attachShader(program, robotCompile(gl, gl.VERTEX_SHADER, ROBOT_VS));
+        gl.attachShader(program, robotCompile(gl, gl.FRAGMENT_SHADER, ROBOT_FS));
+        gl.linkProgram(program);
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+            throw new Error(gl.getProgramInfoLog(program));
+        }
+        gl.useProgram(program);
+        gl.enable(gl.DEPTH_TEST);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        robot.gl = gl;
+        robot.program = program;
+        robot.cube = robotCubeMesh(gl);
+        robot.lines = robotGridMesh(gl);
+        robot.loc = {
+            pos: gl.getAttribLocation(program, "a_pos"),
+            normal: gl.getAttribLocation(program, "a_normal"),
+            mvp: gl.getUniformLocation(program, "u_mvp"),
+            model: gl.getUniformLocation(program, "u_model"),
+            color: gl.getUniformLocation(program, "u_color"),
+            lit: gl.getUniformLocation(program, "u_lit")
+        };
+        gl.enableVertexAttribArray(robot.loc.pos);
+        gl.enableVertexAttribArray(robot.loc.normal);
+        return gl;
+    }
+
+    function robotBind(mesh) {
+        const gl = robot.gl;
+        gl.bindBuffer(gl.ARRAY_BUFFER, mesh.buf);
+        gl.vertexAttribPointer(robot.loc.pos, 3, gl.FLOAT, false, 24, 0);
+        gl.vertexAttribPointer(robot.loc.normal, 3, gl.FLOAT, false, 24, 12);
+    }
+
+    function robotDrawBox(viewProj, model, size, color, alpha) {
+        const gl = robot.gl;
+        const m = m4multiply(model, m4scale(size[0], size[1], size[2]));
+        gl.uniformMatrix4fv(robot.loc.model, false, m);
+        gl.uniformMatrix4fv(robot.loc.mvp, false, m4multiply(viewProj, m));
+        gl.uniform4f(robot.loc.color, color[0], color[1], color[2], alpha === undefined ? 1 : alpha);
+        gl.uniform1f(robot.loc.lit, 1);
+        robotBind(robot.cube);
+        gl.drawArrays(gl.TRIANGLES, 0, robot.cube.count);
+    }
+
+    function robotDrawLines(viewProj, mesh, color, alpha) {
+        const gl = robot.gl;
+        gl.uniformMatrix4fv(robot.loc.model, false, m4identity());
+        gl.uniformMatrix4fv(robot.loc.mvp, false, viewProj);
+        gl.uniform4f(robot.loc.color, color[0], color[1], color[2], alpha === undefined ? 1 : alpha);
+        gl.uniform1f(robot.loc.lit, 0);
+        robotBind(mesh);
+        gl.drawArrays(gl.LINES, 0, mesh.count);
+    }
+
+    function robotLineMesh(points) {
+        const gl = robot.gl;
+        const data = [];
+        for (const p of points) data.push(p[0], p[1], p[2], 0, 1, 0);
+        const buf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.DYNAMIC_DRAW);
+        return { buf, count: points.length };
+    }
+
+    // Kinematic chain: base yaw (J1), shoulder pitch (J2), elbow pitch (J3),
+    // wrist pitch (J4), wrist roll (J5), wrist rotate (J6), two jaw gripper.
+    // Link lengths are metres in a small SO-100 like arm.
+    const ROBOT_LINKS = { base: 0.06, shoulder: 0.24, elbow: 0.22, wristPitch: 0.06, wristRoll: 0.05, jaw: 0.05 };
+
+    function robotDrawArm(viewProj, joints, gripper, color, alpha) {
+        const L = ROBOT_LINKS;
+        // Base plate and turret
+        robotDrawBox(viewProj, m4translate(0, 0.01, 0), [0.16, 0.02, 0.16], [0.25, 0.28, 0.34], alpha);
+        let T = m4multiply(m4translate(0, 0.02, 0), m4rotateY(joints[0]));
+        robotDrawBox(viewProj, m4multiply(T, m4translate(0, L.base / 2, 0)), [0.09, L.base, 0.09], color, alpha);
+        // Shoulder
+        T = m4multiply(T, m4multiply(m4translate(0, L.base, 0), m4rotateZ(joints[1])));
+        robotDrawBox(viewProj, m4multiply(T, m4translate(0, L.shoulder / 2, 0)), [0.05, L.shoulder, 0.07], color, alpha);
+        // Elbow
+        T = m4multiply(T, m4multiply(m4translate(0, L.shoulder, 0), m4rotateZ(joints[2])));
+        robotDrawBox(viewProj, m4multiply(T, m4translate(0, L.elbow / 2, 0)), [0.045, L.elbow, 0.06], color, alpha);
+        // Wrist pitch
+        T = m4multiply(T, m4multiply(m4translate(0, L.elbow, 0), m4rotateZ(joints[3])));
+        robotDrawBox(viewProj, m4multiply(T, m4translate(0, L.wristPitch / 2, 0)), [0.04, L.wristPitch, 0.05], color, alpha);
+        // Wrist roll around the link axis, then rotate
+        T = m4multiply(T, m4multiply(m4translate(0, L.wristPitch, 0), m4rotateX(joints[4])));
+        T = m4multiply(T, m4rotateY(joints[5]));
+        robotDrawBox(viewProj, m4multiply(T, m4translate(0, L.wristRoll / 2, 0)), [0.05, L.wristRoll, 0.035], [0.55, 0.58, 0.64], alpha);
+        // Gripper: two jaws whose gap follows the opening
+        const gap = 0.006 + 0.03 * gripper;
+        const jawBase = m4multiply(T, m4translate(0, L.wristRoll, 0));
+        robotDrawBox(viewProj, m4multiply(jawBase, m4translate(gap / 2 + 0.006, L.jaw / 2, 0)), [0.012, L.jaw, 0.03], [0.85, 0.86, 0.9], alpha);
+        robotDrawBox(viewProj, m4multiply(jawBase, m4translate(-gap / 2 - 0.006, L.jaw / 2, 0)), [0.012, L.jaw, 0.03], [0.85, 0.86, 0.9], alpha);
+        // Effector tip in world space
+        return m4transformPoint(jawBase, [0, L.jaw, 0]);
+    }
+
+    function robotRender() {
+        const gl = robot.gl;
+        if (!gl) return;
+        const canvas = gl.canvas;
+        gl.viewport(0, 0, canvas.width, canvas.height);
+        gl.clearColor(0.04, 0.05, 0.07, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        const o = robot.orbit;
+        const eye = [
+            o.dist * Math.cos(o.pitch) * Math.sin(o.yaw),
+            0.25 + o.dist * Math.sin(o.pitch),
+            o.dist * Math.cos(o.pitch) * Math.cos(o.yaw)
+        ];
+        const view = m4lookAt(eye, [0, 0.25, 0], [0, 1, 0]);
+        const proj = m4perspective(0.8, canvas.width / canvas.height, 0.05, 20);
+        const viewProj = m4multiply(proj, view);
+
+        robotDrawLines(viewProj, robot.lines, [0.22, 0.25, 0.32], 1);
+        // Axes
+        const axes = robotLineMesh([[0, 0.001, 0], [0.2, 0.001, 0], [0, 0.001, 0], [0, 0.2, 0], [0, 0.001, 0], [0, 0.001, 0.2]]);
+        robotDrawLines(viewProj, { buf: axes.buf, count: 2 }, [0.9, 0.3, 0.3], 1);
+        gl.uniform4f(robot.loc.color, 0.3, 0.9, 0.4, 1);
+        gl.drawArrays(gl.LINES, 2, 2);
+        gl.uniform4f(robot.loc.color, 0.35, 0.55, 1.0, 1);
+        gl.drawArrays(gl.LINES, 4, 2);
+        gl.deleteBuffer(axes.buf);
+
+        // Actual arm
+        const tip = robotDrawArm(viewProj, robot.shown, robot.shownGripper, [0.55, 0.6, 0.68], 1);
+        // Pending ghost (safety gate)
+        const t = robot.telemetry;
+        if (t && t.pending) {
+            robotDrawArm(viewProj, t.pending.joints, t.pending.gripper, [0.98, 0.7, 0.2], 0.35);
+        }
+        // Effector projection to the ground and marker
+        const proj1 = robotLineMesh([tip, [tip[0], 0.001, tip[2]]]);
+        robotDrawLines(viewProj, proj1, [0.3, 0.9, 0.5], 0.8);
+        gl.deleteBuffer(proj1.buf);
+        robotDrawBox(viewProj, m4translate(tip[0], 0.004, tip[2]), [0.02, 0.004, 0.02], [0.3, 0.9, 0.5], 1);
+    }
+
+    function robotAnimate() {
+        robot.raf = null;
+        if (state.activeSection !== "robot") return;
+        const t = robot.telemetry;
+        if (t) {
+            // Ease toward the last telemetry so 30 Hz updates look continuous.
+            for (let i = 0; i < ROBOT_DOF; i++) robot.shown[i] += (t.joints[i] - robot.shown[i]) * 0.35;
+            robot.shownGripper += (t.gripper - robot.shownGripper) * 0.35;
+        }
+        robotRender();
+        robotMaybeObserve();
+        robot.raf = requestAnimationFrame(robotAnimate);
+    }
+
+    // --- WebSocket telemetry ----------------------------------------------
+
+    function robotConnectWs() {
+        if (robot.ws || state.activeSection !== "robot") return;
+        const proto = location.protocol === "https:" ? "wss:" : "ws:";
+        const tokenParam = state.authToken && state.authToken !== "no_auth" ? `?token=${encodeURIComponent(state.authToken)}` : "";
+        const ws = new WebSocket(`${proto}//${location.host}/api/robot/ws${tokenParam}`);
+        robot.ws = ws;
+        ws.onopen = () => robotSetWsChip(true);
+        ws.onmessage = (e) => {
+            try {
+                robotApplyTelemetry(JSON.parse(e.data));
+            } catch (err) {
+                console.warn("robot telemetry parse error", err);
+            }
+        };
+        ws.onclose = () => {
+            robot.ws = null;
+            robotSetWsChip(false);
+            if (state.activeSection === "robot") {
+                robot.wsRetry = setTimeout(robotConnectWs, 1500);
+            }
+        };
+        ws.onerror = () => ws.close();
+    }
+
+    function robotDisconnectWs() {
+        if (robot.wsRetry) {
+            clearTimeout(robot.wsRetry);
+            robot.wsRetry = null;
+        }
+        if (robot.ws) {
+            robot.ws.onclose = null;
+            robot.ws.close();
+            robot.ws = null;
+        }
+        robotSetWsChip(false);
+    }
+
+    function robotSetWsChip(on) {
+        const chip = document.getElementById("robot-ws-chip");
+        const text = document.getElementById("robot-ws-text");
+        if (chip) chip.classList.toggle("on", on);
+        if (text) text.textContent = on ? "telemetry 30 Hz" : "telemetry off";
+    }
+
+    function robotSendCommand(joints, gripper, approved) {
+        const payload = { joints, gripper, approved: !!approved };
+        if (robot.ws && robot.ws.readyState === WebSocket.OPEN) {
+            const now = performance.now();
+            if (now - robot.lastSend < 33) {
+                robot.pendingSend = payload;
+                if (!robot.sendTimer) {
+                    robot.sendTimer = setTimeout(() => {
+                        robot.sendTimer = null;
+                        if (robot.pendingSend) {
+                            robot.ws.send(JSON.stringify(robot.pendingSend));
+                            robot.pendingSend = null;
+                            robot.lastSend = performance.now();
+                        }
+                    }, 33);
+                }
+                return;
+            }
+            robot.lastSend = now;
+            robot.ws.send(JSON.stringify(payload));
+        } else {
+            apiFetch("/api/robot/joints", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
+                .then(async (res) => {
+                    if (!res.ok) {
+                        const err = await res.json().catch(() => ({}));
+                        notify(`Robot: ${err.error || res.status}`, "error");
+                    }
+                })
+                .catch((e) => notify(`Robot: ${e.message}`, "error"));
+        }
+    }
+
+    // --- Telemetry to UI ----------------------------------------------------
+
+    function robotApplyTelemetry(t) {
+        const prev = robot.telemetry;
+        robot.telemetry = t;
+        if (!prev) {
+            robot.shown = t.joints.slice();
+            robot.shownGripper = t.gripper;
+            robotBuildSliders(t.limits);
+        }
+        const readout = document.getElementById("robot-readout");
+        if (readout) {
+            readout.textContent = t.joints.map((v, i) => `J${i + 1} ${v >= 0 ? " " : ""}${v.toFixed(2)}`).join("  ")
+                + `  gripper ${Math.round(t.gripper * 100)}%` + (t.last_error ? `   error: ${t.last_error}` : "");
+        }
+        // Backend and connection
+        const vb = document.getElementById("btn-robot-backend-virtual");
+        const pb = document.getElementById("btn-robot-backend-physical");
+        if (vb && pb) {
+            vb.classList.toggle("active", t.backend === "virtual");
+            pb.classList.toggle("active", t.backend === "physical");
+        }
+        const chip = document.getElementById("robot-conn-chip");
+        const ctext = document.getElementById("robot-conn-text");
+        if (chip) chip.classList.toggle("on", t.connected);
+        if (ctext) ctext.textContent = t.connected ? `${t.backend} connected` : `${t.backend} disconnected`;
+        // Mode and gate
+        const modeSel = document.getElementById("select-robot-mode");
+        if (modeSel && modeSel.value !== t.mode && document.activeElement !== modeSel) modeSel.value = t.mode;
+        const gate = document.getElementById("toggle-robot-gate");
+        if (gate) {
+            gate.checked = t.safety_gate;
+            gate.disabled = t.backend === "physical";
+        }
+        // E-stop
+        const estopBanner = document.getElementById("robot-estop-banner");
+        const resetBtn = document.getElementById("btn-robot-reset");
+        if (estopBanner) estopBanner.style.display = t.estop ? "block" : "none";
+        if (resetBtn) resetBtn.style.display = t.estop ? "inline-flex" : "none";
+        // Pending (Mode B)
+        const pendingBanner = document.getElementById("robot-pending-banner");
+        if (pendingBanner) pendingBanner.style.display = t.pending ? "flex" : "none";
+        // Sliders follow the targets unless the user is dragging
+        if (!robot.sliderBusy) {
+            for (let i = 0; i < ROBOT_DOF; i++) {
+                const s = document.getElementById(`slider-robot-j${i + 1}`);
+                const v = document.getElementById(`val-robot-j${i + 1}`);
+                if (s) s.value = t.targets[i];
+                if (v) v.textContent = `${(t.targets[i] * 180 / Math.PI).toFixed(1)} deg  (${t.targets[i].toFixed(3)} rad)`;
+            }
+            const g = document.getElementById("slider-robot-gripper");
+            const gv = document.getElementById("val-robot-gripper");
+            if (g) g.value = t.gripper_target;
+            if (gv) gv.textContent = `${Math.round(t.gripper_target * 100)}%`;
+        }
+        const ramp = document.getElementById("robot-ramp-text");
+        if (ramp) ramp.textContent = `max ${t.max_rad_per_s.toFixed(2)} rad/s`;
+        const lg = document.getElementById("robot-last-gesture");
+        if (lg) lg.textContent = `last gesture: ${t.last_gesture || "none"}`;
+        // Goal (Mode C)
+        const goal = t.goal || {};
+        const et = document.getElementById("robot-energy-text");
+        const eb = document.getElementById("robot-energy-bar");
+        const best = document.getElementById("robot-energy-best");
+        const rounds = document.getElementById("robot-goal-rounds");
+        const step = document.getElementById("robot-goal-step");
+        const phase = document.getElementById("robot-goal-phase");
+        if (et) et.textContent = goal.current_energy !== null && goal.current_energy !== undefined ? goal.current_energy.toFixed(4) : "--";
+        if (eb) eb.style.width = `${Math.round((goal.convergence || 0) * 100)}%`;
+        if (best) best.textContent = goal.best_energy !== null && goal.best_energy !== undefined ? goal.best_energy.toFixed(4) : "--";
+        if (rounds) rounds.textContent = String(goal.iterations || 0);
+        if (step) step.textContent = goal.has_goal ? `${(goal.step_rad || 0).toFixed(3)} rad` : "--";
+        if (phase) phase.textContent = goal.phase || "idle";
+        if (!robot.raf && state.activeSection === "robot") robot.raf = requestAnimationFrame(robotAnimate);
+    }
+
+    function robotBuildSliders(limits) {
+        const host = document.getElementById("robot-joint-sliders");
+        if (!host || host.childElementCount) return;
+        for (let i = 0; i < ROBOT_DOF; i++) {
+            const row = document.createElement("div");
+            row.className = "sensitivity-row";
+            row.innerHTML = `
+                <div class="sensitivity-label-row">
+                    <label for="slider-robot-j${i + 1}">${ROBOT_JOINT_NAMES[i]}</label>
+                    <span class="joint-value" id="val-robot-j${i + 1}">0.0 deg (0.000 rad)</span>
+                </div>
+                <input type="range" id="slider-robot-j${i + 1}" class="range-slider" min="${limits.min[i]}" max="${limits.max[i]}" step="0.005" value="0">`;
+            host.appendChild(row);
+            const slider = row.querySelector("input");
+            slider.addEventListener("pointerdown", () => { robot.sliderBusy = true; });
+            slider.addEventListener("pointerup", () => { robot.sliderBusy = false; });
+            slider.addEventListener("input", robotSlidersChanged);
+            slider.addEventListener("change", () => { robot.sliderBusy = false; });
+        }
+        const g = document.getElementById("slider-robot-gripper");
+        if (g) {
+            g.addEventListener("pointerdown", () => { robot.sliderBusy = true; });
+            g.addEventListener("pointerup", () => { robot.sliderBusy = false; });
+            g.addEventListener("input", robotSlidersChanged);
+        }
+    }
+
+    function robotSlidersChanged() {
+        const joints = [];
+        for (let i = 0; i < ROBOT_DOF; i++) {
+            const s = document.getElementById(`slider-robot-j${i + 1}`);
+            const v = parseFloat(s ? s.value : "0");
+            joints.push(v);
+            const label = document.getElementById(`val-robot-j${i + 1}`);
+            if (label) label.textContent = `${(v * 180 / Math.PI).toFixed(1)} deg  (${v.toFixed(3)} rad)`;
+        }
+        const g = parseFloat(document.getElementById("slider-robot-gripper").value);
+        const gv = document.getElementById("val-robot-gripper");
+        if (gv) gv.textContent = `${Math.round(g * 100)}%`;
+        robotSendCommand(joints, g, false);
+    }
+
+    // Mode C: post a snapshot of the twin when the controller is waiting for one.
+    function robotMaybeObserve() {
+        const t = robot.telemetry;
+        if (!t || t.mode !== "goal_seeking" || !t.goal || !t.goal.awaiting_observation) return;
+        if (t.backend !== "virtual") return; // physical: the server uses its camera
+        const now = performance.now();
+        if (now - robot.lastObserve < 350) return;
+        robot.lastObserve = now;
+        const data = robot.gl.canvas.toDataURL("image/jpeg", 0.85);
+        apiFetch("/api/robot/observe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image_base64: data }) })
+            .catch((e) => console.warn("observe failed", e));
+    }
+
+    async function robotPost(path, body, okMsg) {
+        try {
+            const res = await apiFetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || `${res.status}`);
+            if (okMsg) notify(okMsg, "success", 2500);
+            if (data && data.joints) robotApplyTelemetry(data);
+            return data;
+        } catch (e) {
+            notify(`Robot: ${e.message}`, "error");
+            return null;
+        }
+    }
+
+    function setupRobotTwin() {
+        const canvas = document.getElementById("robot-canvas");
+        if (!canvas) return;
+        try {
+            if (!robotInitGl(canvas)) {
+                notify("WebGL is not available in this window; the robot twin cannot render.", "warning", 8000);
+            }
+        } catch (e) {
+            notify(`WebGL init failed: ${e.message}`, "error");
+        }
+        // Orbit controls
+        canvas.addEventListener("pointerdown", (e) => {
+            robot.orbit.dragging = true;
+            robot.orbit.lastX = e.clientX;
+            robot.orbit.lastY = e.clientY;
+            canvas.setPointerCapture(e.pointerId);
+        });
+        canvas.addEventListener("pointermove", (e) => {
+            if (!robot.orbit.dragging) return;
+            robot.orbit.yaw -= (e.clientX - robot.orbit.lastX) * 0.01;
+            robot.orbit.pitch = Math.max(0.05, Math.min(1.4, robot.orbit.pitch + (e.clientY - robot.orbit.lastY) * 0.01));
+            robot.orbit.lastX = e.clientX;
+            robot.orbit.lastY = e.clientY;
+        });
+        const stopDrag = () => { robot.orbit.dragging = false; };
+        canvas.addEventListener("pointerup", stopDrag);
+        canvas.addEventListener("pointercancel", stopDrag);
+        canvas.addEventListener("wheel", (e) => {
+            e.preventDefault();
+            robot.orbit.dist = Math.max(0.6, Math.min(4, robot.orbit.dist * (e.deltaY > 0 ? 1.1 : 0.9)));
+        }, { passive: false });
+
+        const bind = (id, fn) => {
+            const n = document.getElementById(id);
+            if (n) n.addEventListener("click", fn);
+        };
+        bind("btn-robot-backend-virtual", () => robotPost("/api/robot/target", { backend: "virtual" }, "Backend: WebGL simulator"));
+        bind("btn-robot-backend-physical", async () => {
+            const ok = await confirmDialog("Switch to the physical arm? Every command will be held by the safety gate until you approve it.", { title: "Physical backend", okLabel: "Switch", danger: false });
+            if (ok) robotPost("/api/robot/target", { backend: "physical" }, "Backend: physical arm");
+        });
+        bind("btn-robot-estop", () => robotPost("/api/robot/e-stop", null, "Emergency stop engaged"));
+        bind("btn-robot-reset", async () => {
+            const ok = await confirmDialog("Reset the emergency stop? Confirm the arm and its surroundings were inspected.", { title: "Reset safety", okLabel: "Reset", danger: true });
+            if (ok) robotPost("/api/robot/reset-safety", null, "Safety reset");
+        });
+        bind("btn-robot-approve", () => robotPost("/api/robot/approve", null, "Approved: executing on hardware"));
+        bind("btn-robot-discard", () => robotPost("/api/robot/joints", { joints: robot.telemetry ? robot.telemetry.targets : [0, 0, 0, 0, 0, 0], gripper: robot.telemetry ? robot.telemetry.gripper_target : 0.5, approved: true }, "Pending command discarded"));
+        bind("btn-robot-home", () => robotSendCommand([0, 0, 0, 0, 0, 0], 0.5, false));
+        bind("btn-robot-goal", async () => {
+            const t = robot.telemetry;
+            const body = t && t.backend === "virtual" && robot.gl ? { image_base64: robot.gl.canvas.toDataURL("image/jpeg", 0.85) } : {};
+            await robotPost("/api/robot/goal", body, "Goal captured from the current view");
+        });
+        bind("btn-robot-goal-clear", async () => {
+            const res = await apiFetch("/api/robot/goal", { method: "DELETE" });
+            if (res.ok) robotApplyTelemetry(await res.json());
+        });
+        bind("btn-api-robot", () => {
+            const t = robot.telemetry;
+            showApiDialog("Command the arm", "Inference role. Joints in radians within the limits, gripper 0 to 1. With the physical backend the command waits for POST /api/robot/approve unless approved is true. Telemetry: GET /api/robot/status or the WebSocket /api/robot/ws.",
+                { method: "POST", path: "/api/robot/joints", json: { joints: t ? t.targets.map((v) => +v.toFixed(3)) : [0, 0, 0, 0, 0, 0], gripper: t ? +t.gripper_target.toFixed(2) : 0.5, approved: false } });
+        });
+        const modeSel = document.getElementById("select-robot-mode");
+        if (modeSel) modeSel.addEventListener("change", () => robotPost("/api/robot/mode", { mode: modeSel.value }, `Mode: ${modeSel.options[modeSel.selectedIndex].text}`));
+        const gate = document.getElementById("toggle-robot-gate");
+        if (gate) gate.addEventListener("change", () => robotPost("/api/robot/mode", { mode: modeSel ? modeSel.value : "manual", safety_gate: gate.checked }));
+        bind("btn-robot-gesture-map-save", async () => {
+            const ta = document.getElementById("robot-gesture-map");
+            try {
+                const map = JSON.parse(ta.value);
+                const res = await apiFetch("/api/robot/gesture-map", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(map) });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.error || `${res.status}`);
+                notify(`Gesture map saved (${data.entries} entries)`, "success");
+            } catch (e) {
+                notify(`Gesture map: ${e.message}`, "error");
+            }
+        });
+    }
+
+    async function robotEnterSection() {
+        robotConnectWs();
+        try {
+            const res = await apiFetch("/api/robot/gesture-map");
+            if (res.ok) {
+                const ta = document.getElementById("robot-gesture-map");
+                if (ta && !ta.value) ta.value = JSON.stringify(await res.json(), null, 2);
+            }
+        } catch (e) {
+            console.warn("gesture map fetch failed", e);
+        }
+        if (!robot.raf) robot.raf = requestAnimationFrame(robotAnimate);
+    }
+
+    function robotLeaveSection() {
+        robotDisconnectWs();
+        if (robot.raf) {
+            cancelAnimationFrame(robot.raf);
+            robot.raf = null;
         }
     }
 

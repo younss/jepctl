@@ -15,6 +15,11 @@ use crate::server::handlers::{
     handle_register_manifest, handle_revoke_key, handle_ring_buffer, handle_save_settings, handle_status, handle_tags,
     handle_unload_model, AppState,
 };
+use crate::server::robot_handlers::{
+    handle_robot_approve, handle_robot_clear_goal, handle_robot_estop, handle_robot_gesture_map_get,
+    handle_robot_gesture_map_put, handle_robot_goal, handle_robot_joints, handle_robot_mode, handle_robot_observe,
+    handle_robot_reset_safety, handle_robot_status, handle_robot_target, handle_robot_ws,
+};
 use crate::server::ui_assets::{serve_app_js, serve_index, serve_styles};
 
 /// Assemble all application routes and static assets into an Axum Router
@@ -59,6 +64,18 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/gestures/export", get(handle_export_gestures))
         .route("/api/gestures/import", post(handle_import_gestures))
         .route("/api/gestures/{name}", delete(handle_delete_gesture))
+        // API: Robot control and digital twin
+        .route("/api/robot/status", get(handle_robot_status))
+        .route("/api/robot/target", post(handle_robot_target))
+        .route("/api/robot/joints", post(handle_robot_joints))
+        .route("/api/robot/approve", post(handle_robot_approve))
+        .route("/api/robot/mode", post(handle_robot_mode))
+        .route("/api/robot/goal", post(handle_robot_goal).delete(handle_robot_clear_goal))
+        .route("/api/robot/observe", post(handle_robot_observe))
+        .route("/api/robot/e-stop", post(handle_robot_estop))
+        .route("/api/robot/reset-safety", post(handle_robot_reset_safety))
+        .route("/api/robot/gesture-map", get(handle_robot_gesture_map_get).put(handle_robot_gesture_map_put))
+        .route("/api/robot/ws", get(handle_robot_ws))
         // Fallback for SPA routing
         .fallback(serve_index)
         .with_state(state)

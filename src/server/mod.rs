@@ -3,6 +3,7 @@
 pub mod gesture_handlers;
 pub mod handlers;
 pub mod middleware;
+pub mod robot_handlers;
 pub mod routes;
 #[cfg(test)]
 mod tests;

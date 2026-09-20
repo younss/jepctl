@@ -7,6 +7,11 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Robot Twin**: `src/robot/` hardware abstraction layer (virtual arm feeding a raw WebGL
+  twin, serial backend behind `--features serial` with Feetech STS style frames), safety
+  guard (joint limits, 1.5 rad/s ramp, E-stop), 30 Hz controller with manual, gesture
+  shadowing (Mode A), safety gate (Mode B) and latent goal seeking (Mode C) modes;
+  `/api/robot/*` endpoints and a 30 Hz WebSocket; new Robot Twin tab.
 - **V-JEPA 2** (`facebook/vjepa2-vitl-fpc64-256`): 3D tubelet embedding, 3D rotary attention,
   encoder-only strict loading (388/388), per-head attention to bound memory (2.5 GB peak vs.
   70 GB with full score tensors). Camera stream and gestures embed a 16-frame clip.
@@ -18,7 +23,7 @@ All notable changes to this project are documented here. The format follows
   to every camera embedding and carried in gesture bundles.
 - Manifest fields `tubelet_size`, `input_width`, `in_chans`, `audio`, `pooling`.
 - Gesture bundles: `GET /api/gestures/export`, `POST /api/gestures/import`, and
-  `jepa gestures list|export|import|match|remove` — tune on one machine, deploy on many.
+  `jepa gestures list|export|import|match|remove`: tune on one machine, deploy on many.
 - `{ } API` controls throughout the testbench showing the exact request (curl / JS / Python)
   behind each action, and an Integration page with a quick-start example.
 - Header status bar (model, checkpoint coverage, camera, latency); `camera_active` on `/api/status`.
@@ -31,7 +36,7 @@ All notable changes to this project are documented here. The format follows
   dialogs instead of `alert()`/`confirm()`, focus rings, WCAG AA contrast tokens, no horizontal
   overflow down to 1100 px, larger click targets. Desktop window titled with the version.
 
-## [0.2.0] — 2026-09-20
+## [0.2.0]: 2026-09-20
 
 ### Added
 - **Explainable few-shot gestures** (`src/gestures.rs`): multi-sample prototypes, neutral pose,
@@ -65,7 +70,7 @@ All notable changes to this project are documented here. The format follows
 - Starting the stream blocked on the browser camera permission prompt.
 - `/api/auth/token` was readable cross-origin (token theft from any web page).
 
-## [0.1.0] — 2026-09-19
+## [0.1.0]: 2026-09-19
 
 Initial import: candle ViT runtime, Hugging Face pull, REST/SSE daemon, embedded testbench,
 camera ring buffer, bearer-token auth, packaging scripts.

@@ -33,6 +33,8 @@ pub struct RuntimeConfig {
     pub settings_path: PathBuf,
     /// Persisted few-shot gesture registry.
     pub gestures_path: PathBuf,
+    /// Persisted robot latent world model (learned transitions).
+    pub world_model_path: PathBuf,
     pub host: String,
     pub port: u16,
     pub no_auth: bool,
@@ -61,6 +63,7 @@ impl RuntimeConfig {
         let keys_db_path = home_dir.join("keys.json");
         let settings_path = home_dir.join("settings.json");
         let gestures_path = home_dir.join("gestures.json");
+        let world_model_path = home_dir.join("robot_world_model.json");
 
         // Ensure directories exist with proper permissions
         fs::create_dir_all(&models_dir)?;
@@ -80,6 +83,7 @@ impl RuntimeConfig {
             keys_db_path,
             settings_path,
             gestures_path,
+            world_model_path,
             host,
             port,
             no_auth,

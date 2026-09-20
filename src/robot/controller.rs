@@ -1,13 +1,13 @@
-//! Control loop, gesture shadowing (Mode A) and latent goal seeking (Mode C).
+//! Control loop, gesture shadowing (Mode A) and the latent agent (Exploring / Mode C).
 //!
-//! Mode C in one paragraph: the user captures the current embedding as `z_goal`. The
-//! controller then runs rounds of local exploration: from the base pose it proposes
-//! `CANDIDATES` random joint perturbations of scale `step`, moves to each one, waits
-//! for the arm to settle, receives one observation embedding `z`, and records the
-//! energy `E = ||z - z_goal||_2 / sqrt(dim)` (the same metric as `POST /api/energy`).
-//! The best candidate becomes the new base when it beats the base energy; otherwise
-//! the step shrinks. Observations come from the server camera (physical arm) or from
-//! snapshots of the WebGL twin posted by the browser (virtual arm).
+//! The agent learns from what the camera sees, in JEPA fashion:
+//! 1. observe: the camera frame is embedded to `z_t` (only once the arm has settled);
+//! 2. act: an action `a` (joint deltas) is executed under the safety ramp;
+//! 3. observe again: `z_{t+1}` and the transition `(z_t, a, z_{t+1})` train the latent
+//!    world model (`world_model.rs`), a predictor in embedding space;
+//! 4. plan: with a goal `z_goal`, candidate actions are evaluated inside the model and
+//!    the best one is executed; without a goal (Exploring) actions are random babbling.
+//! Energy `E = ||z - z_goal||_2 / sqrt(dim)` is the same metric as `POST /api/energy`.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -16,16 +16,20 @@ use rand::RngExt;
 
 use crate::robot::hal::BackendKind;
 use crate::robot::safety::SafetyGuard;
+use crate::robot::world_model::{LatentWorldModel, ACTION_DIM};
 use crate::robot::{
     GestureAction, GoalProgress, JointCommand, RobotCore, RobotError, RobotHandle, RobotMode, CONTROL_HZ, DOF,
 };
 use crate::types::normalize_l2;
 
-/// Perturbations evaluated per exploration round.
-pub const CANDIDATES: usize = 8;
-/// Initial perturbation scale in radians.
-pub const INITIAL_STEP_RAD: f32 = 0.12;
+/// Candidate actions evaluated inside the world model per planning step.
+pub const PLAN_SAMPLES: usize = 96;
+/// Initial action scale in radians.
+pub const INITIAL_STEP_RAD: f32 = 0.10;
 pub const MIN_STEP_RAD: f32 = 0.01;
+pub const MAX_STEP_RAD: f32 = 0.25;
+/// Energy under which the goal counts as reached.
+pub const GOAL_REACHED_ENERGY: f32 = 0.02;
 /// Settle tolerance before an observation is accepted.
 pub const SETTLE_EPS_RAD: f32 = 0.01;
 
@@ -55,151 +59,173 @@ pub fn default_gesture_map() -> HashMap<String, GestureAction> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
     Idle,
-    /// Waiting for an observation of the base pose.
-    MeasureBase,
-    /// Moving to / observing candidate `idx`.
-    Candidate(usize),
+    /// Settled; the next camera embedding is the observation of the current pose.
+    AwaitObservation,
+    /// An action is being executed under the ramp.
+    Moving,
+    Converged,
 }
 
-/// Mode C state machine.
+/// Learning and planning agent (Exploring and Mode C).
 #[derive(Debug, Clone)]
-pub struct GoalExplorer {
+pub struct LatentAgent {
+    pub world: LatentWorldModel,
     pub goal: Option<Vec<f32>>,
-    base: [f32; DOF],
-    base_energy: Option<f32>,
-    initial_energy: Option<f32>,
-    best_energy: Option<f32>,
-    current_energy: Option<f32>,
-    candidates: Vec<[f32; DOF]>,
-    energies: Vec<f32>,
     phase: Phase,
+    last_z: Option<Vec<f32>>,
+    last_action: Option<[f32; ACTION_DIM]>,
+    last_joints: [f32; DOF],
     step: f32,
-    iterations: u32,
-    evaluated: u32,
+    current_energy: Option<f32>,
+    predicted_energy: Option<f32>,
+    best_energy: Option<f32>,
+    initial_energy: Option<f32>,
+    steps: u32,
+    planned: bool,
 }
 
-impl Default for GoalExplorer {
+impl Default for LatentAgent {
     fn default() -> Self {
         Self {
+            world: LatentWorldModel::default(),
             goal: None,
-            base: [0.0; DOF],
-            base_energy: None,
-            initial_energy: None,
-            best_energy: None,
-            current_energy: None,
-            candidates: Vec::new(),
-            energies: Vec::new(),
             phase: Phase::Idle,
+            last_z: None,
+            last_action: None,
+            last_joints: [0.0; DOF],
             step: INITIAL_STEP_RAD,
-            iterations: 0,
-            evaluated: 0,
+            current_energy: None,
+            predicted_energy: None,
+            best_energy: None,
+            initial_energy: None,
+            steps: 0,
+            planned: false,
         }
     }
 }
 
-impl GoalExplorer {
-    pub fn set_goal(&mut self, goal: Vec<f32>, current_pose: [f32; DOF]) {
-        *self = Self { goal: Some(goal), base: current_pose, phase: Phase::MeasureBase, ..Self::default() };
+impl LatentAgent {
+    pub fn set_goal(&mut self, goal: Vec<f32>) {
+        self.goal = Some(goal);
+        self.current_energy = None;
+        self.predicted_energy = None;
+        self.best_energy = None;
+        self.initial_energy = None;
+        self.steps = 0;
+        self.step = INITIAL_STEP_RAD;
+        self.phase = Phase::AwaitObservation;
     }
 
-    pub fn abort(&mut self) {
+    pub fn clear_goal(&mut self) {
+        self.goal = None;
+        self.current_energy = None;
+        self.predicted_energy = None;
+        self.best_energy = None;
+        self.initial_energy = None;
+        if self.phase == Phase::Converged {
+            self.phase = Phase::AwaitObservation;
+        }
+    }
+
+    /// Begin acting (called when a learning mode is selected).
+    pub fn start(&mut self) {
+        if matches!(self.phase, Phase::Idle | Phase::Converged) {
+            self.phase = Phase::AwaitObservation;
+            self.last_z = None;
+            self.last_action = None;
+        }
+    }
+
+    /// Pause acting; the world model is kept.
+    pub fn stop(&mut self) {
         self.phase = Phase::Idle;
-        self.candidates.clear();
-        self.energies.clear();
+        self.last_action = None;
     }
 
-    pub fn clear(&mut self) {
-        *self = Self::default();
+    pub fn awaiting(&self) -> bool {
+        self.phase == Phase::AwaitObservation
     }
 
-    pub fn is_active(&self) -> bool {
-        self.goal.is_some() && self.phase != Phase::Idle
-    }
-
-    /// Pose the arm should be at for the next observation.
-    pub fn desired_pose(&self) -> Option<[f32; DOF]> {
-        match self.phase {
-            Phase::Idle => None,
-            Phase::MeasureBase => Some(self.base),
-            Phase::Candidate(i) => self.candidates.get(i).copied(),
+    /// The controller reports that the arm has settled after the last action.
+    pub fn arrived(&mut self) {
+        if self.phase == Phase::Moving {
+            self.phase = Phase::AwaitObservation;
         }
     }
 
-    pub fn resume(&mut self) {
-        if self.goal.is_some() && self.phase == Phase::Idle {
-            self.phase = Phase::MeasureBase;
+    /// Feed the camera observation of the current (settled) pose and choose the next
+    /// action. Returns joint targets to execute, or `None` when idle or converged.
+    pub fn observe(
+        &mut self,
+        z: &[f32],
+        joints: [f32; DOF],
+        gripper: f32,
+        safety: &SafetyGuard,
+        now: u64,
+        rng: &mut impl RngExt,
+    ) -> Option<JointCommand> {
+        if self.phase != Phase::AwaitObservation {
+            return None;
         }
-    }
-
-    /// Feed one observation taken at the current desired pose. Returns the next pose.
-    pub fn observe(&mut self, z: &[f32], safety: &SafetyGuard, rng: &mut impl RngExt) -> Option<[f32; DOF]> {
-        let goal = self.goal.as_ref()?;
-        let e = energy(z, goal);
-        if !e.is_finite() {
-            return self.desired_pose();
+        // Learn from the transition that just completed.
+        if let (Some(prev_z), Some(action)) = (self.last_z.take(), self.last_action.take()) {
+            self.world.record(&prev_z, action, z, self.last_joints, now);
         }
-        self.current_energy = Some(e);
-        self.evaluated += 1;
-        match self.phase {
-            Phase::Idle => return None,
-            Phase::MeasureBase => {
-                self.base_energy = Some(e);
-                self.initial_energy.get_or_insert(e);
-                self.best_energy = Some(self.best_energy.map_or(e, |b| b.min(e)));
-                self.spawn_candidates(safety, rng);
+        // Measure progress toward the goal.
+        if let Some(goal) = &self.goal {
+            let e = energy(z, goal);
+            self.current_energy = Some(e);
+            self.initial_energy.get_or_insert(e);
+            self.best_energy = Some(self.best_energy.map_or(e, |b| b.min(e)));
+            if e < GOAL_REACHED_ENERGY {
+                self.phase = Phase::Converged;
+                return None;
             }
-            Phase::Candidate(i) => {
-                self.energies.push(e);
-                if i + 1 < self.candidates.len() {
-                    self.phase = Phase::Candidate(i + 1);
+            // Adapt the step: shrink when the model predicted better than reality delivered.
+            if let Some(p) = self.predicted_energy {
+                if e > p + 0.005 {
+                    self.step = (self.step * 0.7).max(MIN_STEP_RAD);
                 } else {
-                    self.finish_round(safety, rng);
+                    self.step = (self.step * 1.15).min(MAX_STEP_RAD);
                 }
             }
         }
-        self.desired_pose()
-    }
-
-    fn spawn_candidates(&mut self, safety: &SafetyGuard, rng: &mut impl RngExt) {
-        self.candidates = (0..CANDIDATES)
-            .map(|_| {
-                let mut c = self.base;
-                for v in c.iter_mut() {
-                    *v += rng.random_range(-self.step..=self.step);
+        // Choose the next action.
+        let mut action = [0.0f32; ACTION_DIM];
+        self.planned = false;
+        match (&self.goal, self.world.is_ready()) {
+            (Some(goal), true) => {
+                let (a, predicted) = self.world.plan(z, goal, self.step, PLAN_SAMPLES, rng);
+                action = a;
+                // Exploration noise keeps the dataset informative.
+                for v in action.iter_mut() {
+                    *v += rng.random_range(-self.step * 0.2..=self.step * 0.2);
                 }
-                safety.limits.clamp(c)
-            })
-            .collect();
-        self.energies.clear();
-        self.phase = Phase::Candidate(0);
-    }
-
-    fn finish_round(&mut self, safety: &SafetyGuard, rng: &mut impl RngExt) {
-        self.iterations += 1;
-        let base_e = self.base_energy.unwrap_or(f32::INFINITY);
-        let best = self
-            .energies
-            .iter()
-            .enumerate()
-            .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(i, e)| (i, *e));
-        match best {
-            Some((i, e)) if e < base_e => {
-                self.base = self.candidates[i];
-                self.base_energy = Some(e);
-                self.best_energy = Some(self.best_energy.map_or(e, |b| b.min(e)));
-                // Reward progress with a slightly larger step (bounded).
-                self.step = (self.step * 1.1).min(INITIAL_STEP_RAD * 2.0);
+                self.predicted_energy = Some(predicted);
+                self.planned = true;
             }
             _ => {
-                self.step = (self.step * 0.6).max(MIN_STEP_RAD);
+                for v in action.iter_mut() {
+                    *v = rng.random_range(-self.step..=self.step);
+                }
+                self.predicted_energy = None;
             }
         }
-        if self.step <= MIN_STEP_RAD && self.best_energy.is_some_and(|b| b < 0.02) {
-            self.phase = Phase::Idle;
-        } else {
-            self.spawn_candidates(safety, rng);
+        // Clamp into the envelope and store the delta that will really be applied.
+        let mut targets = joints;
+        for i in 0..DOF {
+            targets[i] = (joints[i] + action[i]).clamp(safety.limits.min[i], safety.limits.max[i]);
+            action[i] = targets[i] - joints[i];
         }
+        let grip = (gripper + action[DOF]).clamp(0.0, 1.0);
+        action[DOF] = grip - gripper;
+
+        self.last_z = Some(z.to_vec());
+        self.last_action = Some(action);
+        self.last_joints = joints;
+        self.steps += 1;
+        self.phase = Phase::Moving;
+        Some(JointCommand { joints: targets, gripper: grip })
     }
 
     pub fn progress(&self) -> GoalProgress {
@@ -211,23 +237,22 @@ impl GoalExplorer {
             has_goal: self.goal.is_some(),
             goal_dimension: self.goal.as_ref().map_or(0, |g| g.len()),
             current_energy: self.current_energy,
+            predicted_energy: self.predicted_energy,
             best_energy: self.best_energy,
             initial_energy: self.initial_energy,
-            iterations: self.iterations,
-            candidates_evaluated: self.evaluated,
+            steps: self.steps,
             step_rad: self.step,
             convergence,
             phase: match self.phase {
-                Phase::Idle => {
-                    if self.goal.is_some() {
-                        "converged".into()
-                    } else {
-                        "idle".into()
-                    }
-                }
-                Phase::MeasureBase => "measuring base".into(),
-                Phase::Candidate(i) => format!("candidate {}/{}", i + 1, CANDIDATES),
-            },
+                Phase::Idle => "idle",
+                Phase::AwaitObservation => "awaiting observation",
+                Phase::Moving => "moving",
+                Phase::Converged => "converged",
+            }
+            .to_string(),
+            policy: if self.planned { "planned".into() } else { "random".into() },
+            last_action: self.last_action,
+            world: self.world.stats(),
             awaiting_observation: false,
         }
     }
@@ -269,19 +294,6 @@ impl RobotCore {
     /// One control step: ramp toward targets, drive the backend, pull real positions.
     pub fn tick(&mut self, dt: f32) {
         self.tick += 1;
-        if self.mode == RobotMode::GoalSeeking {
-            if let Some(pose) = self.explorer.desired_pose() {
-                if !self.safety.estop {
-                    // Explorer poses are pre clamped; bypass the gate on the virtual arm only.
-                    let gated = self.safety_gate && self.backend.kind() == BackendKind::Physical;
-                    if gated {
-                        self.pending = Some(JointCommand { joints: pose, gripper: self.gripper_target });
-                    } else {
-                        self.targets = pose;
-                    }
-                }
-            }
-        }
         let next = self.safety.ramp(self.joints, self.targets, dt);
         let next_grip = self.safety.ramp_gripper(self.gripper, self.gripper_target, dt);
         let moved = next != self.joints || (next_grip - self.gripper).abs() > 1e-6;
@@ -292,6 +304,9 @@ impl RobotCore {
                 self.last_error = Some(e.to_string());
             }
         }
+        if self.learning_mode() && !moved && self.settled() && self.pending.is_none() {
+            self.agent.arrived();
+        }
     }
 
     /// Whether the arm is at its targets (used before taking Mode C observations).
@@ -300,13 +315,23 @@ impl RobotCore {
             && (self.gripper - self.gripper_target).abs() < 0.01
     }
 
-    /// Feed an observation embedding to the goal seeker (Mode C).
-    pub fn observe(&mut self, z: &[f32]) -> Option<[f32; DOF]> {
-        if self.mode != RobotMode::GoalSeeking || self.safety.estop {
+    /// Feed a camera observation of the current pose to the agent (Exploring / Mode C).
+    /// The chosen action is executed (or gated on the physical arm).
+    pub fn observe(&mut self, z: &[f32], now: u64) -> Option<JointCommand> {
+        if !self.learning_mode() || self.safety.estop || !self.settled() {
             return None;
         }
         let mut rng = rand::rng();
-        self.explorer.observe(z, &self.safety, &mut rng)
+        let (joints, gripper) = (self.joints, self.gripper);
+        let cmd = self.agent.observe(z, joints, gripper, &self.safety, now, &mut rng)?;
+        let gated = self.safety_gate && self.backend.kind() == BackendKind::Physical;
+        if gated {
+            self.pending = Some(cmd);
+        } else {
+            self.targets = cmd.joints;
+            self.gripper_target = cmd.gripper;
+        }
+        Some(cmd)
     }
 
     /// Switch backend (disconnects the previous one). Physical forces the safety gate.
@@ -314,9 +339,10 @@ impl RobotCore {
         if self.backend.kind() == kind && self.backend.is_connected() {
             return Ok(());
         }
-        let _ = self.backend.disconnect();
+        // Build and connect the new backend first: a failure leaves the current one untouched.
         let mut backend = crate::robot::hal::make_backend(kind, &self.hardware)?;
         backend.connect()?;
+        let _ = self.backend.disconnect();
         // Start from what the hardware reports so the ramp does not lurch.
         self.joints = backend.get_joint_positions();
         self.gripper = backend.get_gripper_position();
@@ -363,26 +389,49 @@ mod tests {
     }
 
     #[test]
-    fn explorer_converges_on_a_synthetic_latent() {
-        // Latent = joint angles themselves; goal = a pose. Energy then decreases with distance.
+    fn agent_learns_then_plans_toward_a_goal() {
+        // Synthetic camera: the embedding is a smooth function of the joints.
+        fn observe(j: &[f32; DOF]) -> Vec<f32> {
+            let mut z = vec![0.0f32; 16];
+            for (i, v) in z.iter_mut().enumerate() {
+                *v = 0.3 + (j[i % DOF] * (1.0 + i as f32 * 0.1)).sin() * 0.5;
+            }
+            normalize_l2(&z)
+        }
         let safety = SafetyGuard::default();
-        let goal_pose = [0.4, -0.3, 0.5, 0.2, -0.1, 0.3];
-        let mut ex = GoalExplorer::default();
-        ex.set_goal(goal_pose.to_vec(), [0.0; DOF]);
         let mut rng = rand::rng();
-        let mut pose = ex.desired_pose().unwrap();
-        let start = energy(&pose, &goal_pose);
-        for _ in 0..40 * (CANDIDATES + 1) {
-            match ex.observe(&pose, &safety, &mut rng) {
-                Some(p) => pose = p,
+        let mut agent = LatentAgent::default();
+        let mut joints = [0.0f32; DOF];
+        let mut gripper = 0.5;
+
+        // Exploring: random babbling fills the world model.
+        agent.start();
+        for t in 0..30 {
+            let cmd = agent.observe(&observe(&joints), joints, gripper, &safety, t, &mut rng).unwrap();
+            joints = cmd.joints;
+            gripper = cmd.gripper;
+            agent.arrived();
+        }
+        assert!(agent.world.is_ready());
+        assert_eq!(agent.progress().policy, "random");
+
+        // Mode C: plan toward the goal; energy must drop substantially.
+        let goal_pose = [0.4, -0.3, 0.3, 0.2, -0.2, 0.25];
+        agent.set_goal(observe(&goal_pose));
+        let start = energy(&observe(&joints), &observe(&goal_pose));
+        for t in 100..260 {
+            match agent.observe(&observe(&joints), joints, gripper, &safety, t, &mut rng) {
+                Some(cmd) => {
+                    joints = cmd.joints;
+                    gripper = cmd.gripper;
+                    agent.arrived();
+                }
                 None => break,
             }
         }
-        let p = ex.progress();
-        // Either the loop ran its rounds or it converged early; both must have cut the energy.
-        assert!(p.iterations >= 1, "{p:?}");
-        assert!(p.best_energy.unwrap() < start * 0.5, "start {start} best {:?}", p.best_energy);
-        assert!(p.convergence > 0.5);
+        let p = agent.progress();
+        assert!(p.best_energy.unwrap() < start * 0.5, "start {start} progress {p:?}");
+        assert!(p.world.transitions > 30);
     }
 
     #[test]

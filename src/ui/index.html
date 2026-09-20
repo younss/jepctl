@@ -614,7 +614,7 @@
             <section class="content-section" id="section-robot">
                 <div class="section-title">
                     <h2>Robot Twin</h2>
-                    <p>A 6 DOF arm with a gripper, driven by hand, by gestures (Mode A) or by latent goal seeking (Mode C), always previewed on the WebGL twin and gated before touching hardware (Mode B). API: <code>/api/robot/*</code>, telemetry over <code>/api/robot/ws</code>.</p>
+                    <p>A 6 DOF arm with a gripper. It learns from what the <strong>camera</strong> sees: every move is followed by a JEPA embedding of the scene, and those transitions train a latent world model the arm plans in (Mode C). Gestures can drive it (Mode A); hardware is gated behind approval (Mode B). API: <code>/api/robot/*</code>, telemetry over <code>/api/robot/ws</code>.</p>
                 </div>
 
                 <div class="robot-topbar card">
@@ -631,7 +631,8 @@
                         <select id="select-robot-mode" class="select-input select-compact">
                             <option value="manual">Manual</option>
                             <option value="shadowing">Mode A: gesture shadowing</option>
-                            <option value="goal_seeking">Mode C: latent goal seeking</option>
+                            <option value="exploring">Learn: explore and watch</option>
+                            <option value="goal_seeking">Mode C: reach a visual goal</option>
                         </select>
                         <label class="toggle-label compact" for="toggle-robot-gate">
                             <input type="checkbox" id="toggle-robot-gate" class="checkbox-input">
@@ -687,21 +688,29 @@
                         </div>
 
                         <div class="card" id="robot-goal-card">
-                            <h3>Mode C: latent goal</h3>
-                            <p class="card-subtitle">Capture the current view as the goal embedding, then let the arm explore. Energy is the same metric as <code>/api/energy</code>.</p>
+                            <h3>Learning from the camera</h3>
+                            <p class="card-subtitle">Point the camera at the arm. In <em>Learn</em> the arm babbles and records <code>(z, action, z next)</code> transitions; in <em>Mode C</em> it plans inside the learned model to reach the captured goal view. Energy is the <code>/api/energy</code> metric.</p>
                             <div class="robot-side-actions">
-                                <button class="btn btn-sm btn-primary" id="btn-robot-goal">Capture goal</button>
-                                <button class="btn btn-sm btn-outline" id="btn-robot-goal-clear">Clear</button>
+                                <button class="btn btn-sm btn-primary" id="btn-robot-goal">Capture goal from camera</button>
+                                <button class="btn btn-sm btn-outline" id="btn-robot-goal-clear">Clear goal</button>
+                                <button class="btn btn-sm btn-outline-danger" id="btn-robot-world-clear">Forget model</button>
                             </div>
                             <div class="energy-gauge">
-                                <div class="energy-gauge-row"><span>Energy E</span><strong class="mono" id="robot-energy-text">--</strong></div>
+                                <div class="energy-gauge-row"><span>Energy E (observed)</span><strong class="mono" id="robot-energy-text">--</strong></div>
                                 <div class="slot-live-track"><div class="slot-live-fill energy-fill" id="robot-energy-bar"></div></div>
                                 <div class="reasoning-meta">
+                                    <span>Predicted <strong id="robot-energy-pred">--</strong></span>
                                     <span>Best <strong id="robot-energy-best">--</strong></span>
-                                    <span>Rounds <strong id="robot-goal-rounds">0</strong></span>
+                                    <span>Steps <strong id="robot-goal-rounds">0</strong></span>
                                     <span>Step <strong id="robot-goal-step">--</strong></span>
-                                    <span>Phase <strong id="robot-goal-phase">idle</strong></span>
                                 </div>
+                                <div class="reasoning-meta">
+                                    <span>Phase <strong id="robot-goal-phase">idle</strong></span>
+                                    <span>Policy <strong id="robot-goal-policy">--</strong></span>
+                                    <span>Transitions <strong id="robot-world-transitions">0</strong></span>
+                                    <span>Model fit <strong id="robot-world-fit">--</strong></span>
+                                </div>
+                                <div class="robot-learn-note" id="robot-learn-note"></div>
                             </div>
                         </div>
 

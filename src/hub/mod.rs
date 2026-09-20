@@ -249,6 +249,7 @@ mod tests {
             keys_db_path: test_root.join("keys.json"),
             settings_path: test_root.join("settings.json"),
             gestures_path: test_root.join("gestures.json"),
+            world_model_path: test_root.join("robot_world_model.json"),
             host: "127.0.0.1".to_string(),
             port: 11435,
             no_auth: true,

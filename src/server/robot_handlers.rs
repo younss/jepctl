@@ -107,15 +107,17 @@ pub async fn handle_robot_mode(
     if let Some(gate) = p.safety_gate {
         core.safety_gate = gate || core.backend.kind() == BackendKind::Physical;
     }
-    if p.mode == RobotMode::GoalSeeking {
-        core.explorer.resume();
+    if core.learning_mode() {
+        core.agent.start();
+    } else {
+        core.agent.stop();
     }
     Ok(Json(core.telemetry()))
 }
 
 #[derive(Debug, Deserialize, Default)]
 pub struct ObservationPayload {
-    /// Snapshot of the WebGL twin (or any image). Without it the server camera is used.
+    /// Optional image instead of the server camera (replay, tests, external cameras).
     pub image_base64: Option<String>,
 }
 
@@ -137,7 +139,11 @@ async fn embed_observation(state: &AppState, image_base64: Option<String>) -> Re
     }
 }
 
-/// POST /api/robot/goal - Capture the current visual state as the latent goal.
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
+}
+
+/// POST /api/robot/goal - Capture what the camera sees now as the latent goal.
 pub async fn handle_robot_goal(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -146,25 +152,26 @@ pub async fn handle_robot_goal(
     let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
     let z = embed_observation(&state, body.and_then(|b| b.0.image_base64)).await?;
     let mut core = state.robot.core.lock().await;
-    let pose = core.joints;
-    core.explorer.set_goal(z, pose);
-    tracing::info!("Latent goal captured ({} dims)", core.explorer.goal.as_ref().map_or(0, |g| g.len()));
+    let dims = z.len();
+    core.agent.set_goal(z);
+    tracing::info!("Latent goal captured from the camera ({} dims)", dims);
     Ok(Json(core.telemetry()))
 }
 
-/// DELETE /api/robot/goal - Forget the goal.
+/// DELETE /api/robot/goal - Forget the goal (the learned world model is kept).
 pub async fn handle_robot_clear_goal(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<RobotTelemetry>, ApiError> {
     let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
     let mut core = state.robot.core.lock().await;
-    core.explorer.clear();
+    core.agent.clear_goal();
     Ok(Json(core.telemetry()))
 }
 
-/// POST /api/robot/observe - Feed one observation to the goal seeker (Mode C).
-/// Accepted only when the arm is settled at the explorer's pose.
+/// POST /api/robot/observe - Feed one observation to the agent. The server camera does
+/// this automatically while a learning mode is active; this endpoint exists for
+/// replays and external cameras. Accepted only when the arm is settled.
 pub async fn handle_robot_observe(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -180,8 +187,96 @@ pub async fn handle_robot_observe(
     }
     let z = embed_observation(&state, body.and_then(|b| b.0.image_base64)).await?;
     let mut core = state.robot.core.lock().await;
-    let next = core.observe(&z);
-    Ok(Json(json!({ "accepted": true, "next_pose": next, "goal": core.telemetry().goal })))
+    let next = core.observe(&z, now_secs());
+    let goal = core.telemetry().goal;
+    persist_world_model_if_due(&state, &core);
+    Ok(Json(json!({ "accepted": true, "command": next, "goal": goal })))
+}
+
+/// GET /api/robot/world-model - Learned transitions summary.
+pub async fn handle_robot_world_model(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
+    let core = state.robot.core.lock().await;
+    let w = &core.agent.world;
+    Ok(Json(json!({
+        "stats": w.stats(),
+        "recent": w.transitions.iter().rev().take(20).map(|t| json!({ "action": t.action, "joints": t.joints, "timestamp": t.timestamp })).collect::<Vec<_>>(),
+        "path": state.config.world_model_path,
+    })))
+}
+
+/// DELETE /api/robot/world-model - Forget everything learned.
+pub async fn handle_robot_world_model_clear(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let _ = authenticate_request(&headers, &state.auth, Role::Admin).await?;
+    let mut core = state.robot.core.lock().await;
+    core.agent.world = crate::robot::world_model::LatentWorldModel::default();
+    let _ = std::fs::remove_file(&state.config.world_model_path);
+    Ok(Json(json!({ "status": "cleared" })))
+}
+
+fn persist_world_model_if_due(state: &AppState, core: &crate::robot::RobotCore) {
+    let n = core.agent.world.transitions.len();
+    if n == 0 || !n.is_multiple_of(10) {
+        return;
+    }
+    match serde_json::to_string(&core.agent.world) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(&state.config.world_model_path, json) {
+                tracing::warn!("Could not persist world model: {}", e);
+            }
+        }
+        Err(e) => tracing::warn!("Could not serialise world model: {}", e),
+    }
+}
+
+/// Camera observer: while a learning mode is active, embeds the camera frame each
+/// time the arm settles and feeds it to the agent. This is the loop that makes the
+/// robot learn from its environment; nothing here looks at the WebGL twin.
+pub fn spawn_camera_observer(state: AppState) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(150));
+        let mut warned_camera = false;
+        loop {
+            interval.tick().await;
+            let awaiting = {
+                let core = state.robot.core.lock().await;
+                core.telemetry().goal.awaiting_observation
+            };
+            if !awaiting {
+                continue;
+            }
+            if !state.camera_supervisor.is_active() {
+                if !warned_camera {
+                    warned_camera = true;
+                    let mut core = state.robot.core.lock().await;
+                    core.last_error = Some("Learning needs the camera: start it in Live or Gestures".into());
+                }
+                continue;
+            }
+            warned_camera = false;
+            match embed_current_view(&state).await {
+                Ok(view) => {
+                    let mut core = state.robot.core.lock().await;
+                    if core.last_error.as_deref().is_some_and(|e| e.starts_with("Learning needs the camera")) {
+                        core.last_error = None;
+                    }
+                    let _ = core.observe(&view.embedding, now_secs());
+                    persist_world_model_if_due(&state, &core);
+                }
+                Err((_, Json(body))) => {
+                    let msg = body.get("error").and_then(|v| v.as_str()).unwrap_or("observation failed").to_string();
+                    let mut core = state.robot.core.lock().await;
+                    core.last_error = Some(msg);
+                }
+            }
+        }
+    });
 }
 
 /// POST /api/robot/e-stop

@@ -305,6 +305,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Virtual arm is connected from the start so the twin moves immediately.
         let mut core = robot.core.lock().await;
         let _ = core.backend.connect();
+        // What was learned in earlier sessions is reloaded.
+        if let Ok(text) = std::fs::read_to_string(&config.world_model_path) {
+            match serde_json::from_str::<crate::robot::world_model::LatentWorldModel>(&text) {
+                Ok(mut w) => {
+                    w.fit();
+                    tracing::info!("Loaded robot world model: {} transitions ({} dims)", w.transitions.len(), w.dim);
+                    core.agent.world = w;
+                }
+                Err(e) => tracing::warn!("Ignoring unreadable world model: {}", e),
+            }
+        }
     }
 
     let app_state = AppState {
@@ -321,6 +332,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         start_time: Instant::now(),
         config: config.clone(),
     };
+
+    crate::server::robot_handlers::spawn_camera_observer(app_state.clone());
 
     let should_launch_gui = cli.gui
         || matches!(cli.command, Some(Commands::App) | Some(Commands::Gui))

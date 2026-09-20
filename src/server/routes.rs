@@ -18,7 +18,8 @@ use crate::server::handlers::{
 use crate::server::robot_handlers::{
     handle_robot_approve, handle_robot_clear_goal, handle_robot_estop, handle_robot_gesture_map_get,
     handle_robot_gesture_map_put, handle_robot_goal, handle_robot_joints, handle_robot_mode, handle_robot_observe,
-    handle_robot_reset_safety, handle_robot_status, handle_robot_target, handle_robot_ws,
+    handle_robot_reset_safety, handle_robot_status, handle_robot_target, handle_robot_world_model,
+    handle_robot_world_model_clear, handle_robot_ws,
 };
 use crate::server::ui_assets::{serve_app_js, serve_index, serve_styles};
 
@@ -75,6 +76,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/robot/e-stop", post(handle_robot_estop))
         .route("/api/robot/reset-safety", post(handle_robot_reset_safety))
         .route("/api/robot/gesture-map", get(handle_robot_gesture_map_get).put(handle_robot_gesture_map_put))
+        .route("/api/robot/world-model", get(handle_robot_world_model).delete(handle_robot_world_model_clear))
         .route("/api/robot/ws", get(handle_robot_ws))
         // Fallback for SPA routing
         .fallback(serve_index)

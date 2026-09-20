@@ -9,6 +9,7 @@
 pub mod controller;
 pub mod hal;
 pub mod safety;
+pub mod world_model;
 
 use std::sync::Arc;
 
@@ -58,7 +59,9 @@ pub enum RobotMode {
     Manual,
     /// Mode A: gesture detections are mapped to joint deltas or poses.
     Shadowing,
-    /// Mode C: random local exploration minimising latent energy to a goal embedding.
+    /// Learn the latent world model by moving and watching (no goal yet).
+    Exploring,
+    /// Mode C: reach a goal embedding by planning inside the learned world model.
     GoalSeeking,
 }
 
@@ -91,25 +94,31 @@ pub enum GestureAction {
     Stop,
 }
 
-/// Progress of the latent goal search (Mode C).
+/// Progress of learning and goal seeking (modes Exploring and GoalSeeking).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GoalProgress {
     pub has_goal: bool,
     pub goal_dimension: usize,
-    /// Energy of the last observation.
+    /// Energy of the last camera observation against the goal.
     pub current_energy: Option<f32>,
-    /// Best energy reached so far.
+    /// Energy the world model predicted for the action it chose.
+    pub predicted_energy: Option<f32>,
     pub best_energy: Option<f32>,
-    /// Energy measured when the goal was captured (upper reference).
+    /// Energy measured at the first observation after the goal was captured.
     pub initial_energy: Option<f32>,
-    pub iterations: u32,
-    pub candidates_evaluated: u32,
-    /// Current perturbation scale in radians.
+    /// Steps taken (one action, one observation each).
+    pub steps: u32,
+    /// Current action scale in radians.
     pub step_rad: f32,
     /// 0 to 1: how far energy has dropped from initial toward zero.
     pub convergence: f32,
+    /// `idle`, `awaiting observation`, `moving`, `converged`.
     pub phase: String,
-    /// The arm is settled at the explorer's pose and an observation is expected now.
+    /// `random` while the model is not ready, `planned` afterwards.
+    pub policy: String,
+    pub last_action: Option<[f32; world_model::ACTION_DIM]>,
+    pub world: world_model::WorldModelStats,
+    /// The arm is settled and the controller is waiting for a camera observation.
     #[serde(default)]
     pub awaiting_observation: bool,
 }
@@ -152,7 +161,7 @@ pub struct RobotCore {
     pub pending: Option<JointCommand>,
     pub gesture_map: std::collections::HashMap<String, GestureAction>,
     pub last_gesture: Option<String>,
-    pub explorer: controller::GoalExplorer,
+    pub agent: controller::LatentAgent,
     pub tick: u64,
     pub last_error: Option<String>,
     /// Serial settings used when switching to the physical backend.
@@ -173,7 +182,7 @@ impl RobotCore {
             pending: None,
             gesture_map: controller::default_gesture_map(),
             last_gesture: None,
-            explorer: controller::GoalExplorer::default(),
+            agent: controller::LatentAgent::default(),
             tick: 0,
             last_error: None,
             hardware,
@@ -195,12 +204,9 @@ impl RobotCore {
             limits: self.safety.limits,
             max_rad_per_s: self.safety.max_rad_per_s,
             goal: {
-                let mut g = self.explorer.progress();
-                g.awaiting_observation = self.mode == RobotMode::GoalSeeking
-                    && self.explorer.is_active()
-                    && !self.safety.estop
-                    && self.settled()
-                    && self.pending.is_none();
+                let mut g = self.agent.progress();
+                g.awaiting_observation =
+                    self.learning_mode() && self.agent.awaiting() && !self.safety.estop && self.pending.is_none();
                 g
             },
             last_gesture: self.last_gesture.clone(),
@@ -238,7 +244,7 @@ impl RobotCore {
         self.pending = None;
         self.targets = self.joints;
         self.gripper_target = self.gripper;
-        self.explorer.abort();
+        self.agent.stop();
         if let Err(e) = self.backend.emergency_stop() {
             self.last_error = Some(e.to_string());
         }
@@ -247,6 +253,11 @@ impl RobotCore {
     pub fn reset_safety(&mut self) {
         self.safety.estop = false;
         self.last_error = None;
+    }
+
+    /// Modes in which the controller acts and learns from camera observations.
+    pub fn learning_mode(&self) -> bool {
+        matches!(self.mode, RobotMode::Exploring | RobotMode::GoalSeeking)
     }
 }
 

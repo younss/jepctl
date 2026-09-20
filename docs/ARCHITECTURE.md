@@ -201,13 +201,17 @@ RobotCore   { backend: Box<dyn RobotBackend>, safety: SafetyGuard, mode, safety_
 - Mode A: the SSE stream handler calls `apply_gesture(name)` for every detection it
   emits, so the arm follows exactly what the Gestures tab shows. Gesture moves are
   always gated on the physical arm.
-- Mode C (`GoalExplorer`): a state machine `MeasureBase -> Candidate(0..8) -> finish_round`.
-  Each observation embedding yields an energy; the best candidate below the base energy
-  becomes the new base (step x1.1), otherwise the step shrinks x0.6 until 0.01 rad.
-  Observations are pulled, not pushed: `telemetry.goal.awaiting_observation` is true only
-  when the arm has settled at the explorer's pose, and `POST /api/robot/observe` is
-  rejected otherwise. The browser snapshots the WebGL canvas for the virtual arm; the
-  server camera is used for the physical one.
+- Learning (`LatentAgent` + `world_model::LatentWorldModel`): the agent alternates
+  `AwaitObservation -> Moving`. `spawn_camera_observer` embeds the server camera frame
+  each time the arm has settled and calls `RobotCore::observe`, which (1) records the
+  completed transition `(z_prev, a, z)` and refits the world model, a ridge regression
+  `dz = W [a; 1]` in embedding space with recency weights, (2) measures the energy to the
+  goal if one is set, (3) picks the next action: random babbling while fewer than 12
+  transitions exist, otherwise the best of 96 candidates evaluated in the model plus 20%
+  exploration noise. The step grows when reality beats the prediction and shrinks
+  otherwise. The model is persisted every 10 transitions and reloaded at start; a
+  change of embedding dimension (other model) clears it. The WebGL twin is never an
+  observation source: learning is defined by what the camera sees.
 - Serial protocol (`hal::protocol`): Feetech STS3215 / Dynamixel 1.0 style frames
   (`FF FF ID LEN INSTR PARAMS CHK`), sync write of goal positions for all servos in one
   frame, torque enable, present position read back. Tick calibration (`zero_ticks`,

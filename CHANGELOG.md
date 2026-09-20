@@ -10,8 +10,11 @@ All notable changes to this project are documented here. The format follows
 - **Robot Twin**: `src/robot/` hardware abstraction layer (virtual arm feeding a raw WebGL
   twin, serial backend behind `--features serial` with Feetech STS style frames), safety
   guard (joint limits, 1.5 rad/s ramp, E-stop), 30 Hz controller with manual, gesture
-  shadowing (Mode A), safety gate (Mode B) and latent goal seeking (Mode C) modes;
+  shadowing (Mode A), safety gate (Mode B), a Learn mode and goal seeking (Mode C);
   `/api/robot/*` endpoints and a 30 Hz WebSocket; new Robot Twin tab.
+- **Latent world model learned from the camera**: transitions `(z, action, z next)` from
+  JEPA embeddings of camera frames train a ridge dynamics model in embedding space; Mode C
+  plans inside it (96 candidates per step), persisted in `~/.jepa/robot_world_model.json`.
 - **V-JEPA 2** (`facebook/vjepa2-vitl-fpc64-256`): 3D tubelet embedding, 3D rotary attention,
   encoder-only strict loading (388/388), per-head attention to bound memory (2.5 GB peak vs.
   70 GB with full score tensors). Camera stream and gestures embed a 16-frame clip.

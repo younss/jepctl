@@ -196,7 +196,10 @@ cargo run --release --features "metal serial"     # plus the physical arm over U
 - **Manual**: sliders (or the API) set targets.
 - **Mode A, gesture shadowing**: detections from the Gestures tab are mapped to actions through an editable map (`open_gripper`, `close_gripper`, `joint_delta`, `pose`, `approve`, `stop`). Defaults: Open Hand opens the gripper, Fist closes it, Victory approves the pending command.
 - **Mode B, safety gate**: forced on with the physical backend. Commands are held as a pending pose, drawn as an amber ghost on the twin, and sent to the hardware only after "Approve and execute" (or the approve gesture).
-- **Mode C, latent goal seeking**: `POST /api/robot/goal` stores the current view's embedding as `z_goal`. The controller then runs rounds of 8 random joint perturbations, observes each pose once the arm has settled, keeps the candidate with the lowest energy `E = ||z - z_goal||_2 / sqrt(dim)` (the `/api/energy` metric) and shrinks or grows the step. Observations come from the server camera for the physical arm and from snapshots of the WebGL canvas (`POST /api/robot/observe`) for the virtual arm.
+- **Learn (exploring)**: the arm babbles with small random actions. After every move, once settled, the **camera** frame is embedded with the active JEPA model; the transition `(z_t, a, z_{t+1})` trains a latent world model `z_{t+1} = z_t + W[a; 1]` (ridge regression in embedding space, refit after every observation, persisted in `~/.jepa/robot_world_model.json`). Nothing is predicted in pixel space: that is the JEPA principle applied to control.
+- **Mode C, reach a visual goal**: `POST /api/robot/goal` embeds what the camera sees now as `z_goal`. At each step the controller samples 96 candidate actions, predicts their outcome **inside the learned model**, executes the one with the lowest predicted energy `E = ||z - z_goal||_2 / sqrt(dim)` (the `/api/energy` metric, plus a little exploration noise), observes the real result and learns from it. Until 12 transitions exist the policy is random; the telemetry says which one is in use, and shows predicted versus observed energy so you can judge the model.
+
+The camera must see the arm for any of this to mean something. With the virtual backend the loop runs and the model only learns what changes in front of the camera; the tab says so. Use the physical arm, or aim the camera at the screen for a demonstration.
 
 **API** (inference role unless noted)
 
@@ -208,7 +211,8 @@ cargo run --release --features "metal serial"     # plus the physical arm over U
 | POST | `/api/robot/approve` | execute the pending command |
 | POST | `/api/robot/mode` | `{ "mode": "manual" \| "shadowing" \| "goal_seeking", "safety_gate"?: bool }` |
 | POST / DELETE | `/api/robot/goal` | capture (`{ "image_base64"? }`, camera otherwise) / forget the latent goal |
-| POST | `/api/robot/observe` | feed one observation when `goal.awaiting_observation` is true |
+| POST | `/api/robot/observe` | feed one observation (`image_base64` for replays / external cameras); the server camera does this automatically |
+| GET / DELETE | `/api/robot/world-model` | learned transitions summary / forget everything learned (admin) |
 | POST | `/api/robot/e-stop` | engage the emergency stop |
 | POST | `/api/robot/reset-safety` (admin) | release it after inspection |
 | GET / PUT | `/api/robot/gesture-map` | gesture name to action mapping |

@@ -3068,7 +3068,6 @@
             robot.shownGripper += (t.gripper - robot.shownGripper) * 0.35;
         }
         robotRender();
-        robotMaybeObserve();
         robot.raf = requestAnimationFrame(robotAnimate);
     }
 
@@ -3217,12 +3216,27 @@
         const rounds = document.getElementById("robot-goal-rounds");
         const step = document.getElementById("robot-goal-step");
         const phase = document.getElementById("robot-goal-phase");
-        if (et) et.textContent = goal.current_energy !== null && goal.current_energy !== undefined ? goal.current_energy.toFixed(4) : "--";
+        const num = (v) => (v !== null && v !== undefined ? v.toFixed(4) : "--");
+        if (et) et.textContent = num(goal.current_energy);
         if (eb) eb.style.width = `${Math.round((goal.convergence || 0) * 100)}%`;
-        if (best) best.textContent = goal.best_energy !== null && goal.best_energy !== undefined ? goal.best_energy.toFixed(4) : "--";
-        if (rounds) rounds.textContent = String(goal.iterations || 0);
-        if (step) step.textContent = goal.has_goal ? `${(goal.step_rad || 0).toFixed(3)} rad` : "--";
+        if (best) best.textContent = num(goal.best_energy);
+        if (rounds) rounds.textContent = String(goal.steps || 0);
+        if (step) step.textContent = `${(goal.step_rad || 0).toFixed(3)} rad`;
         if (phase) phase.textContent = goal.phase || "idle";
+        const pred = document.getElementById("robot-energy-pred");
+        const policy = document.getElementById("robot-goal-policy");
+        const trans = document.getElementById("robot-world-transitions");
+        const fit = document.getElementById("robot-world-fit");
+        const note = document.getElementById("robot-learn-note");
+        if (pred) pred.textContent = num(goal.predicted_energy);
+        if (policy) policy.textContent = goal.policy || "--";
+        if (trans) trans.textContent = goal.world ? `${goal.world.transitions}${goal.world.ready ? "" : " (need 12)"}` : "0";
+        if (fit) fit.textContent = goal.world && goal.world.fit_error !== null && goal.world.fit_error !== undefined ? `${(100 * (1 - Math.min(1, goal.world.fit_error))).toFixed(0)}%` : "--";
+        if (note) {
+            if (t.last_error && t.last_error.startsWith("Learning needs the camera")) note.textContent = t.last_error;
+            else if ((t.mode === "exploring" || t.mode === "goal_seeking") && t.backend === "virtual") note.textContent = "Virtual arm: the camera does not see it, so the model only learns what changes in front of the camera. Use the physical arm for real learning.";
+            else note.textContent = "";
+        }
         if (!robot.raf && state.activeSection === "robot") robot.raf = requestAnimationFrame(robotAnimate);
     }
 
@@ -3266,19 +3280,6 @@
         const gv = document.getElementById("val-robot-gripper");
         if (gv) gv.textContent = `${Math.round(g * 100)}%`;
         robotSendCommand(joints, g, false);
-    }
-
-    // Mode C: post a snapshot of the twin when the controller is waiting for one.
-    function robotMaybeObserve() {
-        const t = robot.telemetry;
-        if (!t || t.mode !== "goal_seeking" || !t.goal || !t.goal.awaiting_observation) return;
-        if (t.backend !== "virtual") return; // physical: the server uses its camera
-        const now = performance.now();
-        if (now - robot.lastObserve < 350) return;
-        robot.lastObserve = now;
-        const data = robot.gl.canvas.toDataURL("image/jpeg", 0.85);
-        apiFetch("/api/robot/observe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image_base64: data }) })
-            .catch((e) => console.warn("observe failed", e));
     }
 
     async function robotPost(path, body, okMsg) {
@@ -3345,9 +3346,13 @@
         bind("btn-robot-discard", () => robotPost("/api/robot/joints", { joints: robot.telemetry ? robot.telemetry.targets : [0, 0, 0, 0, 0, 0], gripper: robot.telemetry ? robot.telemetry.gripper_target : 0.5, approved: true }, "Pending command discarded"));
         bind("btn-robot-home", () => robotSendCommand([0, 0, 0, 0, 0, 0], 0.5, false));
         bind("btn-robot-goal", async () => {
-            const t = robot.telemetry;
-            const body = t && t.backend === "virtual" && robot.gl ? { image_base64: robot.gl.canvas.toDataURL("image/jpeg", 0.85) } : {};
-            await robotPost("/api/robot/goal", body, "Goal captured from the current view");
+            await robotPost("/api/robot/goal", {}, "Goal captured from the camera");
+        });
+        bind("btn-robot-world-clear", async () => {
+            const ok = await confirmDialog("Forget every learned transition? The arm will have to explore again before it can plan.", { title: "Forget world model", okLabel: "Forget" });
+            if (!ok) return;
+            const res = await apiFetch("/api/robot/world-model", { method: "DELETE" });
+            if (res.ok) notify("World model cleared", "info", 2500);
         });
         bind("btn-robot-goal-clear", async () => {
             const res = await apiFetch("/api/robot/goal", { method: "DELETE" });

@@ -8,6 +8,7 @@ use std::time::Instant;
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use axum::Router;
+use base64::Engine;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
@@ -103,6 +104,7 @@ async fn app_with(with_model: bool, no_auth: bool) -> TestApp {
         keys_db_path: root.0.join("keys.json"),
         settings_path: root.0.join("settings.json"),
         gestures_path: root.0.join("gestures.json"),
+        world_model_path: root.0.join("robot_world_model.json"),
         host: "127.0.0.1".into(),
         port: 0,
         no_auth,
@@ -625,9 +627,16 @@ async fn robot_api_manual_mode_gate_and_estop() {
         call(r, "PUT", "/api/robot/gesture-map", Some(json!({ "Wave": { "action": "open_gripper" } }))).await;
     assert_eq!(status, StatusCode::OK);
 
-    // Mode C: capture a goal from an embedding-free image and feed observations.
-    let png_1x1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
-    let (status, st) = call(r, "POST", "/api/robot/goal", Some(json!({ "image_base64": png_1x1 }))).await;
+    // Mode C: the goal is one image, observations are another (different embeddings).
+    let png_of = |rgb: [u8; 3]| {
+        let img = image::RgbImage::from_pixel(32, 32, image::Rgb(rgb));
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(img).write_to(&mut buf, image::ImageFormat::Png).unwrap();
+        base64::prelude::BASE64_STANDARD.encode(buf.into_inner())
+    };
+    let goal_png = png_of([200, 30, 30]);
+    let png_1x1 = png_of([30, 30, 200]);
+    let (status, st) = call(r, "POST", "/api/robot/goal", Some(json!({ "image_base64": goal_png }))).await;
     assert_eq!(status, StatusCode::OK, "{st}");
     assert_eq!(st["goal"]["has_goal"], true);
     let (status, _) = call(r, "POST", "/api/robot/mode", Some(json!({ "mode": "goal_seeking" }))).await;
@@ -643,6 +652,36 @@ async fn robot_api_manual_mode_gate_and_estop() {
     let (status, body) = call(r, "POST", "/api/robot/observe", Some(json!({ "image_base64": png_1x1 }))).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["accepted"], true);
-    assert_eq!(body["goal"]["candidates_evaluated"], 1);
-    assert!(body["next_pose"].is_array());
+    assert_eq!(body["goal"]["steps"], 1);
+    assert_eq!(body["goal"]["policy"], "random");
+    assert!(body["command"]["joints"].is_array());
+    // After the move settles, the next observation completes a transition and the
+    // world model learns from it.
+    {
+        let mut core = t.state.robot.core.lock().await;
+        for _ in 0..200 {
+            core.tick(1.0 / 30.0);
+        }
+    }
+    let (_, body) = call(r, "POST", "/api/robot/observe", Some(json!({ "image_base64": png_1x1 }))).await;
+    assert_eq!(body["accepted"], true, "{body}");
+    assert_eq!(body["goal"]["world"]["transitions"], 1);
+    assert_eq!(body["goal"]["steps"], 2);
+    assert!(body["goal"]["current_energy"].as_f64().unwrap() > 0.0);
+
+    // Exploring mode keeps learning without a goal.
+    let (status, _) = call(r, "DELETE", "/api/robot/goal", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, st) = call(r, "POST", "/api/robot/mode", Some(json!({ "mode": "exploring" }))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(st["connected"], true, "a failed backend switch must not disconnect the current one");
+    {
+        let mut core = t.state.robot.core.lock().await;
+        for _ in 0..200 {
+            core.tick(1.0 / 30.0);
+        }
+        assert!(core.telemetry().goal.awaiting_observation);
+    }
+    let (_, body) = call(r, "GET", "/api/robot/world-model", None).await;
+    assert_eq!(body["stats"]["transitions"], 1);
 }

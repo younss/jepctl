@@ -313,6 +313,31 @@ pub fn match_gestures(
     }
 }
 
+/// Portable set of gestures: what `GET /api/gestures/export` returns and
+/// `POST /api/gestures/import` / `jepa gestures import` accept. Train prototypes on one
+/// machine, deploy them on many.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GestureBundle {
+    /// Schema version of this bundle.
+    pub version: u32,
+    pub exported_at: u64,
+    /// Decision parameters the exporter was tuned with (pass them to `/api/gestures/match`).
+    pub threshold: f32,
+    pub margin: f32,
+    pub gestures: Vec<RegisteredGesture>,
+}
+
+pub const BUNDLE_VERSION: u32 = 1;
+
+/// Result of importing a bundle.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ImportReport {
+    pub imported: usize,
+    /// Gestures of the same model removed beforehand (`replace = true`).
+    pub removed: usize,
+    pub models: Vec<String>,
+}
+
 /// Persistent gesture registry (`~/.jepa/gestures.json`).
 #[derive(Default, Serialize, Deserialize)]
 pub struct GestureStore {
@@ -369,6 +394,59 @@ impl GestureStore {
 
     pub fn remove(&mut self, name: &str) -> Option<RegisteredGesture> {
         self.gestures.remove(name)
+    }
+
+    /// Export gestures (of one model, or all) as a portable bundle.
+    pub fn export(&self, model: Option<&str>, threshold: f32, margin: f32, with_thumbnails: bool, now: u64) -> GestureBundle {
+        let mut gestures: Vec<RegisteredGesture> = self
+            .gestures
+            .values()
+            .filter(|g| model.is_none_or(|m| g.model_name == m))
+            .cloned()
+            .map(|mut g| {
+                if !with_thumbnails {
+                    g.thumbnail = None;
+                }
+                g
+            })
+            .collect();
+        gestures.sort_by_key(|g| g.created_at);
+        GestureBundle { version: BUNDLE_VERSION, exported_at: now, threshold, margin, gestures }
+    }
+
+    /// Import a bundle. With `replace`, gestures of every model present in the bundle are
+    /// removed first; otherwise same-named gestures are overwritten and others kept.
+    pub fn import(&mut self, bundle: GestureBundle, replace: bool) -> Result<ImportReport, JepaError> {
+        if bundle.version != BUNDLE_VERSION {
+            return Err(JepaError::InvalidPayload(format!(
+                "Unsupported bundle version {} (expected {})",
+                bundle.version, BUNDLE_VERSION
+            )));
+        }
+        for g in &bundle.gestures {
+            if g.name.trim().is_empty() || g.model_name.trim().is_empty() {
+                return Err(JepaError::InvalidPayload("Gesture name and model_name must not be empty".into()));
+            }
+            if g.prototype.len() != g.dimension || g.samples.iter().any(|s| s.len() != g.dimension) {
+                return Err(JepaError::InvalidPayload(format!("Gesture '{}' has inconsistent dimensions", g.name)));
+            }
+        }
+
+        let mut models: Vec<String> = bundle.gestures.iter().map(|g| g.model_name.clone()).collect();
+        models.sort();
+        models.dedup();
+
+        let mut removed = 0;
+        if replace {
+            let before = self.gestures.len();
+            self.gestures.retain(|_, g| !models.contains(&g.model_name));
+            removed = before - self.gestures.len();
+        }
+        let imported = bundle.gestures.len();
+        for g in bundle.gestures {
+            self.gestures.insert(g.name.clone(), g);
+        }
+        Ok(ImportReport { imported, removed, models })
     }
 
     /// Persist to disk (no-op for ephemeral stores).
@@ -480,6 +558,33 @@ mod tests {
         let diff = r.patch_diff.expect("diff map");
         assert_eq!(r.grid_size, Some(2));
         assert!(diff[0] < 1e-5 && diff[3] > 0.99);
+    }
+
+    #[test]
+    fn bundle_export_import_roundtrip_and_replace() {
+        let mut a = GestureStore::ephemeral();
+        a.get_mut_or_insert("open", "m1", false, 1).add_sample(&[1.0, 0.0], None, 1).unwrap();
+        a.get_mut_or_insert("fist", "m1", false, 2).add_sample(&[0.0, 1.0], None, 2).unwrap();
+        a.get_mut_or_insert("other", "m2", false, 3).add_sample(&[1.0], None, 3).unwrap();
+
+        let bundle = a.export(Some("m1"), 0.7, 0.04, false, 99);
+        assert_eq!(bundle.version, BUNDLE_VERSION);
+        assert_eq!(bundle.gestures.len(), 2);
+        let json = serde_json::to_string(&bundle).unwrap();
+
+        let mut b = GestureStore::ephemeral();
+        b.get_mut_or_insert("stale", "m1", false, 0).add_sample(&[0.5, 0.5], None, 0).unwrap();
+        let report = b.import(serde_json::from_str(&json).unwrap(), true).unwrap();
+        assert_eq!(report, ImportReport { imported: 2, removed: 1, models: vec!["m1".into()] });
+        assert_eq!(b.for_model("m1").len(), 2);
+
+        // Bad version and inconsistent dimensions are rejected.
+        let mut bad = bundle.clone();
+        bad.version = 42;
+        assert!(b.import(bad, false).is_err());
+        let mut bad = bundle.clone();
+        bad.gestures[0].dimension = 7;
+        assert!(b.import(bad, false).is_err());
     }
 
     #[test]

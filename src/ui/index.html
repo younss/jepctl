@@ -692,9 +692,30 @@
 
                         <div class="card" id="robot-goal-card">
                             <h3>Learning from the camera</h3>
-                            <p class="card-subtitle">Point the camera at the arm. In <em>Learn</em> the arm babbles and records <code>(z, action, z next)</code> transitions; in <em>Mode C</em> it plans inside the learned model to reach the captured goal view. Energy is the <code>/api/energy</code> metric.</p>
+                            <p class="card-subtitle">In <em>Learn</em> the arm babbles and records <code>(z, action, z next)</code> transitions; in <em>Mode C</em> it plans inside the learned model to reach the captured goal view. Energy is the <code>/api/energy</code> metric.</p>
+                            <div class="agent-view-row">
+                                <div class="agent-view-box">
+                                    <img id="robot-agent-view" alt="What the agent observes" width="224" height="224">
+                                    <div class="model-view-placeholder" id="robot-agent-view-placeholder">Camera stopped</div>
+                                </div>
+                                <p class="card-subtitle" id="robot-agent-view-caption">What the agent observes. With the virtual backend the twin is drawn into the camera frame so the picture depends on the joints; with the physical arm it is the raw camera (ROI applied).</p>
+                            </div>
+                            <ol class="slots-tips robot-steps" id="robot-steps">
+                                <li id="robot-step-camera">Start the camera and point it at the arm.</li>
+                                <li id="robot-step-goal">Put the arm in the target pose, then capture the goal: Mode C starts.</li>
+                                <li id="robot-step-scramble">Scramble the pose so the arm has something to reach.</li>
+                                <li id="robot-step-watch">Watch energy fall; policy turns from random to planned after 12 transitions.</li>
+                            </ol>
+                            <div class="robot-side-actions">
+                                <label class="toggle-label compact" for="toggle-robot-freeze" title="Virtual backend only: observations draw the twin over a frozen camera frame, so only the arm changes between observations">
+                                    <input type="checkbox" id="toggle-robot-freeze" class="checkbox-input" checked>
+                                    <span>Freeze background (virtual)</span>
+                                </label>
+                                <button class="btn btn-sm btn-outline" id="btn-robot-background">Refresh background</button>
+                            </div>
                             <div class="robot-side-actions">
                                 <button class="btn btn-sm btn-primary" id="btn-robot-goal">Capture goal from camera</button>
+                                <button class="btn btn-sm btn-outline" id="btn-robot-scramble">Scramble pose</button>
                                 <button class="btn btn-sm btn-outline" id="btn-robot-goal-clear">Clear goal</button>
                                 <button class="btn btn-sm btn-outline-danger" id="btn-robot-world-clear">Forget model</button>
                             </div>

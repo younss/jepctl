@@ -3,7 +3,7 @@
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::{Json, Response};
+use axum::response::{IntoResponse, Json, Response};
 use base64::prelude::*;
 use serde::Deserialize;
 use serde_json::json;
@@ -11,7 +11,7 @@ use serde_json::json;
 use crate::media::image::preprocess_image_bytes;
 use crate::robot::hal::BackendKind;
 use crate::robot::{GestureAction, JointCommand, RobotError, RobotMode, RobotTelemetry, DOF};
-use crate::server::handlers::{api_error, embed_current_view, engine_error, ensure_model_loaded, ApiError, AppState};
+use crate::server::handlers::{api_error, engine_error, ensure_model_loaded, ApiError, AppState};
 use crate::server::middleware::authenticate_request;
 use crate::types::Role;
 
@@ -93,6 +93,8 @@ pub struct ModePayload {
     pub mode: RobotMode,
     /// Mode B toggle; cannot be disabled while the physical backend is active.
     pub safety_gate: Option<bool>,
+    /// Virtual backend: freeze the camera background for observations (default true).
+    pub freeze_background: Option<bool>,
 }
 
 /// POST /api/robot/mode
@@ -107,6 +109,10 @@ pub async fn handle_robot_mode(
     if let Some(gate) = p.safety_gate {
         core.safety_gate = gate || core.backend.kind() == BackendKind::Physical;
     }
+    if let Some(freeze) = p.freeze_background {
+        core.freeze_background = freeze;
+        core.background = None;
+    }
     if core.learning_mode() {
         core.agent.start();
     } else {
@@ -119,6 +125,79 @@ pub async fn handle_robot_mode(
 pub struct ObservationPayload {
     /// Optional image instead of the server camera (replay, tests, external cameras).
     pub image_base64: Option<String>,
+}
+
+/// What the agent observes: the camera frame (ROI applied) and, with the virtual
+/// backend, the twin drawn into it so the picture depends on the arm's own joints.
+pub struct RobotObservation {
+    pub embedding: Vec<f32>,
+    pub jpeg: Vec<u8>,
+    pub simulated_arm: bool,
+    pub frame_sequence: u64,
+}
+
+pub async fn observe_scene(state: &AppState) -> Result<RobotObservation, ApiError> {
+    ensure_model_loaded(state).await?;
+    let prep = state.engine.preprocessing().await;
+    let roi = *state.camera_roi.read().await;
+    let (mut image, seq) = {
+        let rb = state.ring_buffer.read().await;
+        let latest = rb
+            .latest()
+            .ok_or_else(|| api_error(StatusCode::CONFLICT, "Camera is not running or no frame captured yet"))?;
+        (crate::media::ring_buffer::model_input_image(&latest.rgb_image, roi.as_ref()), latest.sequence)
+    };
+    let simulated_arm = {
+        let mut core = state.robot.core.lock().await;
+        if core.backend.kind() == BackendKind::Virtual {
+            if core.freeze_background {
+                // First observation freezes the scene; later ones reuse it.
+                match &core.background {
+                    Some(bg) if bg.dimensions() == image.dimensions() => image = bg.clone(),
+                    _ => core.background = Some(image.clone()),
+                }
+            }
+            crate::robot::sim_view::overlay_arm(&mut image, &core.joints, core.gripper);
+            true
+        } else {
+            false
+        }
+    };
+    let view = crate::media::ring_buffer::to_model_view(&image, crate::media::ring_buffer::MODEL_VIEW_SIZE);
+    let mut jpeg = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(view)
+        .write_to(&mut jpeg, image::ImageFormat::Jpeg)
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let tensor = crate::media::image::preprocess_dynamic_image(
+        &image::DynamicImage::ImageRgb8(image),
+        &prep,
+        &state.engine.device,
+    )
+    .map_err(engine_error)?;
+    let (_m, _d, embedding, _p, _lat) = state.engine.embed_image(&tensor).await.map_err(engine_error)?;
+    state.embeddings_total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    Ok(RobotObservation { embedding, jpeg: jpeg.into_inner(), simulated_arm, frame_sequence: seq })
+}
+
+/// GET /api/robot/view - JPEG of what the agent observes (camera, ROI, twin overlay when virtual).
+pub async fn handle_robot_view(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, ApiError> {
+    let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
+    let obs = observe_scene(&state).await?;
+    let mut res = (
+        [
+            (axum::http::header::CONTENT_TYPE, "image/jpeg".to_string()),
+            (axum::http::header::CACHE_CONTROL, "no-store".to_string()),
+        ],
+        obs.jpeg,
+    )
+        .into_response();
+    if let Ok(v) = obs.frame_sequence.to_string().parse() {
+        res.headers_mut().insert(axum::http::header::HeaderName::from_static("x-frame-sequence"), v);
+    }
+    if let Ok(v) = (if obs.simulated_arm { "true" } else { "false" }).parse() {
+        res.headers_mut().insert(axum::http::header::HeaderName::from_static("x-simulated-arm"), v);
+    }
+    Ok(res)
 }
 
 async fn embed_observation(state: &AppState, image_base64: Option<String>) -> Result<Vec<f32>, ApiError> {
@@ -135,7 +214,7 @@ async fn embed_observation(state: &AppState, image_base64: Option<String>) -> Re
             let (_m, _d, emb, _p, _lat) = state.engine.embed_image(&tensor).await.map_err(engine_error)?;
             Ok(emb)
         }
-        None => Ok(embed_current_view(state).await?.embedding),
+        None => Ok(observe_scene(state).await?.embedding),
     }
 }
 
@@ -150,11 +229,20 @@ pub async fn handle_robot_goal(
     body: Option<Json<ObservationPayload>>,
 ) -> Result<Json<RobotTelemetry>, ApiError> {
     let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
-    let z = embed_observation(&state, body.and_then(|b| b.0.image_base64)).await?;
+    let from_image = body.as_ref().and_then(|b| b.0.image_base64.clone());
+    // The frozen background is kept: goal, memory and future observations must share it.
+    let z = embed_observation(&state, from_image.clone()).await?;
+    // Noise floor: a second observation of the same scene a moment later.
+    let noise_floor = if from_image.is_none() {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        observe_scene(&state).await.ok().map(|o| crate::robot::controller::energy(&o.embedding, &z))
+    } else {
+        None
+    };
     let mut core = state.robot.core.lock().await;
     let dims = z.len();
-    core.agent.set_goal(z);
-    tracing::info!("Latent goal captured from the camera ({} dims)", dims);
+    core.agent.set_goal(z, noise_floor);
+    tracing::info!("Latent goal captured from the camera ({} dims, noise floor {:?})", dims, noise_floor);
     Ok(Json(core.telemetry()))
 }
 
@@ -206,6 +294,23 @@ pub async fn handle_robot_world_model(
         "recent": w.transitions.iter().rev().take(20).map(|t| json!({ "action": t.action, "joints": t.joints, "timestamp": t.timestamp })).collect::<Vec<_>>(),
         "path": state.config.world_model_path,
     })))
+}
+
+/// POST /api/robot/background - Refresh the frozen background from the live camera.
+/// Remembered transitions were observed over the old background and are dropped.
+pub async fn handle_robot_background(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<RobotTelemetry>, ApiError> {
+    let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
+    {
+        let mut core = state.robot.core.lock().await;
+        core.background = None;
+        core.agent.world = crate::robot::world_model::LatentWorldModel::default();
+        core.agent.clear_goal();
+    }
+    let _ = observe_scene(&state).await?;
+    Ok(Json(state.robot.core.lock().await.telemetry()))
 }
 
 /// DELETE /api/robot/world-model - Forget everything learned.
@@ -260,7 +365,20 @@ pub fn spawn_camera_observer(state: AppState) {
                 continue;
             }
             warned_camera = false;
-            match embed_current_view(&state).await {
+            // Two frames a moment apart, averaged: halves the camera noise the model sees.
+            let first = observe_scene(&state).await;
+            tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+            let observation = match (first, observe_scene(&state).await) {
+                (Ok(mut a), Ok(b)) if a.embedding.len() == b.embedding.len() => {
+                    for (x, y) in a.embedding.iter_mut().zip(b.embedding.iter()) {
+                        *x = (*x + *y) * 0.5;
+                    }
+                    Ok(a)
+                }
+                (Ok(a), _) => Ok(a),
+                (Err(e), _) => Err(e),
+            };
+            match observation {
                 Ok(view) => {
                     let mut core = state.robot.core.lock().await;
                     if core.last_error.as_deref().is_some_and(|e| e.starts_with("Learning needs the camera")) {

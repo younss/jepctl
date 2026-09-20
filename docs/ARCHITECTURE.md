@@ -217,6 +217,15 @@ RobotCore   { backend: Box<dyn RobotBackend>, safety: SafetyGuard, mode, safety_
   frame, torque enable, present position read back. Tick calibration (`zero_ticks`,
   `direction`, gripper open/closed ticks) is in `HardwareConfig` under `robot_hardware`
   in settings.json. Frame encoding is unit tested; no physical arm was available to run it.
+- Simulated camera (`sim_view.rs`): with the virtual backend, `observe_scene` draws the arm
+  (same forward kinematics as the WebGL twin, fixed three quarter top view) into the camera
+  frame before embedding, over a frozen background by default. Observations are the mean of
+  two frames 80 ms apart. The world model is refit locally around the current pose before
+  planning (joint space Gaussian weights, 0.6 rad); the planner also considers momentum
+  (previous action, reversed and scaled) and a memory candidate: heading toward the
+  remembered pose whose observed embedding is closest to the goal. The search ends on
+  `converged` (below 2.5 x the noise floor measured at capture) or `plateau` (60 steps
+  without improvement) and re-checks the view once a second afterwards.
 
 ## 4. HTTP layer
 

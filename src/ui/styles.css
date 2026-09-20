@@ -2355,3 +2355,41 @@ details.reasoning-explainer:not([open]) {
     color: #fcd34d;
     min-height: 16px;
 }
+
+.robot-steps {
+    margin-top: 10px;
+    padding-left: 28px;
+}
+
+.robot-steps li.done {
+    color: #4ade80;
+}
+
+.robot-steps li.done::marker {
+    content: "\2713  ";
+}
+
+.agent-view-row {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    margin-top: 10px;
+}
+
+.agent-view-box {
+    position: relative;
+    width: 160px;
+    height: 160px;
+    flex: none;
+    background-color: #000;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+#robot-agent-view {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+}

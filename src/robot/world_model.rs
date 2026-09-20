@@ -29,6 +29,12 @@ pub const MIN_TRANSITIONS_TO_PLAN: usize = 12;
 pub const MAX_TRANSITIONS: usize = 2000;
 /// Ridge regularisation.
 const LAMBDA: f32 = 1e-2;
+/// Locality kernel width in joint space (radians). Transitions taken far from the
+/// current pose barely influence the local model, which makes the linear dynamics
+/// state dependent.
+const LOCALITY_RAD: f32 = 0.6;
+/// Minimum weight so that a sparse neighbourhood still yields a usable fit.
+const LOCALITY_FLOOR: f32 = 0.05;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Transition {
@@ -144,16 +150,34 @@ impl LatentWorldModel {
         self.fit();
     }
 
-    /// Ridge regression of `dz = W [a; 1]` over all transitions, weighting recent ones.
+    /// Refit around the most recent pose (called after every recorded transition).
     pub fn fit(&mut self) {
+        let around = self.transitions.last().map(|t| t.joints);
+        self.fit_around(around);
+    }
+
+    /// Weighted ridge regression of `dz = W [a; 1]`: recency times joint-space locality
+    /// around `around` (when given), so the model is linear only locally.
+    pub fn fit_around(&mut self, around: Option<[f32; DOF]>) {
         let n = self.transitions.len();
         if n < 2 || self.dim == 0 {
             return;
         }
+        let weight = |idx: usize, t: &Transition| -> f32 {
+            let recency = 0.5 + 0.5 * (idx as f32 + 1.0) / n as f32;
+            let locality = match around {
+                Some(j) => {
+                    let d2: f32 = j.iter().zip(t.joints.iter()).map(|(a, b)| (a - b) * (a - b)).sum();
+                    (-d2 / (LOCALITY_RAD * LOCALITY_RAD)).exp().max(LOCALITY_FLOOR)
+                }
+                None => 1.0,
+            };
+            recency * locality
+        };
         // Normal matrix (FEATURES x FEATURES) shared by every output dimension.
         let mut ata = vec![vec![0.0f32; FEATURES]; FEATURES];
         for (idx, t) in self.transitions.iter().enumerate() {
-            let w = 0.5 + 0.5 * (idx as f32 + 1.0) / n as f32; // recency weight
+            let w = weight(idx, t);
             let f = features(&t.action);
             for i in 0..FEATURES {
                 for j in 0..FEATURES {
@@ -168,7 +192,7 @@ impl LatentWorldModel {
         let mut weights = vec![0.0f32; self.dim * FEATURES];
         let mut atb = vec![vec![0.0f32; FEATURES]; self.dim];
         for (idx, t) in self.transitions.iter().enumerate() {
-            let w = 0.5 + 0.5 * (idx as f32 + 1.0) / n as f32;
+            let w = weight(idx, t);
             let f = features(&t.action);
             for (d, row) in atb.iter_mut().enumerate() {
                 let dz = t.z_next[d] - t.z[d];
@@ -218,27 +242,54 @@ impl LatentWorldModel {
         normalize_l2(&out)
     }
 
-    /// Model predictive step: sample `samples` actions of scale `step` around zero,
-    /// keep the one whose predicted embedding is closest to `goal`.
-    /// Returns `(action, predicted energy)`.
+    /// Remembered pose whose observed embedding is closest to `goal`, with that energy.
+    /// Memory acts as a nonparametric world model: robust to noise, coarse in space.
+    pub fn best_remembered_pose(&self, goal: &[f32]) -> Option<([f32; DOF], f32)> {
+        self.transitions
+            .iter()
+            .map(|t| {
+                // Pose after the action is where z_next was observed.
+                let mut pose = t.joints;
+                for i in 0..DOF {
+                    pose[i] += t.action[i];
+                }
+                (pose, energy(&t.z_next, goal))
+            })
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+    }
+
+    /// Model predictive step: evaluate `samples` random actions of scale `step`, plus
+    /// the previous action, its reverse and scaled versions (momentum), and keep the one
+    /// whose predicted embedding is closest to `goal`. Returns `(action, predicted energy)`.
     pub fn plan(
         &self,
         z: &[f32],
         goal: &[f32],
         step: f32,
         samples: usize,
+        previous: Option<[f32; ACTION_DIM]>,
         rng: &mut impl RngExt,
     ) -> ([f32; ACTION_DIM], f32) {
         let mut best: ([f32; ACTION_DIM], f32) = ([0.0; ACTION_DIM], energy(z, goal));
+        let consider = |a: [f32; ACTION_DIM], best: &mut ([f32; ACTION_DIM], f32)| {
+            let e = energy(&self.predict(z, &a), goal);
+            if e < best.1 {
+                *best = (a, e);
+            }
+        };
+        if let Some(p) = previous {
+            for k in [1.0f32, 0.5, 1.5, -1.0, -0.5] {
+                let mut a = p;
+                a.iter_mut().for_each(|v| *v *= k);
+                consider(a, &mut best);
+            }
+        }
         for _ in 0..samples {
             let mut a = [0.0f32; ACTION_DIM];
             for v in a.iter_mut() {
                 *v = rng.random_range(-step..=step);
             }
-            let e = energy(&self.predict(z, &a), goal);
-            if e < best.1 {
-                best = (a, e);
-            }
+            consider(a, &mut best);
         }
         best
     }
@@ -285,7 +336,7 @@ mod tests {
         let start = [0.0f32; DOF];
         let z = observe(&start);
         let before = energy(&z, &goal);
-        let (a, predicted) = wm.plan(&z, &goal, 0.1, 128, &mut rng);
+        let (a, predicted) = wm.plan(&z, &goal, 0.1, 128, None, &mut rng);
         let mut after_pose = start;
         for i in 0..DOF {
             after_pose[i] += a[i];

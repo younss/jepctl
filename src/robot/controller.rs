@@ -27,12 +27,24 @@ use crate::types::normalize_l2;
 pub const PLAN_SAMPLES: usize = 96;
 /// Initial action scale in radians.
 pub const INITIAL_STEP_RAD: f32 = 0.10;
-pub const MIN_STEP_RAD: f32 = 0.01;
+pub const MIN_STEP_RAD: f32 = 0.02;
 pub const MAX_STEP_RAD: f32 = 0.25;
-/// Energy under which the goal counts as reached.
-pub const GOAL_REACHED_ENERGY: f32 = 0.02;
+/// Absolute energy under which the goal always counts as reached.
+pub const GOAL_REACHED_ENERGY: f32 = 0.004;
+/// The goal also counts as reached below this multiple of the camera noise floor
+/// (energy between two frames of the goal scene at rest): poses that give the same
+/// view as the goal are, by definition, the goal.
+pub const GOAL_NOISE_FACTOR: f32 = 2.5;
+/// Lower bound on the reach threshold so that a near silent camera does not make the
+/// goal unreachable.
+pub const GOAL_MIN_THRESHOLD: f32 = 0.008;
+/// Steps without improving the best energy after which the search is declared a
+/// plateau (the view is as close as this model and camera can get).
+pub const PLATEAU_STEPS: u32 = 60;
 /// Settle tolerance before an observation is accepted.
 pub const SETTLE_EPS_RAD: f32 = 0.01;
+/// Largest per joint move toward a remembered pose in one step.
+pub const MEMORY_JUMP_RAD: f32 = 0.35;
 
 /// Energy between two embeddings: RMS L2 distance on unit vectors, as in `/api/energy`.
 pub fn energy(z: &[f32], goal: &[f32]) -> f32 {
@@ -65,6 +77,8 @@ enum Phase {
     /// An action is being executed under the ramp.
     Moving,
     Converged,
+    /// No improvement for `PLATEAU_STEPS`: as close as the model can get.
+    Plateau,
 }
 
 /// Learning and planning agent (Exploring and Mode C).
@@ -83,6 +97,15 @@ pub struct LatentAgent {
     initial_energy: Option<f32>,
     steps: u32,
     planned: bool,
+    /// Camera noise floor measured at capture (energy between two frames at rest).
+    noise_floor: Option<f32>,
+    /// Last executed action, offered to the planner as momentum.
+    previous_action: Option<[f32; ACTION_DIM]>,
+    /// Steps since `best_energy` last improved.
+    stalled_steps: u32,
+    /// Control ticks spent in `Converged`; the view is re-checked periodically so the
+    /// arm reacts when the scene or its pose changes afterwards.
+    converged_ticks: u32,
 }
 
 impl Default for LatentAgent {
@@ -101,18 +124,26 @@ impl Default for LatentAgent {
             initial_energy: None,
             steps: 0,
             planned: false,
+            noise_floor: None,
+            previous_action: None,
+            stalled_steps: 0,
+            converged_ticks: 0,
         }
     }
 }
 
 impl LatentAgent {
-    pub fn set_goal(&mut self, goal: Vec<f32>) {
+    /// `noise_floor` is the energy between two consecutive observations of the goal
+    /// scene at rest (camera noise); the goal counts as reached below 1.3 times it.
+    pub fn set_goal(&mut self, goal: Vec<f32>, noise_floor: Option<f32>) {
         self.goal = Some(goal);
+        self.noise_floor = noise_floor.filter(|f| f.is_finite());
         self.current_energy = None;
         self.predicted_energy = None;
         self.best_energy = None;
         self.initial_energy = None;
         self.steps = 0;
+        self.stalled_steps = 0;
         self.step = INITIAL_STEP_RAD;
         self.phase = Phase::AwaitObservation;
     }
@@ -123,14 +154,14 @@ impl LatentAgent {
         self.predicted_energy = None;
         self.best_energy = None;
         self.initial_energy = None;
-        if self.phase == Phase::Converged {
+        if matches!(self.phase, Phase::Converged | Phase::Plateau) {
             self.phase = Phase::AwaitObservation;
         }
     }
 
     /// Begin acting (called when a learning mode is selected).
     pub fn start(&mut self) {
-        if matches!(self.phase, Phase::Idle | Phase::Converged) {
+        if matches!(self.phase, Phase::Idle | Phase::Converged | Phase::Plateau) {
             self.phase = Phase::AwaitObservation;
             self.last_z = None;
             self.last_action = None;
@@ -147,10 +178,21 @@ impl LatentAgent {
         self.phase == Phase::AwaitObservation
     }
 
-    /// The controller reports that the arm has settled after the last action.
+    /// The controller reports that the arm is settled. After an action this asks for
+    /// the next observation; once converged it re-checks the view about once a second.
     pub fn arrived(&mut self) {
-        if self.phase == Phase::Moving {
-            self.phase = Phase::AwaitObservation;
+        match self.phase {
+            Phase::Moving => self.phase = Phase::AwaitObservation,
+            Phase::Converged | Phase::Plateau => {
+                self.converged_ticks += 1;
+                if self.converged_ticks >= CONTROL_HZ {
+                    self.converged_ticks = 0;
+                    self.last_action = None;
+                    self.last_z = None;
+                    self.phase = Phase::AwaitObservation;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -177,14 +219,22 @@ impl LatentAgent {
             let e = energy(z, goal);
             self.current_energy = Some(e);
             self.initial_energy.get_or_insert(e);
+            let improved = self.best_energy.is_none_or(|b| e < b - 0.0005);
             self.best_energy = Some(self.best_energy.map_or(e, |b| b.min(e)));
-            if e < GOAL_REACHED_ENERGY {
+            self.stalled_steps = if improved { 0 } else { self.stalled_steps + 1 };
+            if e < self.reach_threshold() {
                 self.phase = Phase::Converged;
+                return None;
+            }
+            if self.stalled_steps >= PLATEAU_STEPS {
+                self.stalled_steps = 0;
+                self.phase = Phase::Plateau;
                 return None;
             }
             // Adapt the step: shrink when the model predicted better than reality delivered.
             if let Some(p) = self.predicted_energy {
-                if e > p + 0.005 {
+                let floor = self.noise_floor.unwrap_or(0.005);
+                if e > p + 2.0 * floor {
                     self.step = (self.step * 0.7).max(MIN_STEP_RAD);
                 } else {
                     self.step = (self.step * 1.15).min(MAX_STEP_RAD);
@@ -196,7 +246,30 @@ impl LatentAgent {
         self.planned = false;
         match (&self.goal, self.world.is_ready()) {
             (Some(goal), true) => {
-                let (a, predicted) = self.world.plan(z, goal, self.step, PLAN_SAMPLES, rng);
+                // Refit the local model around the current pose before planning from it.
+                self.world.fit_around(Some(joints));
+                let (mut a, mut predicted) =
+                    self.world.plan(z, goal, self.step, PLAN_SAMPLES, self.previous_action, rng);
+                // Memory candidate: head toward the remembered pose closest to the goal
+                // when it is clearly better than the current view.
+                let current_e = self.current_energy.unwrap_or(f32::INFINITY);
+                if let Some((pose, remembered_e)) = self.world.best_remembered_pose(goal) {
+                    // Trust memory over the extrapolating linear model: a pose whose observed
+                    // energy was clearly lower than now is a safe place to head to.
+                    if remembered_e < current_e * 0.85 {
+                        let mut toward = [0.0f32; ACTION_DIM];
+                        let mut far = false;
+                        for i in 0..DOF {
+                            let d = pose[i] - joints[i];
+                            toward[i] = d.clamp(-MEMORY_JUMP_RAD, MEMORY_JUMP_RAD);
+                            far |= d.abs() > SETTLE_EPS_RAD * 2.0;
+                        }
+                        if far {
+                            a = toward;
+                            predicted = remembered_e;
+                        }
+                    }
+                }
                 action = a;
                 // Exploration noise keeps the dataset informative.
                 for v in action.iter_mut() {
@@ -223,10 +296,19 @@ impl LatentAgent {
 
         self.last_z = Some(z.to_vec());
         self.last_action = Some(action);
+        self.previous_action = Some(action);
         self.last_joints = joints;
         self.steps += 1;
         self.phase = Phase::Moving;
         Some(JointCommand { joints: targets, gripper: grip })
+    }
+
+    /// Energy under which the goal view counts as reached.
+    fn reach_threshold(&self) -> f32 {
+        match self.noise_floor {
+            Some(f) => (f * GOAL_NOISE_FACTOR).max(GOAL_MIN_THRESHOLD),
+            None => GOAL_REACHED_ENERGY.max(GOAL_MIN_THRESHOLD),
+        }
     }
 
     pub fn progress(&self) -> GoalProgress {
@@ -249,8 +331,10 @@ impl LatentAgent {
                 Phase::AwaitObservation => "awaiting observation",
                 Phase::Moving => "moving",
                 Phase::Converged => "converged",
+                Phase::Plateau => "plateau",
             }
             .to_string(),
+            reached_below: self.reach_threshold(),
             policy: if self.planned { "planned".into() } else { "random".into() },
             last_action: self.last_action,
             world: self.world.stats(),
@@ -418,7 +502,7 @@ mod tests {
 
         // Mode C: plan toward the goal; energy must drop substantially.
         let goal_pose = [0.4, -0.3, 0.3, 0.2, -0.2, 0.25];
-        agent.set_goal(observe(&goal_pose));
+        agent.set_goal(observe(&goal_pose), None);
         let start = energy(&observe(&joints), &observe(&goal_pose));
         for t in 100..260 {
             match agent.observe(&observe(&joints), joints, gripper, &safety, t, &mut rng) {

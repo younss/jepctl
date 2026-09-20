@@ -9,6 +9,7 @@
 pub mod controller;
 pub mod hal;
 pub mod safety;
+pub mod sim_view;
 pub mod world_model;
 
 use std::sync::Arc;
@@ -114,6 +115,8 @@ pub struct GoalProgress {
     pub convergence: f32,
     /// `idle`, `awaiting observation`, `moving`, `converged`.
     pub phase: String,
+    /// Energy under which the goal counts as reached (noise floor times 1.3).
+    pub reached_below: f32,
     /// `random` while the model is not ready, `planned` afterwards.
     pub policy: String,
     pub last_action: Option<[f32; world_model::ACTION_DIM]>,
@@ -142,6 +145,9 @@ pub struct RobotTelemetry {
     pub max_rad_per_s: f32,
     pub goal: GoalProgress,
     pub last_gesture: Option<String>,
+    /// Virtual backend: observations use a frozen camera frame as background.
+    pub freeze_background: bool,
+    pub has_background: bool,
     /// Monotonic tick counter (30 Hz).
     pub tick: u64,
     pub last_error: Option<String>,
@@ -166,6 +172,11 @@ pub struct RobotCore {
     pub last_error: Option<String>,
     /// Serial settings used when switching to the physical backend.
     pub hardware: hal::HardwareConfig,
+    /// Virtual backend only: draw the twin over a frozen camera frame instead of the
+    /// live one, so the only thing changing between observations is the arm itself.
+    pub freeze_background: bool,
+    /// The frozen frame (taken when a learning mode starts or a goal is captured).
+    pub background: Option<image::RgbImage>,
 }
 
 impl RobotCore {
@@ -186,6 +197,8 @@ impl RobotCore {
             tick: 0,
             last_error: None,
             hardware,
+            freeze_background: true,
+            background: None,
         }
     }
 
@@ -210,6 +223,8 @@ impl RobotCore {
                 g
             },
             last_gesture: self.last_gesture.clone(),
+            freeze_background: self.freeze_background,
+            has_background: self.background.is_some(),
             tick: self.tick,
             last_error: self.last_error.clone(),
         }

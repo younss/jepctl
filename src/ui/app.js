@@ -3058,6 +3058,34 @@
         robotDrawBox(viewProj, m4translate(tip[0], 0.004, tip[2]), [0.02, 0.004, 0.02], [0.3, 0.9, 0.5], 1);
     }
 
+    // Preview of the composited observation, refreshed at ~4 Hz while the camera runs.
+    async function robotRefreshAgentView() {
+        const img = document.getElementById("robot-agent-view");
+        const ph = document.getElementById("robot-agent-view-placeholder");
+        if (!img) return;
+        if (!state.isStreaming) {
+            if (ph) ph.style.display = "flex";
+            return;
+        }
+        if (robot.viewBusy) return;
+        robot.viewBusy = true;
+        try {
+            const res = await apiFetch("/api/robot/view");
+            if (res.ok) {
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                img.src = url;
+                if (robot.viewUrl) URL.revokeObjectURL(robot.viewUrl);
+                robot.viewUrl = url;
+                if (ph) ph.style.display = "none";
+            }
+        } catch (e) {
+            console.warn("agent view failed", e);
+        } finally {
+            robot.viewBusy = false;
+        }
+    }
+
     function robotAnimate() {
         robot.raf = null;
         if (state.activeSection !== "robot") return;
@@ -3184,6 +3212,11 @@
             gate.checked = t.safety_gate;
             gate.disabled = t.backend === "physical";
         }
+        const freezeBox = document.getElementById("toggle-robot-freeze");
+        if (freezeBox && document.activeElement !== freezeBox) {
+            freezeBox.checked = !!t.freeze_background;
+            freezeBox.disabled = t.backend === "physical";
+        }
         // E-stop
         const estopBanner = document.getElementById("robot-estop-banner");
         const resetBtn = document.getElementById("btn-robot-reset");
@@ -3218,7 +3251,7 @@
         const step = document.getElementById("robot-goal-step");
         const phase = document.getElementById("robot-goal-phase");
         const num = (v) => (v !== null && v !== undefined ? v.toFixed(4) : "--");
-        if (et) et.textContent = num(goal.current_energy);
+        if (et) et.textContent = goal.has_goal ? `${num(goal.current_energy)} (reached below ${num(goal.reached_below)})` : num(goal.current_energy);
         if (eb) eb.style.width = `${Math.round((goal.convergence || 0) * 100)}%`;
         if (best) best.textContent = num(goal.best_energy);
         if (rounds) rounds.textContent = String(goal.steps || 0);
@@ -3235,9 +3268,16 @@
         if (fit) fit.textContent = goal.world && goal.world.fit_error !== null && goal.world.fit_error !== undefined ? `${(100 * (1 - Math.min(1, goal.world.fit_error))).toFixed(0)}%` : "--";
         if (note) {
             if (t.last_error && t.last_error.startsWith("Learning needs the camera")) note.textContent = t.last_error;
-            else if ((t.mode === "exploring" || t.mode === "goal_seeking") && t.backend === "virtual") note.textContent = "Virtual arm: the camera does not see it, so the model only learns what changes in front of the camera. Use the physical arm for real learning.";
+            else if (goal.has_goal && goal.phase === "converged" && (goal.steps || 0) === 0) note.textContent = "The camera already sees the goal view, so there is nothing to reach yet. Scramble the pose.";
+            else if (goal.has_goal && goal.phase === "plateau") note.textContent = `Plateau: no improvement for ${60} steps. Best energy ${num(goal.best_energy)} is as close as this view and model get; it re-checks every second.`;
+            else if ((t.mode === "exploring" || t.mode === "goal_seeking") && t.backend === "virtual") note.textContent = "Virtual arm: the twin is drawn into the camera frame, so the agent learns how its joints change the picture over the real background.";
             else note.textContent = "";
         }
+        const stepDone = (id, on) => { const n = document.getElementById(id); if (n) n.classList.toggle("done", !!on); };
+        stepDone("robot-step-camera", state.isStreaming);
+        stepDone("robot-step-goal", goal.has_goal && t.mode === "goal_seeking");
+        stepDone("robot-step-scramble", goal.has_goal && (goal.steps || 0) > 0);
+        stepDone("robot-step-watch", goal.world && goal.world.ready);
         if (!robot.raf && state.activeSection === "robot") robot.raf = requestAnimationFrame(robotAnimate);
     }
 
@@ -3355,6 +3395,7 @@
             const n = document.getElementById(id);
             if (n) n.addEventListener("click", fn);
         };
+        const modeSel = document.getElementById("select-robot-mode");
         bind("btn-robot-backend-virtual", () => robotPost("/api/robot/target", { backend: "virtual" }, "Backend: WebGL simulator"));
         bind("btn-robot-backend-physical", async () => {
             const ok = await confirmDialog("Switch to the physical arm? Every command will be held by the safety gate until you approve it.", { title: "Physical backend", okLabel: "Switch", danger: false });
@@ -3370,12 +3411,33 @@
         bind("btn-robot-home", () => robotSendCommand([0, 0, 0, 0, 0, 0], 0.5, false));
         bind("btn-robot-goal", async () => {
             if (!(await robotEnsureCamera())) return;
-            await robotPost("/api/robot/goal", {}, "Goal captured from the camera");
+            const t = await robotPost("/api/robot/goal", {}, null);
+            if (!t) return;
+            await robotPost("/api/robot/mode", { mode: "goal_seeking" }, null);
+            if (modeSel) modeSel.value = "goal_seeking";
+            notify("Goal captured. Mode C is on: scramble the pose (or move the sliders) and the arm will try to bring the camera view back to this goal.", "success", 8000);
+        });
+        bind("btn-robot-scramble", () => {
+            const t = robot.telemetry;
+            if (!t) return;
+            const joints = t.limits.min.map((lo, i) => {
+                const hi = t.limits.max[i];
+                const span = Math.min(0.8, (hi - lo) / 2);
+                return Math.max(lo, Math.min(hi, (Math.random() * 2 - 1) * span));
+            });
+            robotSendCommand(joints, Math.random(), false);
+            notify("Pose scrambled. The arm now has to find its way back to the goal view.", "info", 4000);
         });
         bind("btn-robot-camera", async () => {
             if (state.isStreaming) stopLiveStream();
             else await robotEnsureCamera();
             robotUpdateCameraButton();
+        });
+        const freeze = document.getElementById("toggle-robot-freeze");
+        if (freeze) freeze.addEventListener("change", () => robotPost("/api/robot/mode", { mode: robot.telemetry ? robot.telemetry.mode : "manual", freeze_background: freeze.checked }, freeze.checked ? "Background frozen for virtual observations" : "Live background"));
+        bind("btn-robot-background", async () => {
+            if (!(await robotEnsureCamera())) return;
+            await robotPost("/api/robot/background", null, "Background refreshed from the camera");
         });
         bind("btn-robot-world-clear", async () => {
             const ok = await confirmDialog("Forget every learned transition? The arm will have to explore again before it can plan.", { title: "Forget world model", okLabel: "Forget" });
@@ -3392,7 +3454,6 @@
             showApiDialog("Command the arm", "Inference role. Joints in radians within the limits, gripper 0 to 1. With the physical backend the command waits for POST /api/robot/approve unless approved is true. Telemetry: GET /api/robot/status or the WebSocket /api/robot/ws.",
                 { method: "POST", path: "/api/robot/joints", json: { joints: t ? t.targets.map((v) => +v.toFixed(3)) : [0, 0, 0, 0, 0, 0], gripper: t ? +t.gripper_target.toFixed(2) : 0.5, approved: false } });
         });
-        const modeSel = document.getElementById("select-robot-mode");
         if (modeSel) {
             modeSel.addEventListener("change", async () => {
                 if ((modeSel.value === "exploring" || modeSel.value === "goal_seeking") && !(await robotEnsureCamera())) {
@@ -3420,6 +3481,7 @@
 
     async function robotEnterSection() {
         robotConnectWs();
+        if (!robot.viewTimer) robot.viewTimer = setInterval(robotRefreshAgentView, 250);
         try {
             const res = await apiFetch("/api/robot/gesture-map");
             if (res.ok) {
@@ -3434,6 +3496,10 @@
 
     function robotLeaveSection() {
         robotDisconnectWs();
+        if (robot.viewTimer) {
+            clearInterval(robot.viewTimer);
+            robot.viewTimer = null;
+        }
         if (robot.raf) {
             cancelAnimationFrame(robot.raf);
             robot.raf = null;

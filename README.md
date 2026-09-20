@@ -221,7 +221,9 @@ cargo run --release --features "metal serial"     # plus the physical arm over U
 - **Learn (exploring)**: the arm babbles with small random actions. After every move, once settled, the **camera** frame is embedded with the active JEPA model; the transition `(z_t, a, z_{t+1})` trains a latent world model `z_{t+1} = z_t + W[a; 1]` (ridge regression in embedding space, refit after every observation, persisted in `~/.jepctl/robot_world_model.json`). Nothing is predicted in pixel space: that is the JEPA principle applied to control.
 - **Mode C, reach a visual goal**: `POST /api/robot/goal` embeds what the camera sees now as `z_goal`. At each step the controller samples 96 candidate actions, predicts their outcome **inside the learned model**, executes the one with the lowest predicted energy `E = ||z - z_goal||_2 / sqrt(dim)` (the `/api/energy` metric, plus a little exploration noise), observes the real result and learns from it. Until 12 transitions exist the policy is random; the telemetry says which one is in use, and shows predicted versus observed energy so you can judge the model.
 
-The camera must see the arm for any of this to mean something. With the virtual backend the loop runs and the model only learns what changes in front of the camera; the tab says so. Use the physical arm, or aim the camera at the screen for a demonstration.
+**What the agent observes.** With the physical arm it is the raw camera frame (ROI applied). With the virtual backend the twin is **drawn into the camera frame** (same kinematics as the WebGL view, server side), so the picture depends on the arm's own joints and there is something to learn; by default the background is a frozen camera frame ("Freeze background") so that only the arm changes between observations. `GET /api/robot/view` shows exactly this picture; the tab previews it.
+
+Typical run in the simulator: 45 s of Learn, capture the goal at a pose, scramble, Mode C brings all six joints back within about 0.1 rad in 15 to 30 s with a model fit error around 0.05. The search stops on `converged` (energy below 2.5 times the camera noise floor) or `plateau` (60 steps without improvement); a single camera cannot disambiguate every pose, so a plateau at a view-equivalent pose is expected now and then.
 
 **API** (inference role unless noted)
 
@@ -235,6 +237,8 @@ The camera must see the arm for any of this to mean something. With the virtual 
 | POST / DELETE | `/api/robot/goal` | capture (`{ "image_base64"? }`, camera otherwise) / forget the latent goal |
 | POST | `/api/robot/observe` | feed one observation (`image_base64` for replays / external cameras); the server camera does this automatically |
 | GET / DELETE | `/api/robot/world-model` | learned transitions summary / forget everything learned (admin) |
+| GET | `/api/robot/view` | JPEG of what the agent observes (camera, ROI, twin overlay when virtual) |
+| POST | `/api/robot/background` | refresh the frozen background from the live camera (drops learned transitions, they were observed over the old one) |
 | POST | `/api/robot/e-stop` | engage the emergency stop |
 | POST | `/api/robot/reset-safety` (admin) | release it after inspection |
 | GET / PUT | `/api/robot/gesture-map` | gesture name to action mapping |

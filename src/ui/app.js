@@ -3154,6 +3154,7 @@
     function robotApplyTelemetry(t) {
         const prev = robot.telemetry;
         robot.telemetry = t;
+        robotUpdateCameraButton();
         if (!prev) {
             robot.shown = t.joints.slice();
             robot.shownGripper = t.gripper;
@@ -3282,6 +3283,28 @@
         robotSendCommand(joints, g, false);
     }
 
+    // Learning and goal capture observe through the server camera: start it on demand.
+    async function robotEnsureCamera() {
+        if (state.isStreaming) return true;
+        try {
+            await startLiveStream();
+            await new Promise((r) => setTimeout(r, 900));
+            return state.isStreaming;
+        } catch (e) {
+            notify(`Could not start the camera: ${e.message}`, "error");
+            return false;
+        }
+    }
+
+    function robotUpdateCameraButton() {
+        const text = document.getElementById("robot-camera-btn-text");
+        const btn = document.getElementById("btn-robot-camera");
+        if (!text || !btn) return;
+        text.textContent = state.isStreaming ? "Stop camera" : "Start camera";
+        btn.classList.toggle("btn-danger", state.isStreaming);
+        btn.classList.toggle("btn-outline", !state.isStreaming);
+    }
+
     async function robotPost(path, body, okMsg) {
         try {
             const res = await apiFetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
@@ -3346,7 +3369,13 @@
         bind("btn-robot-discard", () => robotPost("/api/robot/joints", { joints: robot.telemetry ? robot.telemetry.targets : [0, 0, 0, 0, 0, 0], gripper: robot.telemetry ? robot.telemetry.gripper_target : 0.5, approved: true }, "Pending command discarded"));
         bind("btn-robot-home", () => robotSendCommand([0, 0, 0, 0, 0, 0], 0.5, false));
         bind("btn-robot-goal", async () => {
+            if (!(await robotEnsureCamera())) return;
             await robotPost("/api/robot/goal", {}, "Goal captured from the camera");
+        });
+        bind("btn-robot-camera", async () => {
+            if (state.isStreaming) stopLiveStream();
+            else await robotEnsureCamera();
+            robotUpdateCameraButton();
         });
         bind("btn-robot-world-clear", async () => {
             const ok = await confirmDialog("Forget every learned transition? The arm will have to explore again before it can plan.", { title: "Forget world model", okLabel: "Forget" });
@@ -3364,7 +3393,15 @@
                 { method: "POST", path: "/api/robot/joints", json: { joints: t ? t.targets.map((v) => +v.toFixed(3)) : [0, 0, 0, 0, 0, 0], gripper: t ? +t.gripper_target.toFixed(2) : 0.5, approved: false } });
         });
         const modeSel = document.getElementById("select-robot-mode");
-        if (modeSel) modeSel.addEventListener("change", () => robotPost("/api/robot/mode", { mode: modeSel.value }, `Mode: ${modeSel.options[modeSel.selectedIndex].text}`));
+        if (modeSel) {
+            modeSel.addEventListener("change", async () => {
+                if ((modeSel.value === "exploring" || modeSel.value === "goal_seeking") && !(await robotEnsureCamera())) {
+                    modeSel.value = robot.telemetry ? robot.telemetry.mode : "manual";
+                    return;
+                }
+                robotPost("/api/robot/mode", { mode: modeSel.value }, `Mode: ${modeSel.options[modeSel.selectedIndex].text}`);
+            });
+        }
         const gate = document.getElementById("toggle-robot-gate");
         if (gate) gate.addEventListener("change", () => robotPost("/api/robot/mode", { mode: modeSel ? modeSel.value : "manual", safety_gate: gate.checked }));
         bind("btn-robot-gesture-map-save", async () => {

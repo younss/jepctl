@@ -76,8 +76,9 @@ fn solve(mut a: Vec<Vec<f32>>, mut b: Vec<f32>) -> Option<Vec<f32>> {
         b.swap(col, pivot);
         for row in col + 1..n {
             let f = a[row][col] / a[col][col];
-            for k in col..n {
-                a[row][k] -= f * a[col][k];
+            let pivot_row = a[col].clone();
+            for (k, v) in a[row].iter_mut().enumerate().skip(col) {
+                *v -= f * pivot_row[k];
             }
             b[row] -= f * b[col];
         }

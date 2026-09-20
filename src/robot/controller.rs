@@ -7,6 +7,7 @@
 //!    world model (`world_model.rs`), a predictor in embedding space;
 //! 4. plan: with a goal `z_goal`, candidate actions are evaluated inside the model and
 //!    the best one is executed; without a goal (Exploring) actions are random babbling.
+//!
 //! Energy `E = ||z - z_goal||_2 / sqrt(dim)` is the same metric as `POST /api/energy`.
 
 use std::collections::HashMap;

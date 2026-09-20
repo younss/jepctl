@@ -1,0 +1,189 @@
+//! 16-frame circular sliding window buffer for V-JEPA spatio-temporal inference.
+
+use std::collections::VecDeque;
+use std::io::Cursor;
+use std::sync::Arc;
+use base64::prelude::*;
+use candle_core::{Device, Tensor};
+use image::{imageops::FilterType, DynamicImage, ImageFormat, RgbImage};
+use tokio::sync::RwLock;
+
+use crate::config::RING_BUFFER_CAPACITY;
+use crate::media::image::preprocess_dynamic_image;
+use crate::types::JepaError;
+
+/// Side length of the "model view": the centre-cropped square every frame is
+/// reduced to before it is embedded.
+pub const MODEL_VIEW_SIZE: u32 = 224;
+
+/// Individual captured frame container
+#[derive(Clone)]
+pub struct FrameEntry {
+    pub rgb_image: RgbImage,
+    pub thumbnail_base64: String,
+    /// JPEG of exactly what the model receives (centre crop, 224x224) before
+    /// normalisation. Served to the UI so users can see what is being embedded.
+    pub model_view_jpeg: Arc<Vec<u8>>,
+    pub timestamp_ms: u64,
+    /// Monotonic sequence number assigned at push time.
+    pub sequence: u64,
+}
+
+/// Centre-crop a frame to a square and resize it to the model's input size.
+pub fn to_model_view(image: &RgbImage, size: u32) -> RgbImage {
+    let (w, h) = (image.width(), image.height());
+    let min_dim = w.min(h).max(1);
+    let sx = (w - min_dim) / 2;
+    let sy = (h - min_dim) / 2;
+    DynamicImage::ImageRgb8(image.clone())
+        .crop_imm(sx, sy, min_dim, min_dim)
+        .resize_exact(size, size, FilterType::CatmullRom)
+        .to_rgb8()
+}
+
+/// Circular sliding window ring buffer
+pub struct RingBuffer {
+    capacity: usize,
+    frames: VecDeque<FrameEntry>,
+    next_sequence: u64,
+}
+
+impl RingBuffer {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            capacity: if capacity == 0 { RING_BUFFER_CAPACITY } else { capacity },
+            frames: VecDeque::with_capacity(capacity),
+            next_sequence: 0,
+        }
+    }
+
+    /// Insert a new frame into circular buffer, automatically popping the oldest
+    pub fn push_frame(&mut self, image: RgbImage, timestamp_ms: u64) {
+        // Generate small thumbnail for UI scrubber
+        let dyn_img = DynamicImage::ImageRgb8(image.clone());
+        let thumb = dyn_img.resize_exact(96, 54, FilterType::Nearest);
+        let mut thumb_bytes = Cursor::new(Vec::new());
+        let _ = thumb.write_to(&mut thumb_bytes, ImageFormat::Jpeg);
+        let thumb_base64 = format!(
+            "data:image/jpeg;base64,{}",
+            BASE64_STANDARD.encode(thumb_bytes.into_inner())
+        );
+
+        let model_view = to_model_view(&image, MODEL_VIEW_SIZE);
+        let mut view_bytes = Cursor::new(Vec::new());
+        let _ = DynamicImage::ImageRgb8(model_view).write_to(&mut view_bytes, ImageFormat::Jpeg);
+
+        if self.frames.len() >= self.capacity {
+            self.frames.pop_front();
+        }
+
+        self.next_sequence += 1;
+        self.frames.push_back(FrameEntry {
+            rgb_image: image,
+            thumbnail_base64: thumb_base64,
+            model_view_jpeg: Arc::new(view_bytes.into_inner()),
+            timestamp_ms,
+            sequence: self.next_sequence,
+        });
+    }
+
+    /// Most recently pushed frame.
+    pub fn latest(&self) -> Option<&FrameEntry> {
+        self.frames.back()
+    }
+
+    /// Preprocess only the latest frame into an image tensor [1, 3, H, W].
+    pub fn latest_image_tensor(&self, target_h: u32, target_w: u32, device: &Device) -> Result<Tensor, JepaError> {
+        let entry = self
+            .latest()
+            .ok_or_else(|| JepaError::InvalidPayload("Ring buffer is empty".into()))?;
+        preprocess_dynamic_image(&DynamicImage::ImageRgb8(entry.rgb_image.clone()), target_w, target_h, device)
+    }
+
+    /// Retrieve the number of frames currently in the buffer
+    pub fn len(&self) -> usize {
+        self.frames.len()
+    }
+
+    /// Check if buffer is empty
+    pub fn is_empty(&self) -> bool {
+        self.frames.is_empty()
+    }
+
+    /// Retrieve list of thumbnail data URIs for UI visual scrubber
+    pub fn get_thumbnails(&self) -> Vec<String> {
+        self.frames.iter().map(|f| f.thumbnail_base64.clone()).collect()
+    }
+
+    /// Construct 5D spatio-temporal video tensor [1, 3, T, H, W] for V-JEPA
+    pub fn to_video_tensor(&self, target_h: u32, target_w: u32, device: &Device) -> Result<Tensor, JepaError> {
+        if self.frames.is_empty() {
+            return Err(JepaError::InvalidPayload("Ring buffer is empty".into()));
+        }
+
+        let mut frame_tensors = Vec::with_capacity(self.capacity);
+
+        // Collect existing frames
+        for entry in &self.frames {
+            let dyn_img = DynamicImage::ImageRgb8(entry.rgb_image.clone());
+            let tensor = preprocess_dynamic_image(&dyn_img, target_w, target_h, device)?; // [1, 3, H, W]
+            frame_tensors.push(tensor);
+        }
+
+        // Pad with latest frame if buffer is not yet full
+        while frame_tensors.len() < self.capacity {
+            if let Some(last) = frame_tensors.last().cloned() {
+                frame_tensors.push(last);
+            } else {
+                break;
+            }
+        }
+
+        // Stack across temporal dimension T: list of [1, 3, H, W] -> [1, 3, T, H, W]
+        // First stack frames to [T, 1, 3, H, W]
+        let stacked = Tensor::stack(&frame_tensors, 0)?; // [T, 1, 3, H, W]
+        let squeezed = stacked.squeeze(1)?; // [T, 3, H, W]
+        let permuted = squeezed.transpose(0, 1)?; // [3, T, H, W]
+        let video_5d = permuted.unsqueeze(0)?; // [1, 3, T, H, W]
+
+        Ok(video_5d)
+    }
+
+    /// Clear all frames
+    pub fn clear(&mut self) {
+        self.frames.clear();
+    }
+}
+
+pub type SharedRingBuffer = Arc<RwLock<RingBuffer>>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_view_is_square_centre_crop() {
+        let img = RgbImage::from_fn(640, 360, |x, _| if x < 140 || x >= 500 { image::Rgb([255, 0, 0]) } else { image::Rgb([0, 255, 0]) });
+        let view = to_model_view(&img, 224);
+        assert_eq!((view.width(), view.height()), (224, 224));
+        // Red side bands are cropped away: every pixel is green.
+        assert!(view.pixels().all(|p| p[1] > 200 && p[0] < 50));
+    }
+
+    #[test]
+    fn ring_buffer_keeps_capacity_and_sequence() {
+        let mut rb = RingBuffer::new(3);
+        for i in 0..5 {
+            rb.push_frame(RgbImage::new(8, 8), i);
+        }
+        assert_eq!(rb.len(), 3);
+        assert_eq!(rb.latest().unwrap().sequence, 5);
+        assert_eq!(rb.latest().unwrap().timestamp_ms, 4);
+        assert!(!rb.latest().unwrap().model_view_jpeg.is_empty());
+
+        let t = rb.to_video_tensor(16, 16, &Device::Cpu).unwrap();
+        assert_eq!(t.dims(), &[1, 3, 3, 16, 16]);
+        let img = rb.latest_image_tensor(16, 16, &Device::Cpu).unwrap();
+        assert_eq!(img.dims(), &[1, 3, 16, 16]);
+    }
+}

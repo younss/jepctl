@@ -1,0 +1,23 @@
+[Unit]
+Description=JEPA Local Machine Learning Representation Daemon
+Documentation=https://github.com/facebookresearch/jepa
+After=network.target sound.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/jepa serve --host 127.0.0.1 --port 11435
+Restart=on-failure
+RestartSec=5s
+Environment=RUST_LOG=info
+StandardOutput=journal
+StandardError=journal
+
+# Security and Sandbox Restrictions
+ProtectSystem=strict
+ProtectHome=read-write
+ReadWritePaths=%h/.jepa
+NoNewPrivileges=true
+DevicePolicy=auto
+
+[Install]
+WantedBy=default.target

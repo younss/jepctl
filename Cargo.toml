@@ -1,0 +1,61 @@
+[package]
+name = "jepa"
+version = "0.1.0"
+edition = "2021"
+description = "High-performance local runtime, CLI, and testbench for Joint-Embedding Predictive Architectures"
+authors = ["JEPA Engineering Team"]
+license = "Apache-2.0"
+
+[features]
+default = ["metal"]
+metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
+cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
+
+[dependencies]
+# Inference engine
+candle-core = "0.11.0"
+candle-nn = "0.11.0"
+candle-transformers = "0.11.0"
+
+# Async runtime & Web server
+tokio = { version = "1.53.1", features = ["full"] }
+tokio-stream = { version = "0.1.19", features = ["sync"] }
+axum = { version = "0.8.9", features = ["multipart", "tokio", "json"] }
+tower = "0.5.3"
+tower-http = { version = "0.7.1", features = ["cors", "trace", "limit"] }
+futures-util = "0.3.34"
+
+# Logging and Diagnostics
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+# CLI & Configuration
+clap = { version = "4.6.7", features = ["derive", "env"] }
+dirs = "7.0.0"
+
+# Serialization & Cryptography
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+subtle = "2.6.1"
+rand = "0.10.2"
+hex = "0.4.3"
+base64 = "0.22"
+uuid = { version = "1.26.1", features = ["v4", "rng"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+
+# Media & Hardware
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
+nokhwa = { version = "0.10.11", features = ["input-native"] }
+sysinfo = "0.39.6"
+
+# Hub Client & Network
+hf-hub = { version = "1.0.0", features = ["rustls-tls"] }
+reqwest = { version = "0.13.5", features = ["json", "stream"] }
+
+# Error Handling & Utilities
+anyhow = "1.0.104"
+thiserror = "2.0.20"
+async-trait = "0.1.92"
+async-stream = "0.3.6"
+wry = "0.57.0"
+tao = "0.37.0"

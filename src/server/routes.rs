@@ -1,0 +1,67 @@
+//! Axum router configuration binding REST endpoints, SSE streams, and embedded UI.
+
+use axum::routing::{delete, get, post};
+use axum::Router;
+
+use crate::server::gesture_handlers::{
+    handle_camera_frame, handle_clear_gestures, handle_create_gesture, handle_delete_gesture,
+    handle_list_gestures, handle_match_gesture,
+};
+use crate::server::handlers::{
+    handle_audit, handle_camera_start, handle_camera_stop, handle_cameras,
+    handle_create_key, handle_delete_model, handle_delete_model_root, handle_embed, handle_embed_stream,
+    handle_energy, handle_get_session_token, handle_list_keys, handle_load_model, handle_pull,
+    handle_register_manifest, handle_revoke_key, handle_ring_buffer,
+    handle_get_settings, handle_save_settings, handle_status, handle_tags, handle_unload_model, AppState,
+};
+use crate::server::ui_assets::{serve_app_js, serve_index, serve_styles};
+
+/// Assemble all application routes and static assets into an Axum Router
+pub fn create_router(state: AppState) -> Router {
+    Router::new()
+        // Embedded Single-Page Application
+        .route("/", get(serve_index))
+        .route("/index.html", get(serve_index))
+        .route("/styles.css", get(serve_styles))
+        .route("/app.js", get(serve_app_js))
+
+        // API: System & Catalog
+        .route("/api/status", get(handle_status))
+        .route("/api/tags", get(handle_tags))
+        .route("/api/auth/token", get(handle_get_session_token))
+        .route("/api/pull", post(handle_pull))
+        .route("/api/models", delete(handle_delete_model_root))
+        .route("/api/models/load", post(handle_load_model))
+        .route("/api/models/unload", post(handle_unload_model))
+        .route("/api/models/{*name}", delete(handle_delete_model))
+        .route("/api/manifests", post(handle_register_manifest))
+
+        // API: Inference & Streaming
+        .route("/api/embed", post(handle_embed))
+        .route("/api/embed/stream", get(handle_embed_stream).post(handle_embed_stream))
+        .route("/api/energy", post(handle_energy))
+
+        // API: Camera & Ring Buffer
+        .route("/api/cameras", get(handle_cameras))
+        .route("/api/camera/start", post(handle_camera_start))
+        .route("/api/camera/stop", post(handle_camera_stop))
+        .route("/api/ring-buffer", get(handle_ring_buffer))
+        .route("/api/camera/frame", get(handle_camera_frame))
+
+        // API: Security, Keys & Audit
+        .route("/api/keys", post(handle_create_key).get(handle_list_keys))
+        .route("/api/keys/{prefix}", delete(handle_revoke_key))
+        .route("/api/audit", get(handle_audit))
+
+        // API: Settings
+        .route("/api/settings", get(handle_get_settings).post(handle_save_settings))
+
+        // API: Gestures (Few-Shot Latent Matching)
+        .route("/api/gestures", post(handle_create_gesture).get(handle_list_gestures).delete(handle_clear_gestures))
+        .route("/api/gestures/match", post(handle_match_gesture))
+        .route("/api/gestures/{name}", delete(handle_delete_gesture))
+
+        // Fallback for SPA routing
+        .fallback(serve_index)
+        .with_state(state)
+}

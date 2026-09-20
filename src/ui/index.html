@@ -1,0 +1,1042 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JEPA Runtime - Local Representation Learning</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="dark-theme">
+    <!-- Global Header -->
+    <header class="app-header">
+        <div class="header-left">
+            <div class="brand">
+                <span class="logo-symbol">&#9670;</span>
+                <span class="logo-title">JEPA</span>
+                <span class="version-tag">v0.1.0</span>
+            </div>
+            <div class="status-indicator">
+                <span class="pulse-dot" id="status-dot"></span>
+                <span id="daemon-status-text">Daemon: Connected</span>
+            </div>
+        </div>
+
+        <div class="header-center">
+            <div class="hardware-pill" id="hardware-badge">
+                <span class="icon">&#9881;</span>
+                <span id="hardware-name">Detecting Hardware...</span>
+            </div>
+            <div class="memory-monitor">
+                <div class="mem-label">
+                    <span>Memory</span>
+                    <span id="mem-stats">0 GB / 0 GB (0%)</span>
+                </div>
+                <div class="progress-track">
+                    <div class="progress-fill" id="mem-progress" style="width: 0%;"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="header-right">
+            <div class="active-model-pill">
+                <span class="model-status-label">Active:</span>
+                <span class="model-name-text" id="header-active-model">None</span>
+                <button class="btn-sm btn-outline" id="btn-header-unload" style="display: none;">Unload</button>
+            </div>
+        </div>
+    </header>
+
+    <div class="app-body">
+        <!-- Persistent Navigation Sidebar -->
+        <nav class="sidebar">
+            <div class="nav-group-title">Navigation</div>
+            <ul class="nav-list">
+                <li class="nav-item active" data-section="overview">
+                    <span class="nav-icon">&#9638;</span>
+                    <span class="nav-text">1. Overview</span>
+                </li>
+                <li class="nav-item" data-section="models">
+                    <span class="nav-icon">&#128451;</span>
+                    <span class="nav-text">2. Models</span>
+                </li>
+                <li class="nav-item" data-section="image-playground">
+                    <span class="nav-icon">&#128444;</span>
+                    <span class="nav-text">3. Image Playground</span>
+                </li>
+                <li class="nav-item" data-section="video-stream">
+                    <span class="nav-icon">&#127916;</span>
+                    <span class="nav-text">4. Video &amp; Camera</span>
+                </li>
+                <li class="nav-item" data-section="anomaly-monitor">
+                    <span class="nav-icon">&#9889;</span>
+                    <span class="nav-text">5. Anomaly &amp; Energy</span>
+                </li>
+                <li class="nav-item" data-section="security">
+                    <span class="nav-icon">&#128274;</span>
+                    <span class="nav-text">6. Security &amp; Keys</span>
+                </li>
+                <li class="nav-item" data-section="settings">
+                    <span class="nav-icon">&#9881;</span>
+                    <span class="nav-text">7. Settings</span>
+                </li>
+                <li class="nav-item" data-section="gestures">
+                    <span class="nav-icon">&#9995;</span>
+                    <span class="nav-text">8. Gesture Sandbox</span>
+                </li>
+            </ul>
+
+            <div class="sidebar-footer">
+                <div class="security-chip">
+                    <span id="auth-status-chip">Auth: Active</span>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Alert Banner for Anomaly Detection -->
+            <div class="anomaly-banner" id="anomaly-alert-banner" style="display: none;">
+                <span class="alert-icon">&#9888;</span>
+                <span class="alert-msg">ANOMALY DETECTED: Latent energy distance exceeded alert threshold!</span>
+            </div>
+
+            <!-- SECTION 1: OVERVIEW -->
+            <section class="content-section active" id="section-overview">
+                <div class="section-title">
+                    <h2>System Dashboard &amp; Telemetry</h2>
+                    <p>Real-time telemetry and forward-pass metrics for local JEPA inference runtime.</p>
+                </div>
+
+                <div class="kpi-grid">
+                    <div class="kpi-card">
+                        <div class="kpi-title">Inference Latency</div>
+                        <div class="kpi-value" id="kpi-latency">-- ms</div>
+                        <div class="kpi-sub">Forward pass duration</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-title">Stream Throughput</div>
+                        <div class="kpi-value" id="kpi-fps">-- FPS</div>
+                        <div class="kpi-sub">Continuous spatio-temporal rate</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-title">Total Embeddings</div>
+                        <div class="kpi-value" id="kpi-total-embeddings">0</div>
+                        <div class="kpi-sub">Vectors computed this session</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-title">Daemon Uptime</div>
+                        <div class="kpi-value" id="kpi-uptime">00:00:00</div>
+                        <div class="kpi-sub">Active process duration</div>
+                    </div>
+                </div>
+
+                <div class="telemetry-grid">
+                    <div class="card">
+                        <h3>Hardware Telemetry</h3>
+                        <div class="info-table">
+                            <div class="row">
+                                <span class="lbl">Compute Accelerator:</span>
+                                <span class="val" id="telemetry-device">--</span>
+                            </div>
+                            <div class="row">
+                                <span class="lbl">Acceleration Engine:</span>
+                                <span class="val" id="telemetry-backend">--</span>
+                            </div>
+                            <div class="row">
+                                <span class="lbl">Memory Architecture:</span>
+                                <span class="val" id="telemetry-mem-arch">--</span>
+                            </div>
+                            <div class="row">
+                                <span class="lbl">Host OS Platform:</span>
+                                <span class="val" id="telemetry-platform">--</span>
+                            </div>
+                            <div class="row">
+                                <span class="lbl">CPU Core Allocation:</span>
+                                <span class="val" id="telemetry-cpu">--</span>
+                            </div>
+                            <div class="row">
+                                <span class="lbl">Unified / System Memory:</span>
+                                <span class="val" id="telemetry-mem">--</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h3>Quick Actions</h3>
+                        <p>Fast launch controls for common tasks.</p>
+                        <div class="quick-actions-row">
+                            <button class="btn btn-primary" id="btn-quick-camera">Launch Camera Playground</button>
+                            <button class="btn btn-secondary" id="btn-quick-pull-ijepa">Pull I-JEPA (ViT-H/14)</button>
+                            <button class="btn btn-secondary" id="btn-quick-pull-vjepa">Pull V-JEPA (ViT-L/16)</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SECTION 2: MODELS -->
+            <section class="content-section" id="section-models">
+                <div class="section-title">
+                    <h2>Models Catalog &amp; Manager</h2>
+                    <p>Manage installed checkpoints, pull verified weights from Hugging Face, or construct custom Jepafile manifests.</p>
+                </div>
+
+                <!-- Model Pull Bar -->
+                <div class="card">
+                    <h3>Pull Model from Hugging Face</h3>
+                    <div class="pull-bar">
+                        <input type="text" id="pull-repo-input" placeholder="e.g. facebook/ijepa_vith14_1k or facebookresearch/jepa" class="input-text">
+                        <button class="btn btn-primary" id="btn-start-pull">Pull Model</button>
+                    </div>
+
+                    <div class="pull-progress-container" id="pull-progress-box" style="display: none;">
+                        <div class="pull-meta">
+                            <span id="pull-status-text">Downloading...</span>
+                            <span id="pull-speed-text">0.0 MB/s</span>
+                        </div>
+                        <div class="progress-track">
+                            <div class="progress-fill" id="pull-progress-fill" style="width: 0%;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Verified Remote Catalog -->
+                <div class="card">
+                    <h3>Verified Catalog Browser</h3>
+                    <p>One-click installation for tested Vision Transformers and Joint-Embedding Predictive Architectures.</p>
+                    <div class="verified-grid">
+                        <div class="verified-card">
+                            <div class="badge-row">
+                                <span class="badge badge-image">Google</span>
+                                <span class="badge badge-dim">768 Dims</span>
+                            </div>
+                            <h4>google/vit-base-patch16-224</h4>
+                            <p>Google Vision Transformer Base (ViT-B/16). 86M parameters. Standard ImageNet-21k pre-trained architecture.</p>
+                            <div class="card-action">
+                                <button class="btn btn-sm btn-primary" data-pull="google/vit-base-patch16-224">Pull Checkpoint</button>
+                            </div>
+                        </div>
+
+                        <div class="verified-card">
+                            <div class="badge-row">
+                                <span class="badge badge-image">Google</span>
+                                <span class="badge badge-dim">768 Dims</span>
+                            </div>
+                            <h4>google/siglip-base-patch16-224</h4>
+                            <p>Google SigLIP Base (ViT-B/16). 86M parameters. Sigmoid loss multimodal vision encoder.</p>
+                            <div class="card-action">
+                                <button class="btn btn-sm btn-primary" data-pull="google/siglip-base-patch16-224">Pull Checkpoint</button>
+                            </div>
+                        </div>
+
+                        <div class="verified-card">
+                            <div class="badge-row">
+                                <span class="badge badge-image">Microsoft</span>
+                                <span class="badge badge-dim">768 Dims</span>
+                            </div>
+                            <h4>microsoft/beit-base-patch16-224</h4>
+                            <p>Microsoft BEiT Base (ViT-B/16). 86M parameters. Self-supervised masked image modeling representation.</p>
+                            <div class="card-action">
+                                <button class="btn btn-sm btn-primary" data-pull="microsoft/beit-base-patch16-224">Pull Checkpoint</button>
+                            </div>
+                        </div>
+
+                        <div class="verified-card">
+                            <div class="badge-row">
+                                <span class="badge badge-image">TIMM</span>
+                                <span class="badge badge-dim">768 Dims</span>
+                            </div>
+                            <h4>timm/vit_base_patch16_224.augreg_in21k</h4>
+                            <p>TIMM Vision Transformer Base AugReg (ViT-B/16). 86M parameters. Augmented regularization checkpoint.</p>
+                            <div class="card-action">
+                                <button class="btn btn-sm btn-primary" data-pull="timm/vit_base_patch16_224.augreg_in21k">Pull Checkpoint</button>
+                            </div>
+                        </div>
+
+                        <div class="verified-card">
+                            <div class="badge-row">
+                                <span class="badge badge-image">Meta</span>
+                                <span class="badge badge-dim">384 Dims</span>
+                            </div>
+                            <h4>facebook/dinov2-small</h4>
+                            <p>Meta DINOv2 Small (ViT-S/14). 22M parameters. Ultra-fast self-supervised vision features with 14x14 patches.</p>
+                            <div class="card-action">
+                                <button class="btn btn-sm btn-primary" data-pull="facebook/dinov2-small">Pull Checkpoint</button>
+                            </div>
+                        </div>
+
+                        <div class="verified-card">
+                            <div class="badge-row">
+                                <span class="badge badge-image">Meta</span>
+                                <span class="badge badge-dim">768 Dims</span>
+                            </div>
+                            <h4>facebook/dinov2-base</h4>
+                            <p>Meta DINOv2 Base (ViT-B/14). 86M parameters. High-accuracy self-supervised representations with 14x14 patches.</p>
+                            <div class="card-action">
+                                <button class="btn btn-sm btn-primary" data-pull="facebook/dinov2-base">Pull Checkpoint</button>
+                            </div>
+                        </div>
+
+                        <div class="verified-card">
+                            <div class="badge-row">
+                                <span class="badge badge-image">Meta</span>
+                                <span class="badge badge-dim">768 Dims</span>
+                            </div>
+                            <h4>facebook/ijepa_vitb16_1k</h4>
+                            <p>I-JEPA Vision Transformer Base (ViT-B/16). 86M parameters. Lightweight local predictive testing checkpoint.</p>
+                            <div class="card-action">
+                                <button class="btn btn-sm btn-primary" data-pull="facebook/ijepa_vitb16_1k">Pull Checkpoint</button>
+                            </div>
+                        </div>
+
+                        <div class="verified-card">
+                            <div class="badge-row">
+                                <span class="badge badge-image">Meta</span>
+                                <span class="badge badge-dim">1280 Dims</span>
+                            </div>
+                            <h4>facebook/ijepa_vith14_1k</h4>
+                            <p>I-JEPA Vision Transformer Huge (ViT-H/14). 632M parameters. 14x14 patch resolution.</p>
+                            <div class="card-action">
+                                <button class="btn btn-sm btn-primary" data-pull="facebook/ijepa_vith14_1k">Pull Checkpoint</button>
+                            </div>
+                        </div>
+
+                        <div class="verified-card">
+                            <div class="badge-row">
+                                <span class="badge badge-video">Meta</span>
+                                <span class="badge badge-dim">1024 Dims</span>
+                            </div>
+                            <h4>facebookresearch/jepa:vjepa_vitl16</h4>
+                            <p>V-JEPA Spatio-Temporal Video Transformer Large (ViT-L/16). 307M parameters. 16-frame sliding tubelets.</p>
+                            <div class="card-action">
+                                <button class="btn btn-sm btn-primary" data-pull="facebookresearch/jepa:vjepa_vitl16">Pull Checkpoint</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Installed Models Table -->
+                <div class="card">
+                    <h3>Installed Models</h3>
+                    <table class="data-table" id="table-installed-models">
+                        <thead>
+                            <tr>
+                                <th>Model Name</th>
+                                <th>Modality</th>
+                                <th>Embedding Dim</th>
+                                <th>Params</th>
+                                <th>Disk Size</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="installed-models-tbody">
+                            <tr>
+                                <td colspan="6" class="text-center">Loading models catalog...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Custom Jepafile Creator -->
+                <div class="card">
+                    <h3>Custom Jepafile Manifest Creator</h3>
+                    <p>Construct and register custom manifests with specific patch sizes, normalization targets, and architectures.</p>
+                    <div class="editor-wrap">
+                        <textarea id="jepafile-json-editor" class="code-editor" rows="10">{
+  "name": "custom/my_ijepa_model",
+  "repo_id": "custom/my_ijepa_model",
+  "architecture": "ViT-B/16",
+  "modality": "image",
+  "patch_size": 16,
+  "embed_dim": 768,
+  "num_layers": 12,
+  "num_heads": 12,
+  "image_size": 224,
+  "parameter_count": "86M"
+}</textarea>
+                        <div class="editor-buttons">
+                            <button class="btn btn-primary" id="btn-save-jepafile">Register Custom Manifest</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SECTION 3: IMAGE PLAYGROUND -->
+            <section class="content-section" id="section-image-playground">
+                <div class="section-title">
+                    <h2>Image Playground (I-JEPA Testing)</h2>
+                    <p>Drag and drop images to compute latent embeddings and inspect ViT patch grid overlays.</p>
+                </div>
+
+                <div class="playground-layout">
+                    <!-- Left: Upload and Canvas -->
+                    <div class="playground-left">
+                        <div class="dropzone" id="image-dropzone">
+                            <input type="file" id="image-file-input" accept="image/png, image/jpeg, image/webp" style="display: none;">
+                            <div class="dropzone-prompt">
+                                <span class="dropzone-icon">&#128247;</span>
+                                <p><strong>Drag &amp; Drop Image</strong> or click to browse</p>
+                                <span class="dropzone-hint">Supports PNG, JPEG, WebP (Max: 20 MB)</span>
+                            </div>
+                        </div>
+
+                        <div class="canvas-container" id="canvas-wrapper" style="display: none;">
+                            <div class="canvas-header">
+                                <span>Inspection Canvas (ViT Patch Grid Overlay)</span>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="toggle-patch-grid" checked> Show Patch Grid
+                                </label>
+                            </div>
+                            <div class="canvas-viewport">
+                                <canvas id="image-inspect-canvas" width="224" height="224"></canvas>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right: Output Panel -->
+                    <div class="playground-right">
+                        <div class="card">
+                            <h3>Embedding Output</h3>
+                            <div class="meta-row">
+                                <span class="meta-item">Model: <strong id="out-model-name">--</strong></span>
+                                <span class="meta-item">Dimension: <strong id="out-embed-dim">--</strong></span>
+                                <span class="meta-item">Latency: <strong id="out-embed-latency">-- ms</strong></span>
+                            </div>
+
+                            <div class="vector-preview-section">
+                                <label>Pooled Vector Heatmap Preview:</label>
+                                <canvas id="heatmap-canvas" width="400" height="24"></canvas>
+                            </div>
+
+                            <div class="vector-numeric-section">
+                                <div class="numeric-header">
+                                    <label>Raw Numeric Array (Sample):</label>
+                                    <div class="btn-group">
+                                        <button class="btn btn-sm btn-secondary" id="btn-copy-vector">Copy Vector</button>
+                                        <button class="btn btn-sm btn-secondary" id="btn-export-json">Export JSON</button>
+                                    </div>
+                                </div>
+                                <textarea id="vector-numeric-view" class="code-editor" rows="8" readonly placeholder="Run an image embedding to view output vectors..."></textarea>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SECTION 4: VIDEO & CAMERA STREAM -->
+            <section class="content-section" id="section-video-stream">
+                <div class="section-title">
+                    <h2>Video &amp; Camera Stream (V-JEPA Testing)</h2>
+                    <p>Continuous spatio-temporal video embedding stream using 16-frame sliding ring buffer over Server-Sent Events.</p>
+                </div>
+
+                <div class="stream-control-card card">
+                    <div class="stream-controls-row">
+                        <div class="control-item">
+                            <label>Input Source:</label>
+                            <div class="segmented-control">
+                                <button class="segment-btn active" data-source="camera">Live Web Camera</button>
+                                <button class="segment-btn" data-source="video">Upload MP4 / WebM</button>
+                            </div>
+                        </div>
+
+                        <div class="control-item" id="camera-select-wrap">
+                            <label>Camera Device:</label>
+                            <select id="camera-device-select" class="select-input">
+                                <option value="0">Detecting cameras...</option>
+                            </select>
+                        </div>
+
+                        <div class="control-item">
+                            <label>Target Frame Rate:</label>
+                            <select id="stream-fps-select" class="select-input">
+                                <option value="5">5 FPS (Resource Saver)</option>
+                                <option value="10" selected>10 FPS (Balanced)</option>
+                                <option value="15">15 FPS (High Performance)</option>
+                            </select>
+                        </div>
+
+                        <div class="control-item actions-align">
+                            <button class="btn btn-primary" id="btn-stream-toggle">Start Live Stream</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Visual 16-Frame Sliding Ring Buffer Scrubber Strip -->
+                <div class="card">
+                    <div class="buffer-header">
+                        <h3>Visual Sliding Ring Buffer (16 Temporal Frames)</h3>
+                        <span class="buffer-badge" id="buffer-count-badge">Buffer: 0 / 16 Frames</span>
+                    </div>
+                    <div class="scrubber-strip" id="scrubber-strip-container">
+                        <!-- 16 frame thumbnail items rendered dynamically -->
+                    </div>
+                </div>
+
+                <!-- Live Stream Feeds and Telemetry -->
+                <div class="stream-layout">
+                    <div class="card stream-preview-card">
+                        <h3>Live Camera Preview</h3>
+                        <div class="video-preview-wrapper">
+                            <video id="webcam-preview-element" autoplay playsinline muted style="display: none;"></video>
+                            <canvas id="stream-feed-canvas" width="640" height="360" style="display: none;"></canvas>
+                            <div id="preview-placeholder" class="preview-empty-text">Camera stream inactive. Click &quot;Start Live Stream&quot; above.</div>
+                        </div>
+                    </div>
+
+                    <div class="card stream-sse-card">
+                        <div class="sse-header">
+                            <h3>Real-Time SSE Vector Stream</h3>
+                            <button class="btn btn-sm btn-outline" id="btn-clear-sse">Clear Stream</button>
+                        </div>
+                        <div class="sse-log-box" id="sse-stream-log">
+                            <div class="sse-placeholder">Awaiting live stream connection...</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SECTION 5: ANOMALY & ENERGY MONITOR -->
+            <section class="content-section" id="section-anomaly-monitor">
+                <div class="section-title">
+                    <h2>Anomaly &amp; Energy Monitor</h2>
+                    <p>Detect physical state changes by measuring continuous latent energy distance against a locked nominal baseline.</p>
+                </div>
+
+                <div class="card anomaly-controls-card">
+                    <div class="anomaly-controls-row">
+                        <button class="btn btn-primary" id="btn-lock-baseline">
+                            <span class="btn-icon">&#128274;</span> Lock Current State as Nominal Baseline
+                        </button>
+                        <div class="baseline-status">
+                            <span>Nominal Baseline:</span>
+                            <strong id="baseline-status-label">Not Locked</strong>
+                        </div>
+                        <div class="threshold-control-group">
+                            <label>Alert Threshold (Energy Distance):</label>
+                            <input type="range" id="slider-threshold" min="0.05" max="1.5" step="0.01" value="0.45" class="slider">
+                            <span class="threshold-val" id="val-threshold">0.45</span>
+                        </div>
+                    </div>
+
+                    <div class="webhook-row">
+                        <label>Alert Webhook Trigger (Optional POST URL):</label>
+                        <input type="url" id="input-webhook-url" placeholder="https://api.external.com/alerts/webhook" class="input-text">
+                        <button class="btn btn-secondary" id="btn-save-webhook">Save Webhook</button>
+                    </div>
+                </div>
+
+                <!-- Real-time Energy Chart -->
+                <div class="card">
+                    <div class="chart-header">
+                        <h3>Continuous Latent Energy Distance</h3>
+                        <div class="chart-legend">
+                            <span class="legend-item"><span class="legend-dot dot-energy"></span> Energy Distance (L2 / Cosine)</span>
+                            <span class="legend-item"><span class="legend-dot dot-threshold"></span> Alert Threshold</span>
+                        </div>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="energy-chart-canvas" width="900" height="280"></canvas>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SECTION 6: SECURITY & API KEYS -->
+            <section class="content-section" id="section-security">
+                <div class="section-title">
+                    <h2>Security, API Tokens &amp; Audit Logs</h2>
+                    <p>Strict local security controls, role-based access control (RBAC), and network binding policies.</p>
+                </div>
+
+                <!-- Network Binding Policy -->
+                <div class="card">
+                    <h3>Network Binding &amp; Access Policy</h3>
+                    <div class="policy-row">
+                        <div class="policy-info">
+                            <strong>Local Loopback Only (127.0.0.1)</strong>
+                            <p>Restrict runtime access exclusively to localhost connections. Maximum security.</p>
+                        </div>
+                        <label class="switch">
+                            <input type="checkbox" id="toggle-lan-access">
+                            <span class="slider-round"></span>
+                        </label>
+                    </div>
+                    <div class="lan-warning" id="lan-warning-box" style="display: none;">
+                        &#9888; Warning: Enabling LAN access (0.0.0.0) permits external devices on your network to invoke inference. Authentication is strictly enforced.
+                    </div>
+                </div>
+
+                <!-- Active API Keys Table -->
+                <div class="card">
+                    <div class="card-header-actions">
+                        <h3>Active API Tokens</h3>
+                        <button class="btn btn-primary" id="btn-open-create-key">Generate New API Token</button>
+                    </div>
+                    <table class="data-table" id="table-api-keys">
+                        <thead>
+                            <tr>
+                                <th>Key Prefix</th>
+                                <th>Name</th>
+                                <th>Assigned Role</th>
+                                <th>Created</th>
+                                <th>Expires</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="api-keys-tbody">
+                            <tr>
+                                <td colspan="6" class="text-center">Loading API tokens...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Rolling Audit Log -->
+                <div class="card">
+                    <div class="card-header-actions">
+                        <h3>Audit Log (Last 100 API Calls)</h3>
+                        <button class="btn btn-sm btn-outline" id="btn-refresh-audit">Refresh Log</button>
+                    </div>
+                    <div class="audit-log-table-wrap">
+                        <table class="data-table" id="table-audit-log">
+                            <thead>
+                                <tr>
+                                    <th>Timestamp</th>
+                                    <th>Method</th>
+                                    <th>Endpoint</th>
+                                    <th>Client IP</th>
+                                    <th>Status</th>
+                                    <th>Latency</th>
+                                </tr>
+                            </thead>
+                            <tbody id="audit-log-tbody">
+                                <tr>
+                                    <td colspan="6" class="text-center">No API calls recorded yet.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SECTION 7: SETTINGS -->
+            <section class="content-section" id="section-settings">
+                <div class="section-title">
+                    <h2>Runtime Settings &amp; Configuration</h2>
+                    <p>Customize compute backends, GPU memory ceilings, and storage paths.</p>
+                </div>
+
+                <div class="card">
+                    <h3>Execution &amp; Memory Settings</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>Compute Acceleration Backend:</label>
+                            <select id="settings-backend" class="select-input">
+                                <option value="auto">Auto-Detect (Metal -> CUDA -> CPU)</option>
+                                <option value="metal">Force Apple Silicon Metal</option>
+                                <option value="cuda">Force NVIDIA CUDA</option>
+                                <option value="cpu">Force CPU Fallback</option>
+                            </select>
+                            <span class="field-hint">Requires daemon restart to apply backend switches.</span>
+                        </div>
+
+                        <div class="form-group">
+                            <label>GPU Memory High-Watermark Ratio:</label>
+                            <input type="number" id="settings-mem-watermark" min="0.1" max="0.95" step="0.05" value="0.80" class="input-text">
+                            <span class="field-hint">Fraction of total unified memory/VRAM allowed before eviction (e.g. 0.80 = 80%).</span>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Idle Model Unload Timeout:</label>
+                            <select id="settings-idle-timeout" class="select-input">
+                                <option value="5">5 Minutes</option>
+                                <option value="30" selected>30 Minutes</option>
+                                <option value="0">Never Unload</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Local Storage Directory (~/.jepa):</label>
+                            <input type="text" id="settings-storage-dir" class="input-text" readonly value="~/.jepa">
+                            <span class="field-hint">Configured via dirs cross-platform resolution.</span>
+                        </div>
+                    </div>
+
+                    <div class="form-actions">
+                        <button class="btn btn-primary" id="btn-save-settings">Save Settings</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SECTION 8: GESTURE SANDBOX -->
+            <section class="content-section" id="section-gestures">
+                <div class="section-title">
+                    <h2>Few-Shot Gesture Sandbox</h2>
+                    <p>Reconnaissance de postures sans reentrainement : chaque geste est un prototype (moyenne d'embeddings de reference) compare a la frame courante dans l'espace latent du modele.</p>
+                </div>
+
+                <!-- Active Model Selection & Control Bar -->
+                <div class="card gesture-model-bar">
+                    <div class="gesture-model-bar-row">
+                        <div class="gesture-model-bar-left">
+                            <label for="select-gesture-active-model">Modele actif :</label>
+                            <select id="select-gesture-active-model" class="select-input">
+                                <option value="">Chargement des modeles...</option>
+                            </select>
+                            <button class="btn btn-sm btn-primary" id="btn-gesture-load-model">Charger</button>
+                            <button class="btn btn-sm btn-outline" id="btn-gesture-unload-model">Decharger</button>
+                        </div>
+                        <div class="gesture-model-bar-right">
+                            <span class="status-indicator status-idle" id="gesture-model-indicator"></span>
+                            <span id="gesture-model-name-text" class="gesture-model-name">Aucun modele charge</span>
+                            <span class="weights-badge" id="gesture-weights-badge" title="Tenseurs charges depuis le checkpoint / attendus">poids : --</span>
+                        </div>
+                    </div>
+                    <p class="gesture-model-hint">Les gestes sont lies au modele qui les a encodes : changer de modele affiche les gestes enregistres avec ce modele.</p>
+                </div>
+
+                <div class="gesture-sandbox-layout">
+                    <!-- Left Column -->
+                    <div class="gesture-main-col">
+                        <div class="card gesture-preview-card" id="gesture-preview-card">
+                            <div class="gesture-card-header">
+                                <div>
+                                    <h3>Vue du modele</h3>
+                                    <p class="card-subtitle">Exactement ce que le reseau recoit : recadrage central 224&times;224 de la camera serveur.</p>
+                                </div>
+                                <div class="gesture-header-actions">
+                                    <label class="toggle-label compact" for="toggle-gesture-heatmap">
+                                        <input type="checkbox" id="toggle-gesture-heatmap" class="checkbox-input" checked>
+                                        <span>Carte des differences</span>
+                                    </label>
+                                    <button class="btn btn-sm btn-primary" id="btn-gesture-camera-toggle">
+                                        <span class="btn-icon">&#128249;</span> <span id="gesture-cam-btn-text">Demarrer la Camera</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="gesture-video-wrapper" id="gesture-video-wrapper">
+                                <div class="model-view-stage">
+                                    <img id="gesture-model-view" alt="Vue du modele" width="224" height="224">
+                                    <canvas id="gesture-heatmap" width="224" height="224"></canvas>
+                                    <div class="model-view-placeholder" id="gesture-view-placeholder">Camera arretee</div>
+                                </div>
+
+                                <div class="gesture-overlay">
+                                    <div class="gesture-badge gesture-badge-idle" id="gesture-detection-badge">
+                                        <span class="badge-status-dot"></span>
+                                        <span id="gesture-badge-text">Aucun geste enregistre</span>
+                                    </div>
+                                    <div class="gesture-confidence-box">
+                                        <div class="confidence-header">
+                                            <span class="confidence-title">Score combine (lisse)</span>
+                                            <span class="confidence-val" id="gesture-confidence-text">0.0%</span>
+                                        </div>
+                                        <div class="confidence-bar-track">
+                                            <div class="confidence-bar-fill" id="gesture-confidence-bar" style="width: 0%;"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="gesture-sensitivity-panel">
+                                <div class="sensitivity-row">
+                                    <div class="sensitivity-label-row">
+                                        <label for="slider-gesture-threshold">Seuil de detection (score combine)</label>
+                                        <span class="threshold-badge" id="val-gesture-threshold">0.70</span>
+                                    </div>
+                                    <input type="range" id="slider-gesture-threshold" min="0.30" max="0.95" step="0.01" value="0.70" class="range-slider">
+                                </div>
+                                <div class="sensitivity-row">
+                                    <div class="sensitivity-label-row">
+                                        <label for="slider-gesture-margin">Marge minimale sur le 2e candidat</label>
+                                        <span class="threshold-badge" id="val-gesture-margin">0.04</span>
+                                    </div>
+                                    <input type="range" id="slider-gesture-margin" min="0" max="0.30" step="0.01" value="0.04" class="range-slider">
+                                </div>
+                                <div class="sensitivity-row">
+                                    <div class="sensitivity-label-row">
+                                        <label for="slider-gesture-smoothing">Lissage temporel (frames)</label>
+                                        <span class="threshold-badge" id="val-gesture-smoothing">3</span>
+                                    </div>
+                                    <input type="range" id="slider-gesture-smoothing" min="1" max="10" step="1" value="3" class="range-slider">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Reasoning Panel -->
+                        <div class="card gesture-reasoning-card">
+                            <div class="gesture-card-header">
+                                <div>
+                                    <h3>Raisonnement du modele</h3>
+                                    <p class="card-subtitle">Pourquoi la decision ci-dessus a ete prise, frame par frame.</p>
+                                </div>
+                                <span class="method-badge" id="gesture-method-badge">methode : --</span>
+                            </div>
+
+                            <div class="reasoning-explainer">
+                                <p><strong>Cosinus brut</strong> : similarite directe entre la frame et le prototype. Avec un fond, un visage et un eclairage identiques, il sature vers 1.0 pour <em>tous</em> les gestes : il ne discrimine rien.</p>
+                                <p><strong>Contrastif</strong> : on retire le centroide de tous les prototypes (la part commune : fond, torse, lumiere) puis on compare ce qui reste. C'est la signature propre du geste.</p>
+                                <p><strong>Combine</strong> = 0.35 &times; brut + 0.65 &times; contrastif. Detection si combine &ge; seuil <em>et</em> ecart avec le 2e candidat &ge; marge. Un slot Neutre qui gagne bloque la detection.</p>
+                            </div>
+
+                            <table class="reasoning-table" id="gesture-reasoning-table">
+                                <thead>
+                                    <tr>
+                                        <th>Geste</th>
+                                        <th>Ech.</th>
+                                        <th>Cos. brut</th>
+                                        <th>Contrastif</th>
+                                        <th>Combine</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="gesture-reasoning-body">
+                                    <tr><td colspan="5" class="reasoning-empty">En attente de flux et de gestes enregistres.</td></tr>
+                                </tbody>
+                            </table>
+
+                            <div class="reasoning-decision" id="gesture-reasoning-decision">Decision : --</div>
+
+                            <div class="reasoning-meta">
+                                <span>Marge : <strong id="reason-margin">--</strong></span>
+                                <span>Seuil serveur : <strong id="reason-threshold">--</strong></span>
+                                <span>Latence : <strong id="reason-latency">--</strong></span>
+                                <span>Frame : <strong id="reason-frame">--</strong></span>
+                                <span>Grille : <strong id="reason-grid">--</strong></span>
+                            </div>
+                            <p class="reasoning-heatmap-hint">Carte des differences : chaque case est un patch du ViT ; plus elle est chaude, plus ce patch differe du prototype le mieux classe. Une main qui change doit s'allumer, un fond stable rester sombre.</p>
+                        </div>
+
+                        <!-- Actions Panel -->
+                        <div class="card gesture-actions-card">
+                            <h3>Actions declenchees en direct</h3>
+                            <div class="gesture-actions-grid">
+                                <div class="action-item">
+                                    <div class="action-item-header">
+                                        <span class="action-icon">&#128266;</span>
+                                        <label class="toggle-label" for="toggle-gesture-audio">
+                                            <span>Synthese audio</span>
+                                            <input type="checkbox" id="toggle-gesture-audio" checked class="checkbox-input">
+                                        </label>
+                                    </div>
+                                    <p class="action-desc">Une frequence par slot (523 / 659 / 784 Hz).</p>
+                                </div>
+                                <div class="action-item">
+                                    <div class="action-item-header">
+                                        <span class="action-icon">&#127912;</span>
+                                        <span class="action-name">Theme visuel</span>
+                                    </div>
+                                    <div class="theme-pill-preview" id="gesture-theme-pill">
+                                        <span id="gesture-theme-text">Palette neutre</span>
+                                    </div>
+                                </div>
+                                <div class="action-item">
+                                    <div class="action-item-header">
+                                        <span class="action-icon">&#9201;</span>
+                                        <span class="action-name">Maintien continu (&gt; 1 s)</span>
+                                    </div>
+                                    <div class="hold-progress-box">
+                                        <div class="hold-timer-text" id="gesture-hold-timer-text">Maintien : 0.0s / 1.0s</div>
+                                        <div class="hold-track"><div class="hold-fill" id="gesture-hold-bar" style="width: 0%;"></div></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right Column: Registration -->
+                    <div class="gesture-slots-col">
+                        <div class="card gesture-slots-card">
+                            <div class="slots-header">
+                                <h3>Enregistrement</h3>
+                                <span class="slots-badge" id="gesture-count-badge">0 geste</span>
+                            </div>
+                            <div class="slots-tips">
+                                <strong>Pour une bonne detection :</strong>
+                                <ol>
+                                    <li>Demarrez la camera et placez-vous comme en usage reel.</li>
+                                    <li>Enregistrez le slot <em>Neutre</em> (mains baissees).</li>
+                                    <li>Pour chaque geste, cliquez 3 a 5 fois « + Echantillon » en bougeant legerement.</li>
+                                    <li>Lisez la table de raisonnement : si le contrastif reste &lt; 0.3, le geste est trop petit dans l'image, rapprochez la main.</li>
+                                </ol>
+                            </div>
+
+                            <div class="slots-container">
+                                <div class="slot-card" id="slot-card-1" data-slot="1">
+                                    <div class="slot-header">
+                                        <span class="slot-number">Slot 1 (Geste A)</span>
+                                        <span class="slot-state-badge" id="slot-state-1">Vide</span>
+                                    </div>
+                                    <div class="slot-body">
+                                        <input type="text" id="gesture-name-1" class="input-text slot-name-input" value="Main Ouverte" placeholder="Nom du geste" maxlength="64">
+                                        <div class="slot-thumb-box" id="slot-thumb-box-1">
+                                            <img id="slot-img-1" src="" alt="Capture Slot 1" style="display: none;">
+                                            <div class="slot-empty-placeholder" id="slot-empty-1">Aucune capture</div>
+                                        </div>
+                                        <div class="slot-meta" id="slot-meta-1">Capturez 3 a 5 echantillons en variant legerement la position.</div>
+                                        <div class="slot-buttons">
+                                            <button class="btn btn-sm btn-primary btn-capture-slot" id="btn-capture-1" data-slot="1">
+                                                <span class="btn-icon">&#128247;</span> Capturer
+                                            </button>
+                                            <button class="btn btn-sm btn-outline-danger btn-delete-slot" id="btn-delete-1" data-slot="1" style="display: none;">
+                                                <span class="btn-icon">&#128465;</span> Supprimer
+                                            </button>
+                                        </div>
+                                        <div class="slot-live-meter" id="slot-live-meter-1">
+                                            <div class="slot-live-meter-row">
+                                                <span>Score combine :</span>
+                                                <strong id="slot-score-val-1" class="mono">--%</strong>
+                                            </div>
+                                            <div class="slot-live-track"><div id="slot-score-bar-1" class="slot-live-fill"></div></div>
+                                        </div>
+                                        <div class="slot-counter-badge">Declenchements maintenus : <strong id="slot-counter-1">0</strong></div>
+                                    </div>
+                                </div>
+                                <div class="slot-card" id="slot-card-2" data-slot="2">
+                                    <div class="slot-header">
+                                        <span class="slot-number">Slot 2 (Geste B)</span>
+                                        <span class="slot-state-badge" id="slot-state-2">Vide</span>
+                                    </div>
+                                    <div class="slot-body">
+                                        <input type="text" id="gesture-name-2" class="input-text slot-name-input" value="Poing" placeholder="Nom du geste" maxlength="64">
+                                        <div class="slot-thumb-box" id="slot-thumb-box-2">
+                                            <img id="slot-img-2" src="" alt="Capture Slot 2" style="display: none;">
+                                            <div class="slot-empty-placeholder" id="slot-empty-2">Aucune capture</div>
+                                        </div>
+                                        <div class="slot-meta" id="slot-meta-2">Capturez 3 a 5 echantillons en variant legerement la position.</div>
+                                        <div class="slot-buttons">
+                                            <button class="btn btn-sm btn-primary btn-capture-slot" id="btn-capture-2" data-slot="2">
+                                                <span class="btn-icon">&#128247;</span> Capturer
+                                            </button>
+                                            <button class="btn btn-sm btn-outline-danger btn-delete-slot" id="btn-delete-2" data-slot="2" style="display: none;">
+                                                <span class="btn-icon">&#128465;</span> Supprimer
+                                            </button>
+                                        </div>
+                                        <div class="slot-live-meter" id="slot-live-meter-2">
+                                            <div class="slot-live-meter-row">
+                                                <span>Score combine :</span>
+                                                <strong id="slot-score-val-2" class="mono">--%</strong>
+                                            </div>
+                                            <div class="slot-live-track"><div id="slot-score-bar-2" class="slot-live-fill"></div></div>
+                                        </div>
+                                        <div class="slot-counter-badge">Declenchements maintenus : <strong id="slot-counter-2">0</strong></div>
+                                    </div>
+                                </div>
+                                <div class="slot-card" id="slot-card-3" data-slot="3">
+                                    <div class="slot-header">
+                                        <span class="slot-number">Slot 3 (Geste C)</span>
+                                        <span class="slot-state-badge" id="slot-state-3">Vide</span>
+                                    </div>
+                                    <div class="slot-body">
+                                        <input type="text" id="gesture-name-3" class="input-text slot-name-input" value="Victoire" placeholder="Nom du geste" maxlength="64">
+                                        <div class="slot-thumb-box" id="slot-thumb-box-3">
+                                            <img id="slot-img-3" src="" alt="Capture Slot 3" style="display: none;">
+                                            <div class="slot-empty-placeholder" id="slot-empty-3">Aucune capture</div>
+                                        </div>
+                                        <div class="slot-meta" id="slot-meta-3">Capturez 3 a 5 echantillons en variant legerement la position.</div>
+                                        <div class="slot-buttons">
+                                            <button class="btn btn-sm btn-primary btn-capture-slot" id="btn-capture-3" data-slot="3">
+                                                <span class="btn-icon">&#128247;</span> Capturer
+                                            </button>
+                                            <button class="btn btn-sm btn-outline-danger btn-delete-slot" id="btn-delete-3" data-slot="3" style="display: none;">
+                                                <span class="btn-icon">&#128465;</span> Supprimer
+                                            </button>
+                                        </div>
+                                        <div class="slot-live-meter" id="slot-live-meter-3">
+                                            <div class="slot-live-meter-row">
+                                                <span>Score combine :</span>
+                                                <strong id="slot-score-val-3" class="mono">--%</strong>
+                                            </div>
+                                            <div class="slot-live-track"><div id="slot-score-bar-3" class="slot-live-fill"></div></div>
+                                        </div>
+                                        <div class="slot-counter-badge">Declenchements maintenus : <strong id="slot-counter-3">0</strong></div>
+                                    </div>
+                                </div>
+                                <div class="slot-card slot-neutral" id="slot-card-4" data-slot="4">
+                                    <div class="slot-header">
+                                        <span class="slot-number">Slot 4 (Neutre)</span>
+                                        <span class="slot-state-badge" id="slot-state-4">Vide</span>
+                                    </div>
+                                    <div class="slot-body">
+                                        <input type="text" id="gesture-name-4" class="input-text slot-name-input" value="Repos" placeholder="Nom du geste" maxlength="64">
+                                        <div class="slot-thumb-box" id="slot-thumb-box-4">
+                                            <img id="slot-img-4" src="" alt="Capture Slot 4" style="display: none;">
+                                            <div class="slot-empty-placeholder" id="slot-empty-4">Aucune capture</div>
+                                        </div>
+                                        <div class="slot-meta" id="slot-meta-4">Posture de repos : absorbe les frames sans geste. Jamais signalee comme detection.</div>
+                                        <div class="slot-buttons">
+                                            <button class="btn btn-sm btn-primary btn-capture-slot" id="btn-capture-4" data-slot="4">
+                                                <span class="btn-icon">&#128247;</span> Capturer
+                                            </button>
+                                            <button class="btn btn-sm btn-outline-danger btn-delete-slot" id="btn-delete-4" data-slot="4" style="display: none;">
+                                                <span class="btn-icon">&#128465;</span> Supprimer
+                                            </button>
+                                        </div>
+                                        <div class="slot-live-meter" id="slot-live-meter-4">
+                                            <div class="slot-live-meter-row">
+                                                <span>Score combine :</span>
+                                                <strong id="slot-score-val-4" class="mono">--%</strong>
+                                            </div>
+                                            <div class="slot-live-track"><div id="slot-score-bar-4" class="slot-live-fill"></div></div>
+                                        </div>
+                                        
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="slots-footer">
+                                <button class="btn btn-sm btn-outline-danger" id="btn-gestures-clear">Tout effacer pour ce modele</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Key Creation Modal -->
+    <div class="modal-overlay" id="create-key-modal" style="display: none;">
+        <div class="modal-card">
+            <h3>Generate Scoped API Token</h3>
+            <p>Create a new cryptographically secure Bearer token for client applications.</p>
+
+            <div class="form-group">
+                <label>Token Description / Name:</label>
+                <input type="text" id="modal-key-name" placeholder="e.g. Video Ingestion Client" class="input-text">
+            </div>
+
+            <div class="form-group">
+                <label>Access Scope (Role):</label>
+                <select id="modal-key-role" class="select-input">
+                    <option value="inference">Inference Only (/api/embed, /api/stream, /api/energy)</option>
+                    <option value="admin">Administrator (Full Access including /api/pull, /api/rm)</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Expiration Period:</label>
+                <select id="modal-key-expire" class="select-input">
+                    <option value="30">30 Days</option>
+                    <option value="90">90 Days</option>
+                    <option value="365">1 Year</option>
+                    <option value="">Never Expires</option>
+                </select>
+            </div>
+
+            <div class="modal-buttons">
+                <button class="btn btn-secondary" id="btn-close-key-modal">Cancel</button>
+                <button class="btn btn-primary" id="btn-submit-create-key">Generate Token</button>
+            </div>
+
+            <div class="generated-token-result" id="generated-token-display" style="display: none;">
+                <label>Generated Bearer Token (Copy now - will not be shown again):</label>
+                <div class="token-copy-box">
+                    <input type="text" id="raw-token-value" readonly class="input-text">
+                    <button class="btn btn-sm btn-primary" id="btn-copy-raw-token">Copy</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="/app.js"></script>
+</body>
+</html>

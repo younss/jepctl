@@ -1,0 +1,2132 @@
+// JEPA Runtime - Testbench Client Application Logic
+// Zero-dependency pure vanilla JavaScript (ES6+)
+
+(function () {
+    "use strict";
+
+    // Application State
+    const state = {
+        activeSection: "overview",
+        hardwareInfo: null,
+        activeModel: null,
+        totalEmbeddings: 0,
+        lastLatencyMs: 0,
+        streamFps: 10,
+        isStreaming: false,
+        sseSource: null,
+        webcamStream: null,
+        nominalBaselineVector: null,
+        alertThreshold: 0.45,
+        webhookUrl: "",
+        energyHistory: [],
+        maxChartPoints: 50,
+        audioContext: null,
+        lastAlertSoundTime: 0,
+        currentVector: null,
+        patchGridSize: 14,
+        authToken: localStorage.getItem("jepa_auth_token") || "",
+        gestureThreshold: 0.70,
+        gestureMargin: 0.04,
+        gestureSmoothing: 3,
+        gestureHeatmap: true,
+        gestureAudioEnabled: true,
+        gestureHistory: {},
+        activeGestureHold: null,
+        holdStartTime: null,
+        holdTriggered: false,
+        slotHoldCounts: { 1: 0, 2: 0, 3: 0 },
+        lastAudioToneTime: 0,
+        registeredGestures: [],
+        modelViewTimer: null,
+        modelViewObjectUrl: null,
+        modelViewSequence: null,
+        lastGestureMatch: null,
+    };
+
+    const GESTURE_SLOT_COUNT = 4;
+    const GESTURE_NEUTRAL_SLOT = 4;
+
+    // DOM Elements Cache
+    const el = {
+        // Navigation
+        navItems: document.querySelectorAll(".nav-item"),
+        sections: document.querySelectorAll(".content-section"),
+        
+        // Header
+        statusDot: document.getElementById("status-dot"),
+        daemonStatusText: document.getElementById("daemon-status-text"),
+        hardwareBadge: document.getElementById("hardware-badge"),
+        hardwareName: document.getElementById("hardware-name"),
+        memStats: document.getElementById("mem-stats"),
+        memProgress: document.getElementById("mem-progress"),
+        headerActiveModel: document.getElementById("header-active-model"),
+        btnHeaderUnload: document.getElementById("btn-header-unload"),
+
+        // Overview
+        kpiLatency: document.getElementById("kpi-latency"),
+        kpiFps: document.getElementById("kpi-fps"),
+        kpiTotalEmbeddings: document.getElementById("kpi-total-embeddings"),
+        kpiUptime: document.getElementById("kpi-uptime"),
+        telemetryDevice: document.getElementById("telemetry-device"),
+        telemetryBackend: document.getElementById("telemetry-backend"),
+        telemetryMemArch: document.getElementById("telemetry-mem-arch"),
+        telemetryCpu: document.getElementById("telemetry-cpu"),
+        telemetryPlatform: document.getElementById("telemetry-platform"),
+        telemetryMem: document.getElementById("telemetry-mem"),
+        btnQuickCamera: document.getElementById("btn-quick-camera"),
+        btnQuickPullIjepa: document.getElementById("btn-quick-pull-ijepa"),
+        btnQuickPullVjepa: document.getElementById("btn-quick-pull-vjepa"),
+
+        // Models
+        pullRepoInput: document.getElementById("pull-repo-input"),
+        btnStartPull: document.getElementById("btn-start-pull"),
+        pullProgressBox: document.getElementById("pull-progress-box"),
+        pullStatusText: document.getElementById("pull-status-text"),
+        pullSpeedText: document.getElementById("pull-speed-text"),
+        pullProgressFill: document.getElementById("pull-progress-fill"),
+        installedModelsTbody: document.getElementById("installed-models-tbody"),
+        jepafileJsonEditor: document.getElementById("jepafile-json-editor"),
+        btnSaveJepafile: document.getElementById("btn-save-jepafile"),
+
+        // Image Playground
+        imageDropzone: document.getElementById("image-dropzone"),
+        imageFileInput: document.getElementById("image-file-input"),
+        canvasWrapper: document.getElementById("canvas-wrapper"),
+        imageInspectCanvas: document.getElementById("image-inspect-canvas"),
+        togglePatchGrid: document.getElementById("toggle-patch-grid"),
+        outModelName: document.getElementById("out-model-name"),
+        outEmbedDim: document.getElementById("out-embed-dim"),
+        outEmbedLatency: document.getElementById("out-embed-latency"),
+        heatmapCanvas: document.getElementById("heatmap-canvas"),
+        vectorNumericView: document.getElementById("vector-numeric-view"),
+        btnCopyVector: document.getElementById("btn-copy-vector"),
+        btnExportJson: document.getElementById("btn-export-json"),
+
+        // Video & Camera Stream
+        cameraSelectWrap: document.getElementById("camera-select-wrap"),
+        cameraDeviceSelect: document.getElementById("camera-device-select"),
+        streamFpsSelect: document.getElementById("stream-fps-select"),
+        btnStreamToggle: document.getElementById("btn-stream-toggle"),
+        scrubberStripContainer: document.getElementById("scrubber-strip-container"),
+        bufferCountBadge: document.getElementById("buffer-count-badge"),
+        webcamPreviewElement: document.getElementById("webcam-preview-element"),
+        streamFeedCanvas: document.getElementById("stream-feed-canvas"),
+        previewPlaceholder: document.getElementById("preview-placeholder"),
+        sseStreamLog: document.getElementById("sse-stream-log"),
+        btnClearSse: document.getElementById("btn-clear-sse"),
+
+        // Anomaly & Energy
+        btnLockBaseline: document.getElementById("btn-lock-baseline"),
+        baselineStatusLabel: document.getElementById("baseline-status-label"),
+        sliderThreshold: document.getElementById("slider-threshold"),
+        valThreshold: document.getElementById("val-threshold"),
+        inputWebhookUrl: document.getElementById("input-webhook-url"),
+        btnSaveWebhook: document.getElementById("btn-save-webhook"),
+        energyChartCanvas: document.getElementById("energy-chart-canvas"),
+        anomalyAlertBanner: document.getElementById("anomaly-alert-banner"),
+
+        // Security & Keys
+        toggleLanAccess: document.getElementById("toggle-lan-access"),
+        lanWarningBox: document.getElementById("lan-warning-box"),
+        tableApiKeys: document.getElementById("table-api-keys"),
+        apiKeysTbody: document.getElementById("api-keys-tbody"),
+        btnOpenCreateKey: document.getElementById("btn-open-create-key"),
+        btnRefreshAudit: document.getElementById("btn-refresh-audit"),
+        auditLogTbody: document.getElementById("audit-log-tbody"),
+        createKeyModal: document.getElementById("create-key-modal"),
+        modalKeyName: document.getElementById("modal-key-name"),
+        modalKeyRole: document.getElementById("modal-key-role"),
+        modalKeyExpire: document.getElementById("modal-key-expire"),
+        btnCloseKeyModal: document.getElementById("btn-close-key-modal"),
+        btnSubmitCreateKey: document.getElementById("btn-submit-create-key"),
+        generatedTokenDisplay: document.getElementById("generated-token-display"),
+        rawTokenValue: document.getElementById("raw-token-value"),
+        btnCopyRawToken: document.getElementById("btn-copy-raw-token"),
+
+        // Settings
+        settingsBackend: document.getElementById("settings-backend"),
+        settingsMemWatermark: document.getElementById("settings-mem-watermark"),
+        settingsIdleTimeout: document.getElementById("settings-idle-timeout"),
+        settingsStorageDir: document.getElementById("settings-storage-dir"),
+        btnSaveSettings: document.getElementById("btn-save-settings"),
+
+        // Gesture Sandbox
+        gestureModelView: document.getElementById("gesture-model-view"),
+        gestureHeatmap: document.getElementById("gesture-heatmap"),
+        gestureViewPlaceholder: document.getElementById("gesture-view-placeholder"),
+        toggleGestureHeatmap: document.getElementById("toggle-gesture-heatmap"),
+        btnGestureCameraToggle: document.getElementById("btn-gesture-camera-toggle"),
+        gestureCamBtnText: document.getElementById("gesture-cam-btn-text"),
+        gestureDetectionBadge: document.getElementById("gesture-detection-badge"),
+        gestureBadgeText: document.getElementById("gesture-badge-text"),
+        gestureConfidenceText: document.getElementById("gesture-confidence-text"),
+        gestureConfidenceBar: document.getElementById("gesture-confidence-bar"),
+        sliderGestureThreshold: document.getElementById("slider-gesture-threshold"),
+        valGestureThreshold: document.getElementById("val-gesture-threshold"),
+        sliderGestureMargin: document.getElementById("slider-gesture-margin"),
+        valGestureMargin: document.getElementById("val-gesture-margin"),
+        sliderGestureSmoothing: document.getElementById("slider-gesture-smoothing"),
+        valGestureSmoothing: document.getElementById("val-gesture-smoothing"),
+        toggleGestureAudio: document.getElementById("toggle-gesture-audio"),
+        gestureThemePill: document.getElementById("gesture-theme-pill"),
+        gestureThemeText: document.getElementById("gesture-theme-text"),
+        gestureHoldTimerText: document.getElementById("gesture-hold-timer-text"),
+        gestureHoldBar: document.getElementById("gesture-hold-bar"),
+        gestureCountBadge: document.getElementById("gesture-count-badge"),
+        gestureVideoWrapper: document.getElementById("gesture-video-wrapper"),
+        selectGestureActiveModel: document.getElementById("select-gesture-active-model"),
+        btnGestureLoadModel: document.getElementById("btn-gesture-load-model"),
+        btnGestureUnloadModel: document.getElementById("btn-gesture-unload-model"),
+        gestureModelIndicator: document.getElementById("gesture-model-indicator"),
+        gestureModelNameText: document.getElementById("gesture-model-name-text"),
+        gestureWeightsBadge: document.getElementById("gesture-weights-badge"),
+        gestureMethodBadge: document.getElementById("gesture-method-badge"),
+        gestureReasoningBody: document.getElementById("gesture-reasoning-body"),
+        gestureReasoningDecision: document.getElementById("gesture-reasoning-decision"),
+        reasonMargin: document.getElementById("reason-margin"),
+        reasonThreshold: document.getElementById("reason-threshold"),
+        reasonLatency: document.getElementById("reason-latency"),
+        reasonFrame: document.getElementById("reason-frame"),
+        reasonGrid: document.getElementById("reason-grid"),
+        btnGesturesClear: document.getElementById("btn-gestures-clear"),
+    };
+
+    // Loopback Session Token Management & Authenticated Fetch
+    async function fetchSessionToken() {
+        try {
+            const res = await fetch("/api/auth/token");
+            if (res.ok) {
+                const data = await res.json();
+                if (data.token) {
+                    state.authToken = data.token;
+                    localStorage.setItem("jepa_auth_token", data.token);
+                    return data.token;
+                }
+            }
+        } catch (e) {
+            console.warn("Session token acquisition failed:", e);
+        }
+        return state.authToken;
+    }
+
+    async function apiFetch(url, options = {}) {
+        const opts = Object.assign({}, options);
+        opts.headers = Object.assign({}, opts.headers);
+
+        if (!state.authToken) {
+            await fetchSessionToken();
+        }
+
+        if (state.authToken && state.authToken !== "no_auth" && !opts.headers["Authorization"]) {
+            opts.headers["Authorization"] = `Bearer ${state.authToken}`;
+        }
+
+        let res = await fetch(url, opts);
+        if (res.status === 401) {
+            // Re-fetch token and retry once
+            await fetchSessionToken();
+            if (state.authToken && state.authToken !== "no_auth") {
+                opts.headers["Authorization"] = `Bearer ${state.authToken}`;
+                res = await fetch(url, opts);
+            }
+        }
+        return res;
+    }
+
+    // Initialize Application
+    async function init() {
+        await fetchSessionToken();
+
+        setupNavigation();
+        setupImagePlayground();
+        setupVideoStream();
+        setupAnomalyMonitor();
+        setupSecurityAndKeys();
+        setupSettings();
+        setupGestureSandbox();
+        setupHeader();
+
+        // Initial fetch
+        pollStatus();
+        fetchModels();
+        fetchCameras();
+        fetchApiKeys();
+        fetchAuditLog();
+        fetchGesturesList();
+
+        // Start Periodic Polling (every 2 seconds)
+        setInterval(pollStatus, 2000);
+        setInterval(refreshRingBufferThumbnails, 1000);
+
+        // Render empty chart
+        renderEnergyChart();
+    }
+
+    // Navigation Switcher
+    function setupNavigation() {
+        el.navItems.forEach((item) => {
+            item.addEventListener("click", () => {
+                const section = item.getAttribute("data-section");
+                switchSection(section);
+            });
+        });
+
+        // Quick action buttons
+        if (el.btnQuickCamera) {
+            el.btnQuickCamera.addEventListener("click", () => switchSection("video-stream"));
+        }
+        if (el.btnQuickPullIjepa) {
+            el.btnQuickPullIjepa.addEventListener("click", () => pullModel("facebook/ijepa_vith14_1k"));
+        }
+        if (el.btnQuickPullVjepa) {
+            el.btnQuickPullVjepa.addEventListener("click", () => pullModel("facebookresearch/jepa:vjepa_vitl16"));
+        }
+    }
+
+    function switchSection(sectionId) {
+        state.activeSection = sectionId;
+
+        el.navItems.forEach((item) => {
+            if (item.getAttribute("data-section") === sectionId) {
+                item.classList.add("active");
+            } else {
+                item.classList.remove("active");
+            }
+        });
+
+        el.sections.forEach((sec) => {
+            if (sec.id === `section-${sectionId}`) {
+                sec.classList.add("active");
+            } else {
+                sec.classList.remove("active");
+            }
+        });
+
+        if (sectionId === "models") {
+            fetchModels();
+        } else if (sectionId === "security") {
+            fetchApiKeys();
+            fetchAuditLog();
+        } else if (sectionId === "gestures") {
+            fetchGesturesList();
+        }
+    }
+
+    // Header Controls
+    function setupHeader() {
+        if (el.btnHeaderUnload) {
+            el.btnHeaderUnload.addEventListener("click", async () => {
+                try {
+                    await apiFetch("/api/models/unload", { method: "POST" });
+                    pollStatus();
+                    fetchModels();
+                } catch (e) {
+                    console.error("Failed to unload model:", e);
+                }
+            });
+        }
+    }
+
+    // Status and Telemetry Polling
+    async function pollStatus() {
+        try {
+            const res = await apiFetch("/api/status");
+            if (!res.ok) throw new Error("Status endpoint error");
+            const data = await res.json();
+
+            // Update Header Status
+            el.statusDot.style.backgroundColor = "var(--accent-green)";
+            el.statusDot.style.boxShadow = "0 0 8px var(--accent-green)";
+            el.daemonStatusText.textContent = "Daemon: Connected";
+
+            // Hardware Telemetry
+            const hw = data.hardware;
+            state.hardwareInfo = hw;
+            el.hardwareName.textContent = hw.device_name;
+            
+            const usedGb = (hw.memory_used_bytes / (1024 * 1024 * 1024)).toFixed(1);
+            const totalGb = (hw.memory_total_bytes / (1024 * 1024 * 1024)).toFixed(1);
+            const percent = hw.memory_percent.toFixed(0);
+
+            el.memStats.textContent = `${usedGb} GB / ${totalGb} GB (${percent}%)`;
+            el.memProgress.style.width = `${percent}%`;
+
+            // Active Model
+            const modelChanged = state.activeModel !== data.active_model;
+            state.activeModel = data.active_model;
+            updateWeightsBadge(data.weights, data.active_model);
+            if (modelChanged) {
+                fetchGesturesList();
+            }
+            if (data.active_model) {
+                el.headerActiveModel.textContent = data.active_model;
+                el.btnHeaderUnload.style.display = "inline-flex";
+                if (el.gestureModelIndicator) el.gestureModelIndicator.className = "status-indicator status-active";
+                if (el.gestureModelNameText) el.gestureModelNameText.textContent = data.active_model;
+                if (el.selectGestureActiveModel && el.selectGestureActiveModel.value !== data.active_model) {
+                    // Only update if option exists
+                    for (let i = 0; i < el.selectGestureActiveModel.options.length; i++) {
+                        if (el.selectGestureActiveModel.options[i].value === data.active_model) {
+                            el.selectGestureActiveModel.selectedIndex = i;
+                            break;
+                        }
+                    }
+                }
+            } else {
+                el.headerActiveModel.textContent = "None";
+                el.btnHeaderUnload.style.display = "none";
+                if (el.gestureModelIndicator) el.gestureModelIndicator.className = "status-indicator status-idle";
+                if (el.gestureModelNameText) el.gestureModelNameText.textContent = "Aucun modele charge";
+            }
+
+            // Overview KPIs
+            state.totalEmbeddings = data.embeddings_computed_total;
+            el.kpiTotalEmbeddings.textContent = data.embeddings_computed_total.toLocaleString();
+            el.kpiUptime.textContent = formatUptime(data.uptime_seconds);
+
+            el.telemetryDevice.textContent = hw.device_name;
+            if (el.telemetryBackend) {
+                if (hw.backend === "Metal") {
+                    el.telemetryBackend.innerHTML = '<span style="color: #4ade80; font-weight: 600;">Apple Metal GPU (Hardware Accelerated)</span>';
+                    if (el.hardwareBadge) {
+                        el.hardwareBadge.style.borderColor = "rgba(74, 222, 128, 0.5)";
+                        el.hardwareBadge.style.backgroundColor = "rgba(74, 222, 128, 0.1)";
+                    }
+                } else if (hw.backend === "Cuda") {
+                    el.telemetryBackend.innerHTML = '<span style="color: #4ade80; font-weight: 600;">NVIDIA CUDA GPU (Hardware Accelerated)</span>';
+                    if (el.hardwareBadge) {
+                        el.hardwareBadge.style.borderColor = "rgba(74, 222, 128, 0.5)";
+                        el.hardwareBadge.style.backgroundColor = "rgba(74, 222, 128, 0.1)";
+                    }
+                } else {
+                    el.telemetryBackend.innerHTML = '<span style="color: #facc15; font-weight: 600;">CPU Multithreaded (Fallback Mode)</span>';
+                    if (el.hardwareBadge) {
+                        el.hardwareBadge.style.borderColor = "rgba(250, 204, 21, 0.4)";
+                        el.hardwareBadge.style.backgroundColor = "rgba(250, 204, 21, 0.1)";
+                    }
+                }
+            }
+            if (el.telemetryMemArch) {
+                if (hw.backend === "Metal") {
+                    el.telemetryMemArch.textContent = "Apple Unified Memory Architecture (UMA: CPU and GPU Shared)";
+                } else {
+                    el.telemetryMemArch.textContent = "Standard Host Memory";
+                }
+            }
+            el.telemetryCpu.textContent = `${hw.cpu_threads} Logical Cores`;
+            el.telemetryPlatform.textContent = data.platform;
+            el.telemetryMem.textContent = `${usedGb} GB used of ${totalGb} GB total`;
+
+        } catch (err) {
+            el.statusDot.style.backgroundColor = "var(--accent-red)";
+            el.statusDot.style.boxShadow = "0 0 8px var(--accent-red)";
+            el.daemonStatusText.textContent = "Daemon: Disconnected";
+        }
+    }
+
+    function formatUptime(seconds) {
+        const h = Math.floor(seconds / 3600).toString().padStart(2, "0");
+        const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, "0");
+        const s = (seconds % 60).toString().padStart(2, "0");
+        return `${h}:${m}:${s}`;
+    }
+
+    // Models Catalog Manager
+    async function fetchModels() {
+        try {
+            const res = await apiFetch("/api/tags");
+            if (!res.ok) throw new Error("Failed to load models");
+            const models = await res.json();
+            renderModelsTable(models);
+            updateGestureModelSelector(models);
+        } catch (e) {
+            console.error("fetchModels error:", e);
+        }
+    }
+
+    function updateGestureModelSelector(models) {
+        if (!el.selectGestureActiveModel) return;
+        el.selectGestureActiveModel.innerHTML = "";
+
+        if (!models || models.length === 0) {
+            const opt = document.createElement("option");
+            opt.value = "";
+            opt.textContent = "Aucun modele installe (Telechargez-en un dans Modeles)";
+            el.selectGestureActiveModel.appendChild(opt);
+        } else {
+            models.forEach((m) => {
+                const opt = document.createElement("option");
+                opt.value = m.name;
+                opt.textContent = `${m.name} (${m.architecture} | ${m.embed_dim}d | ${m.parameter_count || 'ViT'})`;
+                if (state.activeModel === m.name) {
+                    opt.selected = true;
+                }
+                el.selectGestureActiveModel.appendChild(opt);
+            });
+        }
+
+        if (el.gestureModelIndicator && el.gestureModelNameText) {
+            if (state.activeModel) {
+                el.gestureModelIndicator.className = "status-indicator status-active";
+                el.gestureModelNameText.textContent = state.activeModel;
+            } else {
+                el.gestureModelIndicator.className = "status-indicator status-idle";
+                el.gestureModelNameText.textContent = "Aucun modele charge";
+            }
+        }
+    }
+
+    function renderModelsTable(models) {
+        if (!el.installedModelsTbody) return;
+        el.installedModelsTbody.innerHTML = "";
+
+        if (models.length === 0) {
+            el.installedModelsTbody.innerHTML = `<tr><td colspan="6" class="text-center" style="color: var(--text-dim);">Aucun modele installe localement. Telechargez un checkpoint verifie ci-dessus.</td></tr>`;
+            return;
+        }
+
+        models.forEach((m) => {
+            const tr = document.createElement("tr");
+            const isLoaded = state.activeModel === m.name;
+            const sizeMb = (m.disk_size_bytes / (1024 * 1024)).toFixed(1);
+
+            tr.innerHTML = `
+                <td><strong>${m.name}</strong> ${isLoaded ? '<span class="badge badge-image">Active</span>' : ''}</td>
+                <td><span class="badge badge-${m.modality}">${m.modality}</span></td>
+                <td><code>${m.embed_dim}</code></td>
+                <td>${m.parameter_count}</td>
+                <td>${sizeMb} MB</td>
+                <td>
+                    ${isLoaded ? 
+                        `<button class="btn btn-sm btn-outline" data-action="unload" data-name="${m.name}">Decharger</button>` :
+                        `<button class="btn btn-sm btn-primary" data-action="load" data-name="${m.name}">Charger</button>`
+                    }
+                    <button class="btn btn-sm btn-danger" data-action="delete" data-name="${m.name}" style="margin-left: 6px;">Supprimer</button>
+                </td>
+            `;
+
+            tr.querySelectorAll("button").forEach((btn) => {
+                btn.addEventListener("click", () => {
+                    const action = btn.getAttribute("data-action");
+                    const name = btn.getAttribute("data-name");
+                    if (action === "load") loadModel(name);
+                    else if (action === "unload") unloadModel();
+                    else if (action === "delete") deleteModel(name);
+                });
+            });
+
+            el.installedModelsTbody.appendChild(tr);
+        });
+    }
+
+    async function loadModel(name) {
+        try {
+            const res = await apiFetch("/api/models/load", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ model_name: name })
+            });
+            if (res.ok) {
+                await pollStatus();
+                await fetchModels();
+            } else {
+                const err = await res.json().catch(() => ({}));
+                alert(`Erreur de chargement du modele : ${err.error || "Erreur inconnue"}`);
+            }
+        } catch (e) {
+            console.error("Load model error:", e);
+            alert(`Erreur de communication : ${e.message}`);
+        }
+    }
+
+    async function unloadModel() {
+        try {
+            await apiFetch("/api/models/unload", { method: "POST" });
+            await pollStatus();
+            await fetchModels();
+        } catch (e) {
+            console.error("Unload error:", e);
+        }
+    }
+
+    async function deleteModel(name) {
+        if (!confirm(`Confirmer la suppression complete du modele "${name}" du stockage local ?`)) return;
+        try {
+            let res = await apiFetch(`/api/models?name=${encodeURIComponent(name)}`, { method: "DELETE" });
+            if (!res.ok) {
+                res = await apiFetch(`/api/models/${encodeURIComponent(name)}`, { method: "DELETE" });
+            }
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                alert(`Erreur lors de la suppression : ${err.error || "Erreur inconnue"}`);
+            } else {
+                console.log(`Modele ${name} supprime avec succes.`);
+            }
+            await pollStatus();
+            await fetchModels();
+        } catch (e) {
+            console.error("Delete error:", e);
+            alert(`Erreur reseau lors de la suppression : ${e.message}`);
+        }
+    }
+
+    // Gesture Sandbox Quick Model Load/Unload
+    if (el.btnGestureLoadModel) {
+        el.btnGestureLoadModel.addEventListener("click", () => {
+            const chosen = el.selectGestureActiveModel ? el.selectGestureActiveModel.value : null;
+            if (chosen) {
+                loadModel(chosen);
+            } else {
+                alert("Veuillez selectionner un modele installe valide.");
+            }
+        });
+    }
+
+    if (el.btnGestureUnloadModel) {
+        el.btnGestureUnloadModel.addEventListener("click", () => {
+            unloadModel();
+        });
+    }
+
+    // Pull Model
+    if (el.btnStartPull) {
+        el.btnStartPull.addEventListener("click", () => {
+            const repo = el.pullRepoInput.value.trim();
+            if (repo) pullModel(repo);
+        });
+    }
+
+    document.querySelectorAll("[data-pull]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            const repo = btn.getAttribute("data-pull");
+            pullModel(repo);
+        });
+    });
+
+    async function pullModel(repoId) {
+        el.pullProgressBox.style.display = "block";
+        el.pullStatusText.textContent = `Initiating pull for ${repoId}...`;
+        el.pullSpeedText.textContent = "0.0 MB/s";
+        el.pullProgressFill.style.width = "0%";
+
+        try {
+            const res = await apiFetch("/api/pull", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ repo_id: repoId })
+            });
+
+            if (!res.ok) {
+                let errMsg = `Failed to start pull (HTTP ${res.status})`;
+                try {
+                    const err = await res.json();
+                    if (err && err.error) errMsg = err.error;
+                } catch (_) {}
+                throw new Error(errMsg);
+            }
+
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                const text = decoder.decode(value);
+                const lines = text.split("\n").filter((l) => l.trim().length > 0);
+
+                for (const line of lines) {
+                    try {
+                        const event = JSON.parse(line);
+                        if (event.status === "error") {
+                            el.pullStatusText.textContent = `Error: ${event.error || "Download failed"}`;
+                            return;
+                        }
+
+                        el.pullStatusText.textContent = `Downloading ${event.repo_id}: ${event.percentage.toFixed(1)}%`;
+                        el.pullSpeedText.textContent = `${event.speed_mb_s.toFixed(1)} MB/s`;
+                        el.pullProgressFill.style.width = `${event.percentage}%`;
+
+                        if (event.finished) {
+                            el.pullStatusText.textContent = `Successfully pulled ${event.repo_id}`;
+                            setTimeout(() => {
+                                el.pullProgressBox.style.display = "none";
+                                fetchModels();
+                                pollStatus();
+                            }, 1500);
+                        }
+                    } catch (err) {
+                        // ignore unparseable chunk
+                    }
+                }
+            }
+        } catch (e) {
+            el.pullStatusText.textContent = `Error: ${e.message}`;
+        }
+    }
+
+    // Custom Jepafile Registration
+    if (el.btnSaveJepafile) {
+        el.btnSaveJepafile.addEventListener("click", async () => {
+            try {
+                const raw = el.jepafileJsonEditor.value;
+                const parsed = JSON.parse(raw);
+                const res = await apiFetch("/api/manifests", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(parsed)
+                });
+                if (res.ok) {
+                    alert("Custom Jepafile manifest registered successfully!");
+                    fetchModels();
+                } else {
+                    const err = await res.json().catch(() => ({}));
+                    alert(`Failed to register manifest: ${err.error || "Unknown error"}`);
+                }
+            } catch (e) {
+                alert(`Invalid JSON format: ${e.message}`);
+            }
+        });
+    }
+
+    // SECTION 3: IMAGE PLAYGROUND
+    function setupImagePlayground() {
+        if (!el.imageDropzone) return;
+
+        el.imageDropzone.addEventListener("click", () => {
+            el.imageFileInput.click();
+        });
+
+        el.imageDropzone.addEventListener("dragover", (e) => {
+            e.preventDefault();
+            el.imageDropzone.classList.add("dragover");
+        });
+
+        el.imageDropzone.addEventListener("dragleave", () => {
+            el.imageDropzone.classList.remove("dragover");
+        });
+
+        el.imageDropzone.addEventListener("drop", (e) => {
+            e.preventDefault();
+            el.imageDropzone.classList.remove("dragover");
+            if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                processUploadedImage(e.dataTransfer.files[0]);
+            }
+        });
+
+        el.imageFileInput.addEventListener("change", (e) => {
+            if (e.target.files && e.target.files[0]) {
+                processUploadedImage(e.target.files[0]);
+            }
+        });
+
+        if (el.togglePatchGrid) {
+            el.togglePatchGrid.addEventListener("change", () => {
+                if (window.currentInspectionImg) {
+                    drawInspectionCanvas(window.currentInspectionImg);
+                }
+            });
+        }
+
+        if (el.btnCopyVector) {
+            el.btnCopyVector.addEventListener("click", () => {
+                if (state.currentVector) {
+                    navigator.clipboard.writeText(JSON.stringify(state.currentVector));
+                    alert("Vector copied to clipboard!");
+                }
+            });
+        }
+
+        if (el.btnExportJson) {
+            el.btnExportJson.addEventListener("click", () => {
+                if (state.currentVector) {
+                    const blob = new Blob([JSON.stringify({
+                        model: state.activeModel,
+                        dimension: state.currentVector.length,
+                        embedding: state.currentVector
+                    }, null, 2)], { type: "application/json" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `jepa-embedding-${Date.now()}.json`;
+                    a.click();
+                }
+            });
+        }
+    }
+
+    async function processUploadedImage(file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const img = new Image();
+            img.onload = () => {
+                window.currentInspectionImg = img;
+                el.canvasWrapper.style.display = "block";
+                drawInspectionCanvas(img);
+            };
+            img.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+
+        // Upload and embed
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+            const res = await apiFetch("/api/embed", {
+                method: "POST",
+                body: formData
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.error || "Embed request failed");
+            }
+            const data = await res.json();
+
+            state.currentVector = data.embedding;
+            state.lastLatencyMs = data.latency_ms;
+            el.outModelName.textContent = data.model;
+            el.outEmbedDim.textContent = data.dimension;
+            el.outEmbedLatency.textContent = `${data.latency_ms.toFixed(1)} ms`;
+            el.kpiLatency.textContent = `${data.latency_ms.toFixed(1)} ms`;
+
+            // Render vector heatmap
+            renderVectorHeatmap(data.embedding);
+
+            // Populate numeric array preview
+            el.vectorNumericView.value = JSON.stringify(data.embedding.slice(0, 32), null, 2) + "\n... (truncated for display)";
+
+            // Update anomaly baseline if locked
+            if (state.nominalBaselineVector) {
+                calculateAndRecordEnergy(data.embedding);
+            }
+        } catch (e) {
+            alert(`Inference failed: ${e.message}`);
+        }
+    }
+
+    function drawInspectionCanvas(img) {
+        const canvas = el.imageInspectCanvas;
+        const ctx = canvas.getContext("2d");
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Draw image resized to 224x224
+        ctx.drawImage(img, 0, 0, 224, 224);
+
+        // Draw ViT patch grid overlay if toggled
+        if (el.togglePatchGrid && el.togglePatchGrid.checked) {
+            const patchSize = 224 / state.patchGridSize; // 14x14 or 16x16
+            ctx.strokeStyle = "rgba(6, 182, 212, 0.45)";
+            ctx.lineWidth = 1;
+
+            for (let x = 0; x <= 224; x += patchSize) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, 224);
+                ctx.stroke();
+            }
+
+            for (let y = 0; y <= 224; y += patchSize) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(224, y);
+                ctx.stroke();
+            }
+        }
+    }
+
+    function renderVectorHeatmap(vec) {
+        const canvas = el.heatmapCanvas;
+        const ctx = canvas.getContext("2d");
+        const w = canvas.width;
+        const h = canvas.height;
+        ctx.clearRect(0, 0, w, h);
+
+        const step = w / vec.length;
+        for (let i = 0; i < vec.length; i++) {
+            const val = vec[i];
+            // Normalize float to 0..1 color range
+            const norm = Math.max(0, Math.min(1, (val + 2.0) / 4.0));
+            const r = Math.floor(norm * 255);
+            const b = Math.floor((1 - norm) * 255);
+            const g = Math.floor(Math.sin(norm * Math.PI) * 200);
+
+            ctx.fillStyle = `rgb(${r},${g},${b})`;
+            ctx.fillRect(i * step, 0, Math.max(1, step), h);
+        }
+    }
+
+    // SECTION 4: VIDEO & CAMERA STREAM
+    function setupVideoStream() {
+        // Toggle camera device
+        if (el.btnStreamToggle) {
+            el.btnStreamToggle.addEventListener("click", () => {
+                if (state.isStreaming) {
+                    stopLiveStream();
+                } else {
+                    startLiveStream();
+                }
+            });
+        }
+
+        if (el.cameraDeviceSelect) {
+            el.cameraDeviceSelect.addEventListener("change", () => {
+                if (state.isStreaming) {
+                    stopLiveStream();
+                    setTimeout(startLiveStream, 300);
+                }
+            });
+        }
+
+        if (el.streamFpsSelect) {
+            el.streamFpsSelect.addEventListener("change", (e) => {
+                state.streamFps = parseInt(e.target.value, 10);
+                el.kpiFps.textContent = `${state.streamFps} FPS`;
+                if (state.isStreaming) {
+                    stopLiveStream();
+                    setTimeout(startLiveStream, 300);
+                }
+            });
+        }
+
+        if (el.btnClearSse) {
+            el.btnClearSse.addEventListener("click", () => {
+                el.sseStreamLog.innerHTML = '<div class="sse-placeholder">Awaiting live stream connection...</div>';
+            });
+        }
+    }
+
+    async function fetchCameras() {
+        try {
+            const res = await apiFetch("/api/cameras");
+            if (!res.ok) return;
+            const cams = await res.json();
+            if (el.cameraDeviceSelect) {
+                const prevVal = el.cameraDeviceSelect.value;
+                el.cameraDeviceSelect.innerHTML = "";
+                cams.forEach((c) => {
+                    const opt = document.createElement("option");
+                    opt.value = c.index;
+                    opt.textContent = `${c.name} (Device #${c.index})`;
+                    el.cameraDeviceSelect.appendChild(opt);
+                });
+                if (prevVal && cams.some((c) => c.index == prevVal)) {
+                    el.cameraDeviceSelect.value = prevVal;
+                }
+            }
+        } catch (e) {
+            console.error("Camera fetch error:", e);
+        }
+    }
+
+    async function startLiveStream() {
+        const camIdx = el.cameraDeviceSelect ? parseInt(el.cameraDeviceSelect.value, 10) : 0;
+        const fps = state.streamFps;
+
+        try {
+            // 1. Trigger backend camera daemon capture
+            await apiFetch(`/api/camera/start?device=${camIdx}&fps=${fps}`, { method: "POST" });
+
+            // 2. Open Server-Sent Events (SSE) listener
+            const sseUrl = `/api/embed/stream?fps=${fps}&threshold=${state.gestureThreshold}&margin=${state.gestureMargin}`;
+            state.sseSource = new EventSource(sseUrl);
+
+            state.sseSource.onmessage = (e) => {
+                try {
+                    const event = JSON.parse(e.data);
+                    logSseEvent(event);
+
+                    state.lastLatencyMs = event.latency_ms;
+                    el.kpiLatency.textContent = `${event.latency_ms.toFixed(1)} ms`;
+
+                    if (event.embedding) {
+                        state.currentVector = event.embedding;
+                        calculateAndRecordEnergy(event.embedding);
+                    }
+
+                    processGestureRecognition(event);
+                } catch (err) {
+                    console.error("SSE parse error:", err);
+                }
+            };
+
+            state.sseSource.addEventListener("error", (evt) => {
+                if (evt && evt.data) {
+                    try {
+                        const err = JSON.parse(evt.data);
+                        showStreamError(err.error || "Erreur de flux");
+                    } catch (_) {
+                        showStreamError("Erreur de flux");
+                    }
+                } else {
+                    console.warn("SSE connection interrupted.");
+                }
+            });
+            startModelViewPolling();
+
+            // 3. Streaming is live as soon as the server camera and SSE are up.
+            state.isStreaming = true;
+            el.btnStreamToggle.textContent = "Pause Live Stream";
+            el.btnStreamToggle.classList.remove("btn-primary");
+            el.btnStreamToggle.classList.add("btn-danger");
+            el.kpiFps.textContent = `${fps} FPS`;
+
+            if (el.gestureCamBtnText) el.gestureCamBtnText.textContent = "Arreter la Camera";
+            if (el.btnGestureCameraToggle) {
+                el.btnGestureCameraToggle.classList.remove("btn-primary");
+                el.btnGestureCameraToggle.classList.add("btn-danger");
+            }
+
+            // 4. Optional browser-side preview for the Video & Camera section. This may
+            // wait on a permission prompt, so it must never block the stream itself.
+            attachBrowserPreview(camIdx);
+        } catch (e) {
+            alert(`Failed to start stream: ${e.message}`);
+        }
+    }
+
+    // Cosmetic full-resolution preview for section 4 via getUserMedia. Inference never
+    // uses these pixels: the server camera feeds the ring buffer and the model.
+    async function attachBrowserPreview(camIdx) {
+        const showBackendFeed = () => {
+            if (el.webcamPreviewElement) {
+                el.webcamPreviewElement.srcObject = null;
+                el.webcamPreviewElement.style.display = "none";
+            }
+            if (el.streamFeedCanvas) el.streamFeedCanvas.style.display = "block";
+            if (el.previewPlaceholder) el.previewPlaceholder.style.display = "none";
+            renderWebcamCanvasLoop();
+        };
+
+        if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
+            showBackendFeed();
+            return;
+        }
+
+        try {
+            const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+            const videoDevices = devices.filter((d) => d.kind === "videoinput");
+            const selectedOpt = el.cameraDeviceSelect && el.cameraDeviceSelect.selectedOptions[0];
+            const selectedName = selectedOpt ? selectedOpt.textContent.toLowerCase() : "";
+
+            const matchedDevice = videoDevices.find((d) => {
+                const lbl = d.label.toLowerCase();
+                if (selectedName.includes("iphone") && lbl.includes("iphone")) return true;
+                if (selectedName.includes("macbook") && (lbl.includes("facetime") || lbl.includes("macbook") || lbl.includes("built-in"))) return true;
+                return false;
+            }) || videoDevices[camIdx];
+
+            const videoConstraints = {
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
+                aspectRatio: { ideal: 1.7777777778 }
+            };
+            if (matchedDevice && matchedDevice.deviceId) {
+                videoConstraints.deviceId = { ideal: matchedDevice.deviceId };
+            }
+
+            const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
+            if (!state.isStreaming) {
+                // Stream was stopped while the permission prompt was open.
+                stream.getTracks().forEach((t) => t.stop());
+                return;
+            }
+            state.webcamStream = stream;
+            stream.getVideoTracks().forEach((track) => {
+                track.onended = () => {
+                    if (state.isStreaming) stopLiveStream();
+                };
+            });
+            el.webcamPreviewElement.srcObject = stream;
+            el.webcamPreviewElement.style.display = "block";
+            if (el.streamFeedCanvas) el.streamFeedCanvas.style.display = "none";
+            if (el.previewPlaceholder) el.previewPlaceholder.style.display = "none";
+        } catch (camErr) {
+            console.warn("Client direct webcam access fallback to backend feed:", camErr);
+            showBackendFeed();
+        }
+    }
+
+    function stopLiveStream() {
+        if (state.sseSource) {
+            state.sseSource.close();
+            state.sseSource = null;
+        }
+
+        apiFetch("/api/camera/stop", { method: "POST" }).catch(() => {});
+        stopModelViewPolling();
+
+        if (state.webcamStream) {
+            state.webcamStream.getTracks().forEach((t) => t.stop());
+            state.webcamStream = null;
+        }
+
+        if (el.webcamPreviewElement) {
+            el.webcamPreviewElement.srcObject = null;
+            el.webcamPreviewElement.style.display = "none";
+        }
+        if (el.streamFeedCanvas) {
+            el.streamFeedCanvas.style.display = "none";
+        }
+        if (el.previewPlaceholder) {
+            el.previewPlaceholder.style.display = "block";
+        }
+
+        state.isStreaming = false;
+        el.btnStreamToggle.textContent = "Start Live Stream";
+        el.btnStreamToggle.classList.remove("btn-danger");
+        el.btnStreamToggle.classList.add("btn-primary");
+        el.kpiFps.textContent = "-- FPS";
+
+        if (el.gestureCamBtnText) el.gestureCamBtnText.textContent = "Demarrer la Camera";
+        if (el.btnGestureCameraToggle) {
+            el.btnGestureCameraToggle.classList.remove("btn-danger");
+            el.btnGestureCameraToggle.classList.add("btn-primary");
+        }
+    }
+
+    function renderWebcamCanvasLoop() {
+        if (!state.isStreaming) return;
+        if (!state.webcamStream) {
+            if (el.streamFeedCanvas && state.latestThumbImg && state.latestThumbImg.complete) {
+                const ctx = el.streamFeedCanvas.getContext("2d");
+                ctx.drawImage(state.latestThumbImg, 0, 0, el.streamFeedCanvas.width, el.streamFeedCanvas.height);
+            }
+            requestAnimationFrame(renderWebcamCanvasLoop);
+        }
+    }
+
+    function logSseEvent(ev) {
+        if (!el.sseStreamLog) return;
+        const placeholder = el.sseStreamLog.querySelector(".sse-placeholder");
+        if (placeholder) {
+            placeholder.remove();
+        }
+
+        const entry = document.createElement("div");
+        entry.className = "sse-log-entry";
+        const time = new Date().toLocaleTimeString();
+        entry.textContent = `[${time}] Frame #${ev.frame_index} | Latency: ${ev.latency_ms.toFixed(1)}ms | Latent Dims: ${ev.embedding ? ev.embedding.length : 0}`;
+        el.sseStreamLog.prepend(entry);
+
+        // Limit log entries
+        while (el.sseStreamLog.children.length > 50) {
+            el.sseStreamLog.removeChild(el.sseStreamLog.lastChild);
+        }
+    }
+
+    // Continuous Ring Buffer Scrubber Refresh
+    async function refreshRingBufferThumbnails() {
+        if (!el.scrubberStripContainer) return;
+        try {
+            const res = await apiFetch("/api/ring-buffer");
+            if (!res.ok) return;
+            const data = await res.json();
+
+            el.bufferCountBadge.textContent = `Buffer: ${data.count} / 16 Frames`;
+            el.scrubberStripContainer.innerHTML = "";
+
+            if (!data.thumbnails || data.thumbnails.length === 0) {
+                el.scrubberStripContainer.innerHTML = `<div style="color: var(--text-dim); font-size: 12px; padding: 14px 8px; width: 100%;">Camera buffer empty. Click 'Start Live Stream' above to capture live video frames.</div>`;
+                return;
+            }
+
+            data.thumbnails.forEach((thumb, idx) => {
+                const item = document.createElement("div");
+                item.className = "scrubber-frame";
+                item.innerHTML = `
+                    <img src="${thumb}" alt="Frame ${idx + 1}" loading="eager">
+                    <span class="scrubber-index">#${idx + 1}</span>
+                `;
+                el.scrubberStripContainer.appendChild(item);
+            });
+
+            if (data.thumbnails && data.thumbnails.length > 0) {
+                const latest = data.thumbnails[data.thumbnails.length - 1];
+                if (!state.latestThumbImg) {
+                    state.latestThumbImg = new Image();
+                }
+                state.latestThumbImg.src = latest;
+            }
+        } catch (e) {
+            // silent ignore during idle
+        }
+    }
+
+    // SECTION 5: ANOMALY & ENERGY MONITOR
+    function setupAnomalyMonitor() {
+        if (el.btnLockBaseline) {
+            el.btnLockBaseline.addEventListener("click", () => {
+                if (state.currentVector) {
+                    state.nominalBaselineVector = [...state.currentVector];
+                    el.baselineStatusLabel.textContent = "Locked (Active)";
+                    el.baselineStatusLabel.style.color = "var(--accent-green)";
+                    alert("Current visual state locked as Nominal Baseline latent representation.");
+                } else {
+                    alert("No embedding available. Run an image or start camera stream first.");
+                }
+            });
+        }
+
+        if (el.sliderThreshold) {
+            el.sliderThreshold.addEventListener("input", (e) => {
+                state.alertThreshold = parseFloat(e.target.value);
+                el.valThreshold.textContent = state.alertThreshold.toFixed(2);
+                renderEnergyChart();
+            });
+        }
+
+        if (el.btnSaveWebhook) {
+            el.btnSaveWebhook.addEventListener("click", () => {
+                state.webhookUrl = el.inputWebhookUrl.value.trim();
+                alert("Alert webhook URL saved.");
+            });
+        }
+    }
+
+    function calculateAndRecordEnergy(incomingVec) {
+        if (!state.nominalBaselineVector) return;
+
+        // Compute L2 Euclidean Distance: sqrt(sum((v1 - v2)^2))
+        let sumSq = 0;
+        const len = Math.min(incomingVec.length, state.nominalBaselineVector.length);
+        for (let i = 0; i < len; i++) {
+            const diff = incomingVec[i] - state.nominalBaselineVector[i];
+            sumSq += diff * diff;
+        }
+        const distance = Math.sqrt(sumSq) / Math.sqrt(len);
+
+        state.energyHistory.push(distance);
+        if (state.energyHistory.length > state.maxChartPoints) {
+            state.energyHistory.shift();
+        }
+
+        // Anomaly Evaluation
+        const isAnomaly = distance > state.alertThreshold;
+        if (isAnomaly) {
+            triggerAnomalyAlert(distance);
+        } else {
+            el.anomalyAlertBanner.style.display = "none";
+        }
+
+        renderEnergyChart();
+    }
+
+    function triggerAnomalyAlert(dist) {
+        el.anomalyAlertBanner.style.display = "flex";
+        el.anomalyAlertBanner.querySelector(".alert-msg").textContent = 
+            `ANOMALY DETECTED: Latent energy distance (${dist.toFixed(3)}) exceeded alert threshold (${state.alertThreshold.toFixed(3)})!`;
+
+        // Audio synthesizer beep alert via Web Audio API
+        const now = Date.now();
+        if (now - state.lastAlertSoundTime > 1500) {
+            playAlertTone();
+            state.lastAlertSoundTime = now;
+        }
+
+        // Webhook trigger
+        if (state.webhookUrl) {
+            fetch(state.webhookUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    event: "anomaly_detected",
+                    distance: dist,
+                    threshold: state.alertThreshold,
+                    model: state.activeModel,
+                    timestamp: new Date().toISOString()
+                })
+            }).catch(() => {});
+        }
+    }
+
+    function playAlertTone() {
+        try {
+            if (!state.audioContext) {
+                state.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            const ctx = state.audioContext;
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+
+            osc.type = "sine";
+            osc.frequency.setValueAtTime(880, ctx.currentTime); // 880 Hz A5 note
+            gain.gain.setValueAtTime(0.2, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start();
+            osc.stop(ctx.currentTime + 0.3);
+        } catch (e) {
+            // ignore audio failure if blocked by browser policy
+        }
+    }
+
+    function renderEnergyChart() {
+        const canvas = el.energyChartCanvas;
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        const w = canvas.width;
+        const h = canvas.height;
+
+        ctx.clearRect(0, 0, w, h);
+
+        // Background Grid
+        ctx.strokeStyle = "rgba(43, 49, 66, 0.4)";
+        ctx.lineWidth = 1;
+        for (let y = 0; y <= h; y += 40) {
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(w, y);
+            ctx.stroke();
+        }
+
+        // Alert Threshold Line
+        const thresholdY = h - (state.alertThreshold / 1.5) * h;
+        ctx.strokeStyle = "rgba(239, 68, 68, 0.85)";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(0, thresholdY);
+        ctx.lineTo(w, thresholdY);
+        ctx.stroke();
+        ctx.setLineDash([]); // Reset line dash
+
+        // Render Energy History Curve
+        if (state.energyHistory.length > 1) {
+            ctx.strokeStyle = "var(--accent-cyan)";
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+
+            const step = w / (state.maxChartPoints - 1);
+            state.energyHistory.forEach((val, i) => {
+                const x = i * step;
+                const y = h - (Math.min(1.5, val) / 1.5) * h;
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            });
+            ctx.stroke();
+        }
+    }
+
+    // SECTION 6: SECURITY & KEYS
+    function setupSecurityAndKeys() {
+        if (el.btnOpenCreateKey) {
+            el.btnOpenCreateKey.addEventListener("click", () => {
+                el.createKeyModal.style.display = "flex";
+                el.generatedTokenDisplay.style.display = "none";
+            });
+        }
+
+        if (el.btnCloseKeyModal) {
+            el.btnCloseKeyModal.addEventListener("click", () => {
+                el.createKeyModal.style.display = "none";
+            });
+        }
+
+        if (el.btnSubmitCreateKey) {
+            el.btnSubmitCreateKey.addEventListener("click", async () => {
+                const name = el.modalKeyName.value.trim() || "API Token";
+                const role = el.modalKeyRole.value;
+                const days = el.modalKeyExpire.value ? parseInt(el.modalKeyExpire.value, 10) : null;
+
+                try {
+                    const res = await apiFetch("/api/keys", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ name, role, expire_days: days })
+                    });
+                    if (!res.ok) {
+                        const err = await res.json().catch(() => ({}));
+                        throw new Error(err.error || "Failed to create key");
+                    }
+                    const data = await res.json();
+
+                    el.rawTokenValue.value = data.raw_token;
+                    el.generatedTokenDisplay.style.display = "block";
+                    fetchApiKeys();
+                } catch (e) {
+                    alert(`Error creating key: ${e.message}`);
+                }
+            });
+        }
+
+        if (el.btnCopyRawToken) {
+            el.btnCopyRawToken.addEventListener("click", () => {
+                navigator.clipboard.writeText(el.rawTokenValue.value);
+                alert("Bearer token copied to clipboard!");
+            });
+        }
+
+        if (el.toggleLanAccess) {
+            el.toggleLanAccess.addEventListener("change", (e) => {
+                if (e.target.checked) {
+                    if (!confirm("Enabling LAN access binds the daemon to 0.0.0.0, allowing network clients to call inference. Keep authentication enabled. Proceed?")) {
+                        e.target.checked = false;
+                        return;
+                    }
+                    el.lanWarningBox.style.display = "block";
+                } else {
+                    el.lanWarningBox.style.display = "none";
+                }
+            });
+        }
+
+        if (el.btnRefreshAudit) {
+            el.btnRefreshAudit.addEventListener("click", fetchAuditLog);
+        }
+    }
+
+    async function fetchApiKeys() {
+        if (!el.apiKeysTbody) return;
+        try {
+            const res = await apiFetch("/api/keys");
+            if (!res.ok) return;
+            const keys = await res.json();
+
+            el.apiKeysTbody.innerHTML = "";
+            keys.forEach((k) => {
+                const tr = document.createElement("tr");
+                tr.innerHTML = `
+                    <td><code>${k.key_prefix}...</code></td>
+                    <td>${k.name}</td>
+                    <td><span class="badge badge-dim">${k.role}</span></td>
+                    <td>${new Date(k.created_at).toLocaleDateString()}</td>
+                    <td>${k.expires_at ? new Date(k.expires_at).toLocaleDateString() : "Never"}</td>
+                    <td><button class="btn btn-sm btn-danger" data-prefix="${k.key_prefix}">Revoke</button></td>
+                `;
+
+                tr.querySelector("button").addEventListener("click", async () => {
+                    if (confirm(`Revoke key ${k.key_prefix}?`)) {
+                        await apiFetch(`/api/keys/${k.key_prefix}`, { method: "DELETE" });
+                        fetchApiKeys();
+                    }
+                });
+
+                el.apiKeysTbody.appendChild(tr);
+            });
+        } catch (e) {
+            console.error("fetchApiKeys error:", e);
+        }
+    }
+
+    async function fetchAuditLog() {
+        if (!el.auditLogTbody) return;
+        try {
+            const res = await apiFetch("/api/audit");
+            if (!res.ok) return;
+            const logs = await res.json();
+
+            el.auditLogTbody.innerHTML = "";
+            logs.slice(0, 50).forEach((entry) => {
+                const tr = document.createElement("tr");
+                const time = new Date(entry.timestamp).toLocaleTimeString();
+                tr.innerHTML = `
+                    <td>${time}</td>
+                    <td><code>${entry.method}</code></td>
+                    <td>${entry.path}</td>
+                    <td>${entry.client_ip}</td>
+                    <td><span class="badge ${entry.status_code < 400 ? 'badge-image' : 'badge-video'}">${entry.status_code}</span></td>
+                    <td>${entry.latency_ms.toFixed(1)} ms</td>
+                `;
+                el.auditLogTbody.appendChild(tr);
+            });
+        } catch (e) {
+            console.error("fetchAuditLog error:", e);
+        }
+    }
+
+    // SECTION 7: SETTINGS
+    async function setupSettings() {
+        try {
+            const res = await apiFetch("/api/settings");
+            if (res.ok) {
+                const s = await res.json();
+                if (el.settingsBackend && s.compute_backend) {
+                    el.settingsBackend.value = s.compute_backend;
+                }
+                if (el.settingsMemWatermark && s.gpu_memory_high_watermark) {
+                    el.settingsMemWatermark.value = s.gpu_memory_high_watermark;
+                }
+                if (el.settingsIdleTimeout && s.idle_unload_timeout_minutes) {
+                    el.settingsIdleTimeout.value = s.idle_unload_timeout_minutes;
+                }
+                if (el.settingsStorageDir && s.storage_dir) {
+                    el.settingsStorageDir.value = s.storage_dir;
+                }
+            }
+        } catch (_) {}
+
+        if (el.btnSaveSettings) {
+            el.btnSaveSettings.addEventListener("click", async () => {
+                const backend = el.settingsBackend.value;
+                const memRatio = parseFloat(el.settingsMemWatermark.value);
+                const timeout = parseInt(el.settingsIdleTimeout.value, 10);
+
+                try {
+                    const res = await apiFetch("/api/settings", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            compute_backend: backend,
+                            gpu_memory_high_watermark: memRatio,
+                            idle_unload_timeout_minutes: timeout,
+                            storage_dir: el.settingsStorageDir.value
+                        })
+                    });
+                    if (res.ok) {
+                        alert("Settings saved successfully.");
+                    } else {
+                        const err = await res.json().catch(() => ({}));
+                        alert(`Failed to save settings: ${err.error || "Unknown error"}`);
+                    }
+                } catch (e) {
+                    alert(`Failed to save settings: ${e.message}`);
+                }
+            });
+        }
+    }
+
+    // SECTION 8: FEW-SHOT GESTURE SANDBOX
+    // ------------------------------------------------------------------
+    // Gesture Sandbox
+    //
+    // Registration and live matching both run on the *server* camera frame
+    // (see /api/camera/frame and POST /api/gestures {from_camera:true}), so the
+    // reference prototypes and the live embeddings always share one pipeline.
+    // The server returns a full GestureMatchResult per frame; the UI only adds
+    // temporal smoothing and its own threshold/margin on top of it.
+    // ------------------------------------------------------------------
+
+    function setupGestureSandbox() {
+        if (el.btnGestureCameraToggle) {
+            el.btnGestureCameraToggle.addEventListener("click", () => {
+                if (state.isStreaming) {
+                    stopLiveStream();
+                } else {
+                    startLiveStream();
+                }
+            });
+        }
+
+        const bindSlider = (slider, label, key, fmt) => {
+            if (!slider) return;
+            slider.addEventListener("input", (e) => {
+                const val = parseFloat(e.target.value);
+                state[key] = val;
+                if (label) label.textContent = fmt(val);
+            });
+        };
+        bindSlider(el.sliderGestureThreshold, el.valGestureThreshold, "gestureThreshold", (v) => v.toFixed(2));
+        bindSlider(el.sliderGestureMargin, el.valGestureMargin, "gestureMargin", (v) => v.toFixed(2));
+        bindSlider(el.sliderGestureSmoothing, el.valGestureSmoothing, "gestureSmoothing", (v) => String(Math.round(v)));
+
+        if (el.toggleGestureAudio) {
+            el.toggleGestureAudio.addEventListener("change", (e) => {
+                state.gestureAudioEnabled = e.target.checked;
+            });
+        }
+        if (el.toggleGestureHeatmap) {
+            el.toggleGestureHeatmap.addEventListener("change", (e) => {
+                state.gestureHeatmap = e.target.checked;
+                if (!state.gestureHeatmap) clearHeatmap();
+            });
+        }
+
+        for (let i = 1; i <= GESTURE_SLOT_COUNT; i++) {
+            const btnCap = document.getElementById(`btn-capture-${i}`);
+            if (btnCap) btnCap.addEventListener("click", () => captureSlotPose(i));
+            const btnDel = document.getElementById(`btn-delete-${i}`);
+            if (btnDel) btnDel.addEventListener("click", () => deleteSlotPose(i));
+        }
+
+        if (el.btnGesturesClear) {
+            el.btnGesturesClear.addEventListener("click", async () => {
+                if (!confirm("Supprimer tous les gestes enregistres pour le modele actif ?")) return;
+                try {
+                    const res = await apiFetch("/api/gestures", { method: "DELETE" });
+                    if (!res.ok) {
+                        const err = await res.json().catch(() => ({}));
+                        alert(`Erreur : ${err.error || "Echec"}`);
+                    }
+                } catch (e) {
+                    alert(`Erreur : ${e.message}`);
+                }
+                state.gestureHistory = {};
+                await fetchGesturesList();
+            });
+        }
+    }
+
+    function updateWeightsBadge(weights, activeModel) {
+        if (!el.gestureWeightsBadge) return;
+        if (!activeModel || !weights) {
+            el.gestureWeightsBadge.textContent = "poids : --";
+            el.gestureWeightsBadge.className = "weights-badge";
+            el.gestureWeightsBadge.title = "Aucun modele charge";
+            return;
+        }
+        const ok = weights.loaded === weights.expected && weights.expected > 0;
+        el.gestureWeightsBadge.textContent = `poids : ${weights.loaded}/${weights.expected} (${weights.source})`;
+        el.gestureWeightsBadge.className = `weights-badge ${ok ? "ok" : "bad"}`;
+        el.gestureWeightsBadge.title = ok
+            ? "Tous les parametres proviennent du checkpoint"
+            : "Checkpoint incomplet : les embeddings ne sont pas fiables";
+    }
+
+    function showStreamError(message) {
+        if (el.gestureDetectionBadge) {
+            el.gestureDetectionBadge.className = "gesture-badge gesture-badge-idle";
+        }
+        if (el.gestureBadgeText) el.gestureBadgeText.textContent = `Erreur : ${message}`;
+        if (el.gestureReasoningDecision) {
+            el.gestureReasoningDecision.textContent = `Flux interrompu : ${message}`;
+            el.gestureReasoningDecision.classList.remove("detected");
+        }
+    }
+
+    // --- Model view polling (what the network actually receives) ---------
+
+    function startModelViewPolling() {
+        stopModelViewPolling();
+        if (el.gestureViewPlaceholder) el.gestureViewPlaceholder.style.display = "none";
+        const interval = Math.max(100, Math.round(1000 / (state.streamFps || 10)));
+        const tick = async () => {
+            if (!state.isStreaming) return;
+            try {
+                const res = await apiFetch("/api/camera/frame");
+                if (res.ok) {
+                    const seq = res.headers.get("x-frame-sequence");
+                    if (seq !== state.modelViewSequence) {
+                        state.modelViewSequence = seq;
+                        const blob = await res.blob();
+                        const url = URL.createObjectURL(blob);
+                        if (el.gestureModelView) el.gestureModelView.src = url;
+                        if (state.modelViewObjectUrl) URL.revokeObjectURL(state.modelViewObjectUrl);
+                        state.modelViewObjectUrl = url;
+                    }
+                }
+            } catch (e) {
+                console.warn("model view fetch failed:", e);
+            }
+        };
+        tick();
+        state.modelViewTimer = setInterval(tick, interval);
+    }
+
+    function stopModelViewPolling() {
+        if (state.modelViewTimer) {
+            clearInterval(state.modelViewTimer);
+            state.modelViewTimer = null;
+        }
+        if (el.gestureViewPlaceholder) el.gestureViewPlaceholder.style.display = "flex";
+        clearHeatmap();
+    }
+
+    function clearHeatmap() {
+        if (!el.gestureHeatmap) return;
+        const ctx = el.gestureHeatmap.getContext("2d");
+        ctx.clearRect(0, 0, el.gestureHeatmap.width, el.gestureHeatmap.height);
+    }
+
+    // Per-patch dissimilarity to the best prototype, drawn as a grid overlay.
+    function drawHeatmap(patchDiff, gridSize) {
+        if (!el.gestureHeatmap || !state.gestureHeatmap) return;
+        if (!Array.isArray(patchDiff) || !gridSize || patchDiff.length !== gridSize * gridSize) {
+            clearHeatmap();
+            return;
+        }
+        const canvas = el.gestureHeatmap;
+        const ctx = canvas.getContext("2d");
+        const cell = canvas.width / gridSize;
+        // Normalise against the frame's own max so the map always has contrast.
+        const max = Math.max(1e-6, ...patchDiff);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        for (let i = 0; i < patchDiff.length; i++) {
+            const v = Math.max(0, Math.min(1, patchDiff[i] / max));
+            const x = (i % gridSize) * cell;
+            const y = Math.floor(i / gridSize) * cell;
+            // Dark -> amber -> red, alpha grows with difference.
+            const r = Math.round(255 * Math.min(1, v * 1.4));
+            const g = Math.round(180 * Math.max(0, 1 - Math.abs(v - 0.5) * 2));
+            ctx.fillStyle = `rgba(${r}, ${g}, 40, ${(0.15 + 0.7 * v).toFixed(2)})`;
+            ctx.fillRect(x, y, cell, cell);
+        }
+    }
+
+    // --- Registration ------------------------------------------------------
+
+    function slotName(slotIndex) {
+        const input = document.getElementById(`gesture-name-${slotIndex}`);
+        return input ? input.value.trim() : "";
+    }
+
+    function gestureForSlot(slotIndex) {
+        const name = slotName(slotIndex);
+        return state.registeredGestures.find((g) => g.name === name) || null;
+    }
+
+    async function captureSlotPose(slotIndex) {
+        const name = slotName(slotIndex);
+        if (!name) {
+            alert("Veuillez saisir un libelle pour ce geste.");
+            return;
+        }
+
+        if (!state.isStreaming) {
+            try {
+                await startLiveStream();
+                await new Promise((r) => setTimeout(r, 800));
+            } catch (e) {
+                alert("Veuillez demarrer la camera pour capturer un geste de reference.");
+                return;
+            }
+        }
+
+        const btnCap = document.getElementById(`btn-capture-${slotIndex}`);
+        const originalHtml = btnCap ? btnCap.innerHTML : "Capturer";
+        if (btnCap) {
+            btnCap.disabled = true;
+            btnCap.innerHTML = `<span class="btn-icon">&#9203;</span> Encodage...`;
+        }
+
+        try {
+            const res = await apiFetch("/api/gestures", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    name,
+                    from_camera: true,
+                    is_neutral: slotIndex === GESTURE_NEUTRAL_SLOT
+                })
+            });
+            if (res.ok) {
+                await fetchGesturesList();
+            } else {
+                const err = await res.json().catch(() => ({}));
+                alert(`Erreur d'enregistrement : ${err.error || "Echec de l'appel API"}`);
+            }
+        } catch (err) {
+            console.error("captureSlotPose error:", err);
+            alert(`Erreur lors de la capture : ${err.message}`);
+        } finally {
+            if (btnCap) {
+                btnCap.disabled = false;
+                btnCap.innerHTML = originalHtml;
+            }
+        }
+    }
+
+    async function deleteSlotPose(slotIndex) {
+        const g = gestureForSlot(slotIndex);
+        if (!g) return;
+        if (!confirm(`Supprimer le geste '${g.name}' (${g.sample_count} echantillon(s)) ?`)) return;
+
+        try {
+            const res = await apiFetch(`/api/gestures/${encodeURIComponent(g.name)}`, { method: "DELETE" });
+            if (res.ok) {
+                state.slotHoldCounts[slotIndex] = 0;
+                const counterEl = document.getElementById(`slot-counter-${slotIndex}`);
+                if (counterEl) counterEl.textContent = "0";
+                delete state.gestureHistory[g.name];
+                await fetchGesturesList();
+            } else {
+                const err = await res.json().catch(() => ({}));
+                alert(`Erreur de suppression : ${err.error || "Echec"}`);
+            }
+        } catch (e) {
+            console.error("deleteSlotPose error:", e);
+            alert(`Erreur : ${e.message}`);
+        }
+    }
+
+    async function fetchGesturesList() {
+        try {
+            const res = await apiFetch("/api/gestures");
+            if (!res.ok) return;
+            const gestures = await res.json();
+            state.registeredGestures = Array.isArray(gestures) ? gestures : [];
+
+            if (el.gestureCountBadge) {
+                const n = state.registeredGestures.length;
+                el.gestureCountBadge.textContent = `${n} geste${n > 1 ? "s" : ""}`;
+            }
+
+            const activeNames = new Set(state.registeredGestures.map((g) => g.name));
+            for (const k of Object.keys(state.gestureHistory)) {
+                if (!activeNames.has(k)) delete state.gestureHistory[k];
+            }
+
+            // Fill slots: a slot shows the gesture whose name matches its input; unmatched
+            // gestures are assigned to remaining empty slots (neutral ones to the neutral slot).
+            const assigned = new Set();
+            const slotGesture = {};
+            for (let i = 1; i <= GESTURE_SLOT_COUNT; i++) {
+                const g = state.registeredGestures.find((item) => item.name === slotName(i) && !assigned.has(item.name));
+                if (g) {
+                    slotGesture[i] = g;
+                    assigned.add(g.name);
+                }
+            }
+            for (const g of state.registeredGestures) {
+                if (assigned.has(g.name)) continue;
+                for (let i = 1; i <= GESTURE_SLOT_COUNT; i++) {
+                    const isNeutralSlot = i === GESTURE_NEUTRAL_SLOT;
+                    if (slotGesture[i] || isNeutralSlot !== !!g.is_neutral) continue;
+                    slotGesture[i] = g;
+                    assigned.add(g.name);
+                    const input = document.getElementById(`gesture-name-${i}`);
+                    if (input) input.value = g.name;
+                    break;
+                }
+            }
+
+            for (let i = 1; i <= GESTURE_SLOT_COUNT; i++) {
+                renderSlot(i, slotGesture[i] || null);
+            }
+
+            if (state.registeredGestures.length === 0 && el.gestureBadgeText) {
+                el.gestureBadgeText.textContent = state.isStreaming
+                    ? "En attente : capturez un slot a droite"
+                    : "Aucun geste enregistre (demarrez la camera)";
+            }
+        } catch (e) {
+            console.error("fetchGesturesList error:", e);
+        }
+    }
+
+    function renderSlot(i, g) {
+        const card = document.getElementById(`slot-card-${i}`);
+        const stateBadge = document.getElementById(`slot-state-${i}`);
+        const imgEl = document.getElementById(`slot-img-${i}`);
+        const emptyEl = document.getElementById(`slot-empty-${i}`);
+        const metaEl = document.getElementById(`slot-meta-${i}`);
+        const btnCap = document.getElementById(`btn-capture-${i}`);
+        const btnDel = document.getElementById(`btn-delete-${i}`);
+        const isNeutralSlot = i === GESTURE_NEUTRAL_SLOT;
+
+        if (g) {
+            if (card) card.classList.add("has-gesture");
+            if (stateBadge) {
+                stateBadge.textContent = `${g.sample_count} ech.`;
+                stateBadge.className = "slot-state-badge registered";
+            }
+            if (imgEl) {
+                if (g.thumbnail) {
+                    imgEl.src = g.thumbnail;
+                    imgEl.style.display = "block";
+                } else {
+                    imgEl.style.display = "none";
+                }
+            }
+            if (emptyEl) emptyEl.style.display = g.thumbnail ? "none" : "flex";
+            if (metaEl) {
+                const t = g.updated_at ? new Date(g.updated_at * 1000).toLocaleTimeString() : "--";
+                metaEl.textContent = `${g.dimension}d | ${g.sample_count} echantillon(s) | ${g.model_name} | ${t}`;
+            }
+            if (btnCap) btnCap.innerHTML = `<span class="btn-icon">&#10133;</span> + Echantillon`;
+            if (btnDel) btnDel.style.display = "inline-flex";
+        } else {
+            if (card) {
+                card.classList.remove("has-gesture");
+                card.classList.remove("matched-active");
+            }
+            if (stateBadge) {
+                stateBadge.textContent = "Vide";
+                stateBadge.className = "slot-state-badge";
+            }
+            if (imgEl) {
+                imgEl.src = "";
+                imgEl.style.display = "none";
+            }
+            if (emptyEl) emptyEl.style.display = "flex";
+            if (metaEl) {
+                metaEl.textContent = isNeutralSlot
+                    ? "Posture de repos : absorbe les frames sans geste. Jamais signalee comme detection."
+                    : "Capturez 3 a 5 echantillons en variant legerement la position.";
+            }
+            if (btnCap) btnCap.innerHTML = `<span class="btn-icon">&#128247;</span> Capturer`;
+            if (btnDel) btnDel.style.display = "none";
+            const scoreValEl = document.getElementById(`slot-score-val-${i}`);
+            const scoreBarEl = document.getElementById(`slot-score-bar-${i}`);
+            if (scoreValEl) scoreValEl.textContent = "--%";
+            if (scoreBarEl) scoreBarEl.style.width = "0%";
+        }
+    }
+
+    // --- Live recognition --------------------------------------------------
+
+    function processGestureRecognition(event) {
+        const match = event && event.gesture_match ? event.gesture_match : null;
+        state.lastGestureMatch = match;
+
+        if (!match || !state.registeredGestures.length) {
+            handleGestureActions(null, 0);
+            if (el.gestureDetectionBadge) el.gestureDetectionBadge.className = "gesture-badge gesture-badge-idle";
+            if (el.gestureBadgeText) {
+                el.gestureBadgeText.textContent = state.registeredGestures.length
+                    ? "Aucun geste enregistre pour ce modele"
+                    : "Aucun geste enregistre (capturez un slot a droite)";
+            }
+            if (el.gestureConfidenceText) el.gestureConfidenceText.textContent = "0.0%";
+            if (el.gestureConfidenceBar) el.gestureConfidenceBar.style.width = "0%";
+            renderReasoning(null, event);
+            clearHeatmap();
+            return;
+        }
+
+        // Temporal smoothing over the server's blended scores.
+        const window = Math.max(1, Math.round(state.gestureSmoothing));
+        const smoothed = {};
+        for (const s of match.scores) {
+            if (!state.gestureHistory[s.name]) state.gestureHistory[s.name] = [];
+            const hist = state.gestureHistory[s.name];
+            hist.push(s.combined);
+            while (hist.length > window) hist.shift();
+            smoothed[s.name] = hist.reduce((a, b) => a + b, 0) / hist.length;
+        }
+
+        // Client-side decision with the UI's own threshold and margin, mirroring the server rule.
+        const ranked = match.scores
+            .map((s) => ({ name: s.name, is_neutral: s.is_neutral, score: smoothed[s.name] || 0 }))
+            .sort((a, b) => b.score - a.score);
+        const best = ranked[0];
+        const second = ranked[1] ? ranked[1].score : 0;
+        const margin = best ? best.score - second : 0;
+        let recognized = null;
+        let waitReason = "";
+        if (!best) {
+            waitReason = "Aucun score";
+        } else if (best.is_neutral) {
+            waitReason = `Posture neutre '${best.name}'`;
+        } else if (best.score < state.gestureThreshold) {
+            waitReason = `${best.name} ${(best.score * 100).toFixed(0)}% < seuil ${(state.gestureThreshold * 100).toFixed(0)}%`;
+        } else if (margin < state.gestureMargin) {
+            waitReason = `${best.name} : marge ${(margin * 100).toFixed(1)}% < ${(state.gestureMargin * 100).toFixed(0)}%`;
+        } else {
+            recognized = best.name;
+        }
+
+        const bestNonNeutral = ranked.filter((r) => !r.is_neutral)[0];
+        const displayScore = bestNonNeutral ? Math.max(0, Math.min(1, bestNonNeutral.score)) : 0;
+        const scorePct = (displayScore * 100).toFixed(1);
+        if (el.gestureConfidenceText) el.gestureConfidenceText.textContent = `${scorePct}%`;
+        if (el.gestureConfidenceBar) el.gestureConfidenceBar.style.width = `${scorePct}%`;
+
+        if (el.gestureDetectionBadge) {
+            el.gestureDetectionBadge.className = recognized ? "gesture-badge gesture-badge-detected" : "gesture-badge gesture-badge-idle";
+        }
+        if (el.gestureBadgeText) {
+            el.gestureBadgeText.textContent = recognized ? `Identifie : ${recognized}` : `En attente (${waitReason})`;
+        }
+
+        // Live meters on every slot.
+        for (let i = 1; i <= GESTURE_SLOT_COUNT; i++) {
+            const g = gestureForSlot(i);
+            const scoreValEl = document.getElementById(`slot-score-val-${i}`);
+            const scoreBarEl = document.getElementById(`slot-score-bar-${i}`);
+            if (!scoreValEl || !scoreBarEl) continue;
+            if (g && smoothed[g.name] !== undefined) {
+                const v = Math.max(0, Math.min(1, smoothed[g.name]));
+                scoreValEl.textContent = `${(v * 100).toFixed(1)}%`;
+                scoreBarEl.style.width = `${v * 100}%`;
+                const active = recognized && g.name === recognized;
+                scoreBarEl.style.backgroundColor = active ? "#4ade80" : "#38bdf8";
+                scoreValEl.style.color = active ? "#4ade80" : "#38bdf8";
+            } else {
+                scoreValEl.textContent = "--%";
+                scoreBarEl.style.width = "0%";
+            }
+        }
+
+        renderReasoning(match, event, { recognized, margin, waitReason });
+        drawHeatmap(match.patch_diff, match.grid_size);
+        handleGestureActions(recognized, displayScore);
+    }
+
+    function fmtScore(v) {
+        return typeof v === "number" ? v.toFixed(3) : "--";
+    }
+
+    function renderReasoning(match, event, decision) {
+        if (!el.gestureReasoningBody) return;
+
+        if (el.gestureMethodBadge) {
+            el.gestureMethodBadge.textContent = `methode : ${match ? match.method : "--"}`;
+        }
+        if (el.reasonLatency) el.reasonLatency.textContent = event && typeof event.latency_ms === "number" ? `${event.latency_ms.toFixed(1)} ms` : "--";
+        if (el.reasonFrame) el.reasonFrame.textContent = event ? String(event.frame_index) : "--";
+
+        if (!match) {
+            el.gestureReasoningBody.innerHTML = `<tr><td colspan="5" class="reasoning-empty">En attente de flux et de gestes enregistres.</td></tr>`;
+            if (el.gestureReasoningDecision) {
+                el.gestureReasoningDecision.textContent = "Decision : --";
+                el.gestureReasoningDecision.classList.remove("detected");
+            }
+            if (el.reasonMargin) el.reasonMargin.textContent = "--";
+            if (el.reasonThreshold) el.reasonThreshold.textContent = "--";
+            if (el.reasonGrid) el.reasonGrid.textContent = "--";
+            return;
+        }
+
+        const bestName = match.scores.length ? match.scores[0].name : null;
+        const rows = match.scores.map((s) => {
+            const cls = [s.name === bestName ? "best" : "", s.is_neutral ? "neutral" : ""].join(" ").trim();
+            const contrast = s.contrastive === null || s.contrastive === undefined ? "--" : fmtScore(s.contrastive);
+            const pct = Math.max(0, Math.min(100, s.combined * 100));
+            return `<tr class="${cls}">
+                <td>${escapeHtml(s.name)}${s.is_neutral ? " (neutre)" : ""}</td>
+                <td class="num">${s.sample_count}</td>
+                <td class="num">${fmtScore(s.raw_cosine)}</td>
+                <td class="num">${contrast}</td>
+                <td><div class="score-cell"><span class="num">${fmtScore(s.combined)}</span><div class="score-track"><div class="score-fill" style="width:${pct.toFixed(1)}%"></div></div></div></td>
+            </tr>`;
+        });
+        el.gestureReasoningBody.innerHTML = rows.join("");
+
+        if (el.gestureReasoningDecision) {
+            const serverPart = `Serveur : ${escapeHtml(match.reason)}`;
+            let clientPart = "";
+            if (decision) {
+                clientPart = decision.recognized
+                    ? `UI (lisse sur ${Math.round(state.gestureSmoothing)} frames) : ${escapeHtml(decision.recognized)} detecte`
+                    : `UI (lisse sur ${Math.round(state.gestureSmoothing)} frames) : ${escapeHtml(decision.waitReason)}`;
+            }
+            el.gestureReasoningDecision.innerHTML = `${serverPart}<br>${clientPart}`;
+            el.gestureReasoningDecision.classList.toggle("detected", !!(decision && decision.recognized));
+        }
+        if (el.reasonMargin) el.reasonMargin.textContent = `${fmtScore(match.margin)} (requis ${fmtScore(match.margin_required)})`;
+        if (el.reasonThreshold) el.reasonThreshold.textContent = fmtScore(match.threshold);
+        if (el.reasonGrid) el.reasonGrid.textContent = match.grid_size ? `${match.grid_size}x${match.grid_size} patches` : "n/a (modele video)";
+    }
+
+    function escapeHtml(str) {
+        const div = document.createElement("div");
+        div.textContent = String(str);
+        return div.innerHTML;
+    }
+
+    function handleGestureActions(gesture, score) {
+        const slotThemes = {
+            1: { name: "Cyan", color: "#38bdf8", bg: "rgba(56, 189, 248, 0.15)", border: "rgba(56, 189, 248, 0.5)", freq: 523.25 },
+            2: { name: "Amethyste", color: "#c084fc", bg: "rgba(192, 132, 252, 0.15)", border: "rgba(192, 132, 252, 0.5)", freq: 659.25 },
+            3: { name: "Emeraude", color: "#4ade80", bg: "rgba(74, 222, 128, 0.15)", border: "rgba(74, 222, 128, 0.5)", freq: 783.99 },
+        };
+
+        let activeSlot = null;
+        if (gesture) {
+            for (let i = 1; i < GESTURE_NEUTRAL_SLOT; i++) {
+                if (slotName(i) === gesture) {
+                    activeSlot = i;
+                    break;
+                }
+            }
+        }
+
+        for (let i = 1; i <= GESTURE_SLOT_COUNT; i++) {
+            const card = document.getElementById(`slot-card-${i}`);
+            if (card) card.classList.toggle("matched-active", activeSlot === i);
+        }
+
+        if (gesture && activeSlot) {
+            const theme = slotThemes[activeSlot] || slotThemes[1];
+
+            if (el.gestureThemeText) el.gestureThemeText.textContent = `${gesture} : ${theme.name} (slot ${activeSlot})`;
+            if (el.gestureThemePill) {
+                el.gestureThemePill.style.backgroundColor = theme.bg;
+                el.gestureThemePill.style.borderColor = theme.border;
+                el.gestureThemePill.style.color = theme.color;
+                el.gestureThemePill.style.boxShadow = `0 0 14px ${theme.bg}`;
+            }
+            if (el.gestureVideoWrapper) {
+                el.gestureVideoWrapper.style.boxShadow = `0 0 24px ${theme.bg}`;
+                el.gestureVideoWrapper.style.borderColor = theme.border;
+            }
+
+            const now = Date.now();
+            if (state.gestureAudioEnabled && now - state.lastAudioToneTime > 450) {
+                state.lastAudioToneTime = now;
+                playGestureTone(theme.freq);
+            }
+
+            if (state.activeGestureHold === gesture) {
+                const elapsedSec = (now - state.holdStartTime) / 1000.0;
+                const pct = Math.min(100, (elapsedSec / 1.0) * 100);
+                if (el.gestureHoldTimerText) el.gestureHoldTimerText.textContent = `Maintien : ${Math.min(1.0, elapsedSec).toFixed(1)}s / 1.0s`;
+                if (el.gestureHoldBar) {
+                    el.gestureHoldBar.style.width = `${pct}%`;
+                    el.gestureHoldBar.style.backgroundColor = theme.color;
+                }
+                if (elapsedSec >= 1.0 && !state.holdTriggered) {
+                    state.holdTriggered = true;
+                    state.slotHoldCounts[activeSlot] = (state.slotHoldCounts[activeSlot] || 0) + 1;
+                    const counterEl = document.getElementById(`slot-counter-${activeSlot}`);
+                    if (counterEl) counterEl.textContent = state.slotHoldCounts[activeSlot];
+                    if (state.gestureAudioEnabled) playGestureTone(theme.freq * 1.5);
+                }
+            } else {
+                state.activeGestureHold = gesture;
+                state.holdStartTime = now;
+                state.holdTriggered = false;
+                if (el.gestureHoldTimerText) el.gestureHoldTimerText.textContent = "Maintien : 0.0s / 1.0s";
+                if (el.gestureHoldBar) el.gestureHoldBar.style.width = "0%";
+            }
+        } else {
+            if (el.gestureThemeText) el.gestureThemeText.textContent = "Palette neutre";
+            if (el.gestureThemePill) {
+                el.gestureThemePill.style.backgroundColor = "transparent";
+                el.gestureThemePill.style.borderColor = "var(--border-color)";
+                el.gestureThemePill.style.color = "var(--text-dim)";
+                el.gestureThemePill.style.boxShadow = "none";
+            }
+            if (el.gestureVideoWrapper) {
+                el.gestureVideoWrapper.style.boxShadow = "none";
+                el.gestureVideoWrapper.style.borderColor = "var(--border-subtle)";
+            }
+            state.activeGestureHold = null;
+            state.holdStartTime = null;
+            state.holdTriggered = false;
+            if (el.gestureHoldTimerText) el.gestureHoldTimerText.textContent = "Maintien : 0.0s / 1.0s";
+            if (el.gestureHoldBar) el.gestureHoldBar.style.width = "0%";
+        }
+    }
+
+    function playGestureTone(freq) {
+        if (!state.gestureAudioEnabled) return;
+        try {
+            if (!state.audioContext) {
+                const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                if (AudioCtx) {
+                    state.audioContext = new AudioCtx();
+                }
+            }
+            if (state.audioContext && state.audioContext.state === "suspended") {
+                state.audioContext.resume();
+            }
+            if (!state.audioContext) return;
+
+            const ctx = state.audioContext;
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+
+            osc.type = "sine";
+            osc.frequency.setValueAtTime(freq, ctx.currentTime);
+
+            gain.gain.setValueAtTime(0.001, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.12, ctx.currentTime + 0.02);
+            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18);
+
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + 0.20);
+        } catch (e) {
+            console.warn("Audio tone playback failed:", e);
+        }
+    }
+
+    // Kickoff
+    document.addEventListener("DOMContentLoaded", init);
+})();

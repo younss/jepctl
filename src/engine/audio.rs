@@ -2,7 +2,7 @@
 //!
 //! The backbone is the shared 2D [`VitBackbone`] with one input channel and a
 //! rectangular patch grid (`frames / patch` × `n_mels / patch`); the front-end lives in
-//! `media::audio`. Any checkpoint whose tensors map onto the backbone loads here —
+//! `media::audio`. Any checkpoint whose tensors map onto the backbone loads here -
 //! AudioMAE (timm naming, CLS token, learned positional embedding) is the verified one.
 
 use std::path::Path;

@@ -10,7 +10,7 @@
 //!   model's frame count.
 //!
 //! Numerical parity with torchaudio has been checked structurally (same steps and
-//! constants), not bit-for-bit — see docs/ARCHITECTURE.md.
+//! constants), not bit-for-bit: see docs/ARCHITECTURE.md.
 
 use std::path::Path;
 use std::process::Command;

@@ -112,10 +112,10 @@ pub struct HardwareInfo {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Normalization {
-    /// mean (0.485, 0.456, 0.406), std (0.229, 0.224, 0.225) — I-JEPA, DINOv2, HF ViT.
+    /// mean (0.485, 0.456, 0.406), std (0.229, 0.224, 0.225): I-JEPA, DINOv2, HF ViT.
     #[default]
     ImageNet,
-    /// mean 0.5, std 0.5 on every channel — timm "augreg" ViTs, SigLIP.
+    /// mean 0.5, std 0.5 on every channel: timm "augreg" ViTs, SigLIP.
     Inception,
 }
 

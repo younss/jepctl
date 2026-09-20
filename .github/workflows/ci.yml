@@ -30,6 +30,8 @@ jobs:
           node-version: 20
       - name: Embedded UI syntax check
         run: node --check src/ui/app.js
+      - name: Workspace navigation tests
+        run: node --test tests/ui/*.test.cjs
 
   test:
     name: Test (${{ matrix.os }})

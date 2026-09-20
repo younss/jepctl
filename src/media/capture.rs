@@ -184,14 +184,29 @@ impl CameraSupervisor {
                     Some(cam)
                 }
                 Ok(_) => {
-                    tracing::warn!("Camera {} opened after the timeout; the synthetic producer keeps running.", camera_index);
+                    tracing::warn!(
+                        "Camera {} opened after the timeout; the synthetic producer keeps running.",
+                        camera_index
+                    );
                     return;
                 }
                 Err(e) => {
                     if taken_over {
                         return;
                     }
-                    let msg = format!("Could not open camera {}: {}. Using the synthetic test pattern.", camera_index, e);
+                    let detail = e.to_string();
+                    let hint = if detail.contains("Lock Rejected")
+                        || detail.contains("busy")
+                        || detail.contains("in use")
+                    {
+                        " The device is held by another application or another jepctl instance: stop it and restart the camera."
+                    } else {
+                        ""
+                    };
+                    let msg = format!(
+                        "Could not open camera {}: {}.{} Using the synthetic test pattern.",
+                        camera_index, detail, hint
+                    );
                     tracing::warn!("{}", msg);
                     *last_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(msg);
                     *source.lock().unwrap_or_else(|e| e.into_inner()) = CameraSource::Synthetic;

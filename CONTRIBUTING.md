@@ -28,6 +28,7 @@ cargo test
 cargo fmt --all
 cargo clippy --all-targets -- -D warnings
 node --check src/ui/app.js       # if you touched the UI
+node --test tests/ui/*.test.cjs   # workspace navigation regressions
 ```
 
 CI runs exactly these on Linux, macOS and Windows. A PR must be green.

@@ -40,109 +40,85 @@
     <!-- Global Header -->
     <header class="app-header">
         <div class="header-left">
-            <button class="icon-button nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false" aria-controls="app-sidebar"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-menu"></use></svg></button>
+            <button class="icon-button nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="true" aria-controls="app-sidebar" title="Toggle sidebar"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-menu"></use></svg></button>
             <div class="brand">
                 <svg class="ui-icon logo-symbol" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-brand"></use></svg>
                 <span class="logo-title">jepctl</span>
                 <span class="version-tag" id="app-version">v?</span>
             </div>
-            <div class="status-indicator">
-                <span class="pulse-dot" id="status-dot"></span>
-                <span id="daemon-status-text">Connecting…</span>
-            </div>
         </div>
 
-        <div class="header-center">
-            <div class="hardware-pill" id="hardware-badge">
-                <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-chip"></use></svg>
-                <span id="hardware-name">Detecting Hardware...</span>
-            </div>
-            <div class="memory-monitor">
-                <div class="mem-label">
-                    <span>Memory</span>
-                    <span id="mem-stats">0 GB / 0 GB (0%)</span>
-                </div>
-                <div class="progress-track">
-                    <div class="progress-fill" id="mem-progress" style="width: 0%;"></div>
-                </div>
-            </div>
-        </div>
-
-        <div class="header-right" role="status" aria-live="polite" aria-label="Runtime status">
-            <div class="status-chip" id="header-camera-chip" title="Server camera">
-                <span class="chip-dot" id="header-camera-dot"></span>
-                <span id="header-camera-text">Camera off</span>
-            </div>
-            <div class="status-chip" id="header-latency-chip" title="Last forward pass">
-                <span id="header-latency-text">-- ms</span>
-            </div>
+        <div class="workspace-title" id="current-section-label">Overview</div>
+        <div class="header-right" aria-label="Active model">
             <div class="active-model-pill">
                 <span class="model-status-label">Model</span>
                 <span class="model-name-text" id="header-active-model">none loaded</span>
                 <span class="weights-badge" id="header-weights-badge" title="Tensors loaded from the checkpoint / expected">--</span>
                 <button class="btn btn-sm btn-outline" id="btn-header-unload" style="display: none;">Unload</button>
             </div>
+            <button class="btn btn-sm btn-outline" data-navigate="models" title="Open model library">Models…</button>
+            <button class="icon-button" id="btn-shortcuts" aria-label="Keyboard shortcuts" title="Keyboard shortcuts">?</button>
         </div>
     </header>
 
     <div class="app-body">
         <!-- Persistent Navigation Sidebar -->
         <nav class="sidebar" id="app-sidebar" aria-label="Sections">
-            <div class="workspace-label"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-brand"></use></svg><div>Local workspace<span>Representation studio</span></div></div>
-            <div class="nav-group-title" id="nav-workspace-title">Workspace</div>
-            <div class="nav-list" role="tablist" aria-orientation="vertical" aria-labelledby="nav-workspace-title">
-                <button class="nav-item active" role="tab" id="tab-overview" tabindex="0" aria-selected="true" aria-controls="section-overview" data-section="overview">
-                    <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-overview"></use></svg>
-                    <span class="nav-text">Overview</span>
-                </button>
-                <button class="nav-item" role="tab" id="tab-models" tabindex="-1" aria-selected="false" aria-controls="section-models" data-section="models">
-                    <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-models"></use></svg>
-                    <span class="nav-text">Models</span>
-                </button>
-                <button class="nav-item" role="tab" id="tab-image-playground" tabindex="-1" aria-selected="false" aria-controls="section-image-playground" data-section="image-playground">
-                    <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-image"></use></svg>
-                    <span class="nav-text">Embed</span>
-                </button>
-                <button class="nav-item" role="tab" id="tab-video-stream" tabindex="-1" aria-selected="false" aria-controls="section-video-stream" data-section="video-stream">
-                    <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-video"></use></svg>
-                    <span class="nav-text">Live stream</span>
-                </button>
-                <button class="nav-item" role="tab" id="tab-anomaly-monitor" tabindex="-1" aria-selected="false" aria-controls="section-anomaly-monitor" data-section="anomaly-monitor">
-                    <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-activity"></use></svg>
-                    <span class="nav-text">Energy</span>
-                </button>
-                <button class="nav-item" role="tab" id="tab-gestures" tabindex="-1" aria-selected="false" aria-controls="section-gestures" data-section="gestures">
-                    <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-hand"></use></svg>
-                    <span class="nav-text">Gestures</span>
-                </button>
-                <button class="nav-item" role="tab" id="tab-robot" tabindex="-1" aria-selected="false" aria-controls="section-robot" data-section="robot">
-                    <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-robot"></use></svg>
-                    <span class="nav-text">Robot Twin</span>
-                </button>
-            </div>
-            <div class="nav-group-title" id="nav-admin-title">Manage</div>
-            <div class="nav-list" role="tablist" aria-orientation="vertical" aria-labelledby="nav-admin-title">
-                <button class="nav-item" role="tab" id="tab-security" tabindex="-1" aria-selected="false" aria-controls="section-security" data-section="security">
-                    <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-code"></use></svg>
-                    <span class="nav-text">Integration &amp; Keys</span>
-                </button>
-                <button class="nav-item" role="tab" id="tab-settings" tabindex="-1" aria-selected="false" aria-controls="section-settings" data-section="settings">
-                    <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-settings"></use></svg>
-                    <span class="nav-text">Settings</span>
-                </button>
+            <div role="tablist" aria-orientation="vertical" aria-label="Workspace sections">
+                <div class="nav-group-title" id="nav-workspace-title">Workspace</div>
+                <div class="nav-list" role="presentation">
+                    <button class="nav-item active" role="tab" id="tab-overview" tabindex="0" aria-selected="true" aria-controls="section-overview" data-section="overview">
+                        <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-overview"></use></svg>
+                        <span class="nav-text">Overview</span>
+                    </button>
+                    <button class="nav-item" role="tab" id="tab-models" tabindex="-1" aria-selected="false" aria-controls="section-models" data-section="models">
+                        <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-models"></use></svg>
+                        <span class="nav-text">Models</span>
+                    </button>
+                    <button class="nav-item" role="tab" id="tab-image-playground" tabindex="-1" aria-selected="false" aria-controls="section-image-playground" data-section="image-playground">
+                        <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-image"></use></svg>
+                        <span class="nav-text">Embed</span>
+                    </button>
+                    <button class="nav-item" role="tab" id="tab-video-stream" tabindex="-1" aria-selected="false" aria-controls="section-video-stream" data-section="video-stream">
+                        <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-video"></use></svg>
+                        <span class="nav-text">Live stream</span>
+                    </button>
+                    <button class="nav-item" role="tab" id="tab-anomaly-monitor" tabindex="-1" aria-selected="false" aria-controls="section-anomaly-monitor" data-section="anomaly-monitor">
+                        <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-activity"></use></svg>
+                        <span class="nav-text">Energy</span>
+                    </button>
+                    <button class="nav-item" role="tab" id="tab-gestures" tabindex="-1" aria-selected="false" aria-controls="section-gestures" data-section="gestures">
+                        <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-hand"></use></svg>
+                        <span class="nav-text">Gestures</span>
+                    </button>
+                    <button class="nav-item" role="tab" id="tab-robot" tabindex="-1" aria-selected="false" aria-controls="section-robot" data-section="robot">
+                        <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-robot"></use></svg>
+                        <span class="nav-text">Robot Twin</span>
+                    </button>
+                </div>
+                <div class="nav-group-title" id="nav-admin-title">Manage</div>
+                <div class="nav-list" role="presentation">
+                    <button class="nav-item" role="tab" id="tab-security" tabindex="-1" aria-selected="false" aria-controls="section-security" data-section="security">
+                        <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-code"></use></svg>
+                        <span class="nav-text">Integration &amp; Keys</span>
+                    </button>
+                    <button class="nav-item" role="tab" id="tab-settings" tabindex="-1" aria-selected="false" aria-controls="section-settings" data-section="settings">
+                        <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-settings"></use></svg>
+                        <span class="nav-text">Settings</span>
+                    </button>
+                </div>
             </div>
 
             <div class="sidebar-footer">
                 <div class="security-chip"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-shield"></use></svg>
                     <span id="auth-status-chip">Auth: Active</span>
                 </div>
-                <div class="sidebar-hint">Keyboard: <kbd>&uarr;</kbd><kbd>&darr;</kbd> sections</div>
+                <div class="sidebar-hint"><kbd>↑</kbd><kbd>↓</kbd> Navigate</div>
             </div>
         </nav>
 
         <!-- Main Content Area -->
         <main class="main-content" id="main-content" tabindex="-1">
-            <div class="workspace-breadcrumb"><span>Workspace</span><span aria-hidden="true">/</span><strong id="current-section-label">Overview</strong><span class="workspace-location">On your machine</span></div>
             <!-- Alert Banner for Anomaly Detection -->
             <div class="anomaly-banner" id="anomaly-alert-banner" style="display: none;">
                 <svg class="ui-icon alert-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-warning"></use></svg>
@@ -150,10 +126,10 @@
             </div>
 
             <!-- SECTION 1: OVERVIEW -->
-            <section class="content-section active" id="section-overview" role="tabpanel" aria-labelledby="tab-overview">
+            <section class="content-section active" id="section-overview" tabindex="0" role="tabpanel" aria-labelledby="tab-overview">
                 <div class="section-title">
-                    <h2>Workspace</h2>
-                    <p>Your local runtime, models, and experiments. All in one place.</p>
+                    <h2>Overview</h2>
+                    <p>Runtime status and tools.</p>
                 </div>
 
                 <div class="kpi-grid">
@@ -179,15 +155,11 @@
                     </div>
                 </div>
 
-                <div class="workspace-intro">
-                    <div class="intro-copy"><span class="intro-kicker">LOCAL MODEL WORKSPACE</span><h3>Start your next experiment.</h3><p>Load an encoder, inspect its embeddings, or work with a live camera.</p><button class="btn btn-primary" data-navigate="models"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-models"></use></svg> Model library <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-arrow"></use></svg></button></div>
-                    <svg class="latent-art" viewBox="0 0 360 220" aria-hidden="true"><defs><linearGradient id="latent-gradient" x1="0" y1="0" x2="1" y2="1"><stop stop-color="currentColor" stop-opacity=".8"/><stop offset="1" stop-color="currentColor" stop-opacity=".1"/></linearGradient></defs><g fill="none" stroke="url(#latent-gradient)"><path d="m180 20 130 70v70l-130 65L50 160V90Z"/><path d="m180 20 0 135m-130-65 130 65 130-65M50 125l130 65 130-65M95 66v117m42-140v161m87-160v160m43-137v116M95 66l130 65m-88-88 130 66M95 113l130-69m-88 90 130-68"/><ellipse cx="180" cy="125" rx="163" ry="48" transform="rotate(-25 180 125)"/></g><g fill="currentColor"><circle cx="180" cy="20" r="4"/><circle cx="50" cy="90" r="4"/><circle cx="310" cy="90" r="4"/><circle cx="180" cy="155" r="5"/><circle cx="225" cy="131" r="3"/><circle cx="95" cy="113" r="3"/></g></svg>
-                </div>
-                <div class="section-heading"><h3>Tools</h3><span>Choose a workspace</span></div>
-                <div class="workflow-grid">
-                    <button class="workflow-card" data-navigate="models"><span class="workflow-top"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-models"></use></svg><span>01</span></span><strong>Find your model</strong><span class="workflow-description">Browse verified encoders and load a checkpoint.</span><svg class="ui-icon workflow-arrow" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-arrow"></use></svg></button>
-                    <button class="workflow-card" data-navigate="image-playground"><span class="workflow-top"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-image"></use></svg><span>02</span></span><strong>Embed a file</strong><span class="workflow-description">Inspect vectors from an image, clip, or audio file.</span><svg class="ui-icon workflow-arrow" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-arrow"></use></svg></button>
-                    <button class="workflow-card" data-navigate="gestures"><span class="workflow-top"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-hand"></use></svg><span>03</span></span><strong>Explore gestures</strong><span class="workflow-description">Capture a few poses. Understand every match.</span><svg class="ui-icon workflow-arrow" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-arrow"></use></svg></button>
+                <div class="overview-tools" aria-label="Open a tool">
+                    <button class="btn btn-secondary" data-navigate="models">Model library</button>
+                    <button class="btn btn-secondary" data-navigate="image-playground">Embed a file</button>
+                    <button class="btn btn-secondary" data-navigate="gestures">Gestures</button>
+                    <button class="btn btn-secondary" data-navigate="robot">Robot Twin</button>
                 </div>
                 <div class="telemetry-grid">
                     <div class="card">
@@ -233,7 +205,7 @@
             </section>
 
             <!-- SECTION 2: MODELS -->
-            <section class="content-section" id="section-models" role="tabpanel" aria-labelledby="tab-models">
+            <section class="content-section" id="section-models" tabindex="0" role="tabpanel" aria-labelledby="tab-models">
                 <div class="section-title">
                     <h2>Model library</h2>
                     <p>Pull verified checkpoints from Hugging Face, load one into memory, or register a custom Jepafile.</p>
@@ -314,7 +286,7 @@
             </section>
 
             <!-- SECTION 3: IMAGE PLAYGROUND -->
-            <section class="content-section" id="section-image-playground" role="tabpanel" aria-labelledby="tab-image-playground">
+            <section class="content-section" id="section-image-playground" tabindex="0" role="tabpanel" aria-labelledby="tab-image-playground">
                 <div class="section-title">
                     <h2>Embed a file</h2>
                     <p>Compute the embedding of an image, a clip or an audio file with the active model and inspect the patch grid. Equivalent to <code>POST /api/embed</code>.</p>
@@ -376,7 +348,7 @@
             </section>
 
             <!-- SECTION 4: VIDEO & CAMERA STREAM -->
-            <section class="content-section" id="section-video-stream" role="tabpanel" aria-labelledby="tab-video-stream">
+            <section class="content-section" id="section-video-stream" tabindex="0" role="tabpanel" aria-labelledby="tab-video-stream">
                 <div class="section-title">
                     <h2>Live camera stream</h2>
                     <p>Continuous embeddings of the server camera over Server-Sent Events. Equivalent to <code>GET /api/embed/stream</code>.</p>
@@ -458,7 +430,7 @@
             </section>
 
             <!-- SECTION 5: ANOMALY & ENERGY MONITOR -->
-            <section class="content-section" id="section-anomaly-monitor" role="tabpanel" aria-labelledby="tab-anomaly-monitor">
+            <section class="content-section" id="section-anomaly-monitor" tabindex="0" role="tabpanel" aria-labelledby="tab-anomaly-monitor">
                 <div class="section-title">
                     <h2>Energy &amp; anomaly monitor</h2>
                     <p>Detect physical state changes by measuring continuous latent energy distance against a locked nominal baseline.</p>
@@ -503,7 +475,7 @@
             </section>
 
             <!-- SECTION 6: SECURITY & API KEYS -->
-            <section class="content-section" id="section-security" role="tabpanel" aria-labelledby="tab-security">
+            <section class="content-section" id="section-security" tabindex="0" role="tabpanel" aria-labelledby="tab-security">
                 <div class="section-title">
                     <h2>Integration &amp; API keys</h2>
                     <p>Everything you need to call this daemon from your own application: base URL, tokens, working examples.</p>
@@ -604,7 +576,7 @@
             </section>
 
             <!-- SECTION 7: SETTINGS -->
-            <section class="content-section" id="section-settings" role="tabpanel" aria-labelledby="tab-settings">
+            <section class="content-section" id="section-settings" tabindex="0" role="tabpanel" aria-labelledby="tab-settings">
                 <div class="section-title">
                     <h2>Settings</h2>
                     <p>Compute backend, memory ceiling and storage paths. Backend changes need a daemon restart.</p>
@@ -654,7 +626,7 @@
 
 
             <!-- SECTION: ROBOT TWIN -->
-            <section class="content-section" id="section-robot" role="tabpanel" aria-labelledby="tab-robot">
+            <section class="content-section" id="section-robot" tabindex="0" role="tabpanel" aria-labelledby="tab-robot">
                 <div class="section-title">
                     <h2>Robot Twin</h2>
                     <p>Explore a digital twin, teach it a visual goal, and control movement with confidence.</p>
@@ -716,7 +688,7 @@
                         <div class="robot-readout" id="robot-readout">J1 0.00  J2 0.00  J3 0.00  J4 0.00  J5 0.00  J6 0.00  gripper 50%</div>
                     </div>
 
-                    <div class="robot-side-col">
+                    <div class="robot-side-col" tabindex="0" role="region" aria-label="Robot inspector">
                         <div class="card">
                             <h3>Joints</h3>
                             <div class="joint-sliders" id="robot-joint-sliders"></div>
@@ -797,13 +769,13 @@
             </section>
 
             <!-- SECTION: GESTURES -->
-            <section class="content-section" id="section-gestures" role="tabpanel" aria-labelledby="tab-gestures">
+            <section class="content-section" id="section-gestures" tabindex="0" role="tabpanel" aria-labelledby="tab-gestures">
                 <div class="section-title">
                     <h2>Gestures</h2>
                     <p>Teach a few poses. See what the model recognizes and understand every decision.</p>
                 </div>
 
-                <ol class="flow-guide" aria-label="Gesture setup"><li><span>1</span> Load a model</li><li><span>2</span> Start the camera</li><li><span>3</span> Capture neutral, then gestures</li><li><span>4</span> Tune &amp; export</li></ol>
+
                 <div class="card gesture-model-bar">
                     <div class="gesture-model-bar-row">
                         <div class="gesture-model-bar-left">
@@ -816,6 +788,9 @@
                             <button class="btn btn-sm btn-api" id="btn-api-load-model" title="Show the API request">{ } API</button>
                         </div>
                         <div class="gesture-model-bar-right">
+                            <button class="btn btn-sm btn-primary" id="btn-gesture-camera-toggle">
+                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-video"></use></svg> <span id="gesture-cam-btn-text">Start camera</span>
+                            </button>
                             <span class="status-indicator status-idle" id="gesture-model-indicator"></span>
                             <span id="gesture-model-name-text" class="gesture-model-name">No model loaded</span>
                             <span class="weights-badge" id="gesture-weights-badge" title="Tensors loaded from the checkpoint / expected">weights: --</span>
@@ -824,8 +799,9 @@
                     <p class="gesture-model-hint">Gestures are bound to the model that encoded them; switching models shows that model's gestures. DINOv2-small is the recommended default.</p>
                 </div>
 
+                <ol class="flow-guide" aria-label="Gesture setup"><li><span>1</span> Load a model</li><li><span>2</span> Start the camera</li><li><span>3</span> Capture neutral, then gestures</li><li><span>4</span> Tune &amp; export</li></ol>
                 <div class="gesture-sandbox-layout">
-                    <div class="gesture-main-col">
+                    <div class="gesture-main-col" tabindex="0" role="region" aria-label="Gesture preview and analysis">
                         <div class="card gesture-preview-card" id="gesture-preview-card">
                             <div class="gesture-card-header">
                                 <div>
@@ -837,9 +813,7 @@
                                         <input type="checkbox" id="toggle-gesture-heatmap" class="checkbox-input" checked>
                                         <span>Difference map</span>
                                     </label>
-                                    <button class="btn btn-sm btn-primary" id="btn-gesture-camera-toggle">
-                                        <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-video"></use></svg> <span id="gesture-cam-btn-text">Start camera</span>
-                                    </button>
+
                                 </div>
                             </div>
 
@@ -993,7 +967,7 @@
                         </div>
                     </div>
 
-                    <div class="gesture-slots-col">
+                    <div class="gesture-slots-col" tabindex="0" role="region" aria-label="Reference gestures">
                         <div class="card gesture-slots-card">
                             <div class="slots-header">
                                 <h3>Reference gestures</h3>
@@ -1148,6 +1122,53 @@
                 </div>
             </section>
         </main>
+    </div>
+
+    <footer class="app-statusbar" aria-label="Runtime status">
+        <div class="status-indicator" role="status">
+            <span class="pulse-dot" id="status-dot"></span>
+            <span id="daemon-status-text">Connecting…</span>
+        </div>
+        <div class="header-center">
+            <div class="hardware-pill" id="hardware-badge">
+                <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-chip"></use></svg>
+                <span id="hardware-name">Detecting Hardware...</span>
+            </div>
+            <div class="memory-monitor">
+                <div class="mem-label">
+                    <span>Memory</span>
+                    <span id="mem-stats">0 GB / 0 GB (0%)</span>
+                </div>
+                <div class="progress-track">
+                    <div class="progress-fill" id="mem-progress" style="width: 0%;"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="statusbar-right">
+            <div class="status-chip" id="header-camera-chip" role="status" title="Server camera">
+                <span class="chip-dot" id="header-camera-dot"></span>
+                <span id="header-camera-text">Camera off</span>
+            </div>
+            <div class="status-chip" id="header-latency-chip" title="Last forward pass">
+                <span id="header-latency-text">-- ms</span>
+            </div>
+        </div>
+    </footer>
+
+    <div class="modal-overlay" id="shortcuts-dialog" style="display: none;">
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title">
+            <h3 id="shortcuts-title">Keyboard shortcuts</h3>
+            <p>Use Command on macOS, Control on Windows and Linux.</p>
+            <dl class="shortcut-list">
+                <dt>Open a section</dt><dd><kbd>⌘ / Ctrl</kbd> <kbd>1–9</kbd></dd>
+                <dt>Toggle sidebar</dt><dd><kbd>⌘ / Ctrl</kbd> <kbd>B</kbd></dd>
+                <dt>Settings</dt><dd><kbd>⌘ / Ctrl</kbd> <kbd>,</kbd></dd>
+                <dt>Navigate sidebar</dt><dd><kbd>↑</kbd> <kbd>↓</kbd> <kbd>Home</kbd> <kbd>End</kbd></dd>
+                <dt>Close dialog</dt><dd><kbd>Esc</kbd></dd>
+            </dl>
+            <div class="modal-buttons"><button class="btn btn-primary" id="btn-close-shortcuts">Done</button></div>
+        </div>
     </div>
 
     <!-- Key Creation Modal -->

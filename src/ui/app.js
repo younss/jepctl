@@ -528,6 +528,9 @@
         renderEnergyChart();
     }
 
+    // UI-only workspace state; switching views never changes runtime settings.
+    const workspaceScroll = new Map();
+
     // Navigation Switcher
     function setupNavigation() {
         const items = [...el.navItems];
@@ -535,16 +538,63 @@
         const sidebar = document.getElementById("app-sidebar");
         const main = document.getElementById("main-content");
         const narrowWindow = window.matchMedia("(max-width: 760px)");
+        let collapsed = false;
+        try { collapsed = localStorage.getItem("jepctl_sidebar_collapsed") === "true"; } catch (_) { /* Storage can be unavailable in a webview. */ }
         const setNavigationOpen = (open) => {
-            sidebar.classList.toggle("is-open", open);
-            navToggle.setAttribute("aria-expanded", String(open));
+            sidebar.classList.toggle("is-open", narrowWindow.matches && open);
+            navToggle.setAttribute("aria-expanded", String(narrowWindow.matches ? open : !collapsed));
         };
+        const applySidebar = () => {
+            document.body.classList.toggle("sidebar-collapsed", collapsed && !narrowWindow.matches);
+            setNavigationOpen(false);
+        };
+        applySidebar();
         navToggle.addEventListener("click", () => {
-            const open = !sidebar.classList.contains("is-open");
-            setNavigationOpen(open);
-            if (open) sidebar.querySelector(".nav-item.active").focus();
+            if (narrowWindow.matches) {
+                const open = !sidebar.classList.contains("is-open");
+                setNavigationOpen(open);
+                if (open) sidebar.querySelector(".nav-item.active").focus();
+            } else {
+                collapsed = !collapsed;
+                try { localStorage.setItem("jepctl_sidebar_collapsed", String(collapsed)); } catch (_) { /* Keep the session preference. */ }
+                applySidebar();
+            }
         });
+        const shortcuts = document.getElementById("shortcuts-dialog");
+        document.getElementById("btn-shortcuts").addEventListener("click", () => {
+            const closeButton = document.getElementById("btn-close-shortcuts");
+            const close = openDialog(shortcuts, { initialFocus: closeButton, onClose: () => { closeButton.onclick = null; } });
+            closeButton.onclick = close;
+        });
+        const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
+        const modifierLabel = isMac ? "⌘" : "Ctrl+";
+        items.forEach((item, index) => {
+            const label = item.querySelector(".nav-text").textContent;
+            item.setAttribute("aria-label", label);
+            item.title = `${label} (${modifierLabel}${index + 1})`;
+            item.setAttribute("aria-keyshortcuts", `${isMac ? "Meta" : "Control"}+${index + 1}`);
+        });
+        navToggle.title = `Toggle sidebar (${modifierLabel}B)`;
         document.addEventListener("keydown", (event) => {
+            const dialogOpen = [...document.querySelectorAll(".modal-overlay")].some((dialog) => dialog.style.display !== "none");
+            if (dialogOpen) return;
+            const editing = event.target.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])");
+            const modifier = isMac ? event.metaKey : event.ctrlKey;
+            if (modifier && !event.altKey && !event.shiftKey && !editing && !event.repeat) {
+                const index = /^[1-9]$/.test(event.key) ? Number(event.key) - 1 : -1;
+                if (items[index] || event.key === ",") {
+                    event.preventDefault();
+                    switchSection(items[index] ? items[index].dataset.section : "settings");
+                    main.focus({ preventScroll: true });
+                    setNavigationOpen(false);
+                    return;
+                }
+                if (event.key.toLowerCase() === "b") {
+                    event.preventDefault();
+                    navToggle.click();
+                    return;
+                }
+            }
             if (event.key === "Escape" && sidebar.classList.contains("is-open")) {
                 setNavigationOpen(false);
                 navToggle.focus();
@@ -558,7 +608,7 @@
         });
         narrowWindow.addEventListener("change", () => {
             if (narrowWindow.matches && sidebar.contains(document.activeElement)) navToggle.focus();
-            setNavigationOpen(false);
+            applySidebar();
         });
         document.querySelectorAll("[data-navigate]").forEach((button) => {
             button.addEventListener("click", () => {
@@ -601,11 +651,16 @@
     }
 
     function switchSection(sectionId) {
+        const selectedNav = [...el.navItems].find((item) => item.dataset.section === sectionId);
+        if (!selectedNav || state.activeSection === sectionId) return;
+        const main = document.getElementById("main-content");
+        const previous = document.getElementById(`section-${state.activeSection}`);
+        // Save nested inspectors as well as the outer viewport (narrow windows).
+        const scrollNodes = (section) => [main, section, ...section.querySelectorAll("[role='region']")];
+        workspaceScroll.set(state.activeSection, scrollNodes(previous).map((node) => ({ top: node.scrollTop, left: node.scrollLeft })));
         if (state.activeSection === "robot" && sectionId !== "robot") robotLeaveSection();
         state.activeSection = sectionId;
-        const selectedNav = [...el.navItems].find((item) => item.dataset.section === sectionId);
         document.getElementById("current-section-label").textContent = selectedNav.querySelector(".nav-text").textContent;
-        document.getElementById("main-content").scrollTop = 0;
 
         el.navItems.forEach((item) => {
             const on = item.getAttribute("data-section") === sectionId;
@@ -620,6 +675,12 @@
             } else {
                 sec.classList.remove("active");
             }
+        });
+
+        const positions = workspaceScroll.get(sectionId) || [];
+        scrollNodes(document.getElementById(`section-${sectionId}`)).forEach((node, index) => {
+            node.scrollTop = positions[index]?.top || 0;
+            node.scrollLeft = positions[index]?.left || 0;
         });
 
         if (sectionId === "models") {

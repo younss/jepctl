@@ -78,6 +78,14 @@ More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
    them twice: cosine must be 1.0 for the repeat and clearly lower across images.
 5. Add a row to the README table with the numbers you observed.
 
+## Verifying numerics against PyTorch (wanted)
+
+Nothing here depends on Python, so parity with the reference implementations is checked
+structurally, not bit-for-bit. If you have `torch` + `transformers`/`timm`, the most valuable
+contribution is a script that embeds the same file with both and reports max abs error for
+I-JEPA, DINOv2, V-JEPA 2 (`VJEPA2Model(...).encoder` mean over tokens, 16 frames at 256 px)
+and AudioMAE (`torchaudio.compliance.kaldi.fbank` front-end). Open an issue with the numbers.
+
 ## Adding a model family
 
 A family that is not "ViT with optional CLS/LayerScale" (e.g. V-JEPA's 3D tubelet embedding,

@@ -7,6 +7,16 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **V-JEPA 2** (`facebook/vjepa2-vitl-fpc64-256`): 3D tubelet embedding, 3D rotary attention,
+  encoder-only strict loading (388/388), per-head attention to bound memory (2.5 GB peak vs.
+  70 GB with full score tensors). Camera stream and gestures embed a 16-frame clip.
+- **Audio modality** with AudioMAE (`gaunernst/vit_base_patch16_1024_128.audiomae_as2m`):
+  Kaldi-style log-mel front-end, WAV decoding, rectangular single-channel ViT, mean pooling.
+- **Clip and audio files** in `POST /api/embed`, the Embed tab and `jepa embed`: GIF / animated
+  WebP / WAV natively, MP4 / WebM / MP3 / FLAC / OGG through `ffmpeg` when present.
+- **Region of interest**: `GET/PUT/DELETE /api/camera/roi`, editor in the Gestures tab, applied
+  to every camera embedding and carried in gesture bundles.
+- Manifest fields `tubelet_size`, `input_width`, `in_chans`, `audio`, `pooling`.
 - Gesture bundles: `GET /api/gestures/export`, `POST /api/gestures/import`, and
   `jepa gestures list|export|import|match|remove` — tune on one machine, deploy on many.
 - `{ } API` controls throughout the testbench showing the exact request (curl / JS / Python)

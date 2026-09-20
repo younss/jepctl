@@ -4,8 +4,9 @@ use axum::routing::{delete, get, post};
 use axum::Router;
 
 use crate::server::gesture_handlers::{
-    handle_camera_frame, handle_clear_gestures, handle_create_gesture, handle_delete_gesture, handle_export_gestures,
-    handle_import_gestures, handle_list_gestures, handle_match_gesture,
+    handle_camera_frame, handle_clear_gestures, handle_clear_roi, handle_create_gesture, handle_delete_gesture,
+    handle_export_gestures, handle_get_roi, handle_import_gestures, handle_list_gestures, handle_match_gesture,
+    handle_set_roi,
 };
 use crate::server::handlers::{
     handle_audit, handle_camera_start, handle_camera_stop, handle_cameras, handle_catalog, handle_create_key,
@@ -45,6 +46,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/camera/stop", post(handle_camera_stop))
         .route("/api/ring-buffer", get(handle_ring_buffer))
         .route("/api/camera/frame", get(handle_camera_frame))
+        .route("/api/camera/roi", get(handle_get_roi).put(handle_set_roi).delete(handle_clear_roi))
         // API: Security, Keys & Audit
         .route("/api/keys", post(handle_create_key).get(handle_list_keys))
         .route("/api/keys/{prefix}", delete(handle_revoke_key))

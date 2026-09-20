@@ -269,19 +269,19 @@
             <!-- SECTION 3: IMAGE PLAYGROUND -->
             <section class="content-section" id="section-image-playground">
                 <div class="section-title">
-                    <h2>Embed an image</h2>
-                    <p>Compute the embedding of a still image with the active model and inspect its patch grid. Equivalent to <code>POST /api/embed</code>.</p>
+                    <h2>Embed a file</h2>
+                    <p>Compute the embedding of an image, a clip or an audio file with the active model and inspect the patch grid. Equivalent to <code>POST /api/embed</code>.</p>
                 </div>
 
                 <div class="playground-layout">
                     <!-- Left: Upload and Canvas -->
                     <div class="playground-left">
                         <div class="dropzone" id="image-dropzone">
-                            <input type="file" id="image-file-input" accept="image/png, image/jpeg, image/webp" style="display: none;">
+                            <input type="file" id="image-file-input" accept="image/png, image/jpeg, image/webp, image/gif, video/mp4, video/webm, audio/wav, audio/x-wav, audio/mpeg, audio/flac, audio/ogg" style="display: none;">
                             <div class="dropzone-prompt">
                                 <span class="dropzone-icon">&#128247;</span>
-                                <p><strong>Drag &amp; Drop Image</strong> or click to browse</p>
-                                <span class="dropzone-hint">Supports PNG, JPEG, WebP (Max: 20 MB)</span>
+                                <p><strong>Drop a file</strong> or click to browse</p>
+                                <span class="dropzone-hint">Images (PNG, JPEG, WebP), clips (GIF, animated WebP; MP4/WebM with ffmpeg) and audio (WAV; MP3/FLAC/OGG with ffmpeg). The active model decides what it can embed.</span>
                             </div>
                         </div>
 
@@ -700,6 +700,24 @@
                                 <p class="sensitivity-note">These values are recorded in the exported bundle and shown in the <strong>API</strong> snippets so your application matches with the same settings.</p>
                             </div>
                         </div>
+
+                        <details class="card roi-card" id="roi-card">
+                            <summary class="roi-summary">
+                                <span><strong>Region of interest</strong> <span class="card-subtitle-inline" id="roi-status-text">full frame</span></span>
+                                <span class="roi-summary-hint">Crop the camera to the hand so it fills the model input</span>
+                            </summary>
+                            <p class="card-subtitle">Drag a rectangle on the full frame. The model view, live matching and captured samples all use this crop; it is saved with exported bundles.</p>
+                            <div class="roi-stage" id="roi-stage" role="application" aria-label="Region of interest editor: drag to draw a rectangle">
+                                <img id="roi-full-frame" alt="Full camera frame" draggable="false">
+                                <div class="roi-box" id="roi-box" style="display: none;"></div>
+                                <div class="model-view-placeholder" id="roi-placeholder">Start the camera to edit the region</div>
+                            </div>
+                            <div class="roi-actions">
+                                <code id="roi-values">none</code>
+                                <button class="btn btn-sm btn-outline" id="btn-roi-clear">Use full frame</button>
+                                <button class="btn btn-sm btn-api" id="btn-api-roi" title="Show the API request">{ } API</button>
+                            </div>
+                        </details>
 
                         <div class="card gesture-reasoning-card">
                             <div class="gesture-card-header">

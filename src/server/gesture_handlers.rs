@@ -12,9 +12,12 @@ use crate::gestures::{
     DEFAULT_THRESHOLD,
 };
 use crate::media::image::preprocess_image_bytes;
-use crate::server::handlers::{api_error, embed_current_view, engine_error, ensure_model_loaded, ApiError, AppState};
+use crate::media::ring_buffer::MODEL_VIEW_SIZE;
+use crate::server::handlers::{
+    api_error, embed_current_view, engine_error, ensure_model_loaded, persist_roi, ApiError, AppState,
+};
 use crate::server::middleware::authenticate_request;
-use crate::types::Role;
+use crate::types::{Roi, Role};
 
 /// Registration payload. Exactly one input source must be given:
 /// `from_camera`, `embedding` or `image_base64`.
@@ -299,13 +302,15 @@ pub async fn handle_export_gestures(
         (None, false) => state.engine.get_active_model_name().await,
     };
     let store = state.gestures.read().await;
-    Ok(Json(store.export(
+    let mut bundle = store.export(
         model.as_deref(),
         q.threshold.unwrap_or(DEFAULT_THRESHOLD),
         q.margin.unwrap_or(DEFAULT_MARGIN),
         q.thumbnails.unwrap_or(true),
         now_secs(),
-    )))
+    );
+    bundle.roi = *state.camera_roi.read().await;
+    Ok(Json(bundle))
 }
 
 #[derive(Debug, Deserialize)]
@@ -323,32 +328,98 @@ pub async fn handle_import_gestures(
     Json(bundle): Json<GestureBundle>,
 ) -> Result<Json<ImportReport>, ApiError> {
     let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
+    let roi = bundle.roi;
     let mut store = state.gestures.write().await;
     let report = store.import(bundle, q.replace).map_err(engine_error)?;
     if let Err(e) = store.save() {
         tracing::warn!("Could not persist gesture registry: {}", e);
     }
+    if roi.is_some() {
+        // Prototypes were captured with this crop; matching must use the same one.
+        *state.camera_roi.write().await = roi;
+        persist_roi(&state.config, roi);
+    }
     tracing::info!("Imported {} gesture(s) for {:?} (removed {})", report.imported, report.models, report.removed);
     Ok(Json(report))
 }
 
-/// GET /api/camera/frame - JPEG of exactly what the model receives (224x224 centre crop).
-pub async fn handle_camera_frame(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, ApiError> {
-    let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
-    let (bytes, seq) = {
-        let rb = state.ring_buffer.read().await;
-        let latest = rb
-            .latest()
-            .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Camera is not running or no frame captured yet"))?;
-        (latest.model_view_jpeg.clone(), latest.sequence)
-    };
-    Ok((
+#[derive(Debug, Deserialize)]
+pub struct FrameQuery {
+    /// `true` returns the full (downscaled) camera frame instead of the model view.
+    #[serde(default)]
+    pub full: bool,
+}
+
+fn jpeg_response(bytes: Vec<u8>, seq: u64, extra: &[(&'static str, String)]) -> Response {
+    let mut res = (
         [
             (header::CONTENT_TYPE, "image/jpeg".to_string()),
             (header::CACHE_CONTROL, "no-store".to_string()),
             (header::HeaderName::from_static("x-frame-sequence"), seq.to_string()),
         ],
-        bytes.as_slice().to_vec(),
+        bytes,
     )
-        .into_response())
+        .into_response();
+    for (k, v) in extra {
+        if let Ok(val) = v.parse() {
+            res.headers_mut().insert(header::HeaderName::from_static(k), val);
+        }
+    }
+    res
+}
+
+/// GET /api/camera/frame - JPEG of exactly what the model receives (ROI, centre crop,
+/// model view size). `?full=true` gives the whole frame for the ROI editor.
+pub async fn handle_camera_frame(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<FrameQuery>,
+) -> Result<Response, ApiError> {
+    let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
+    let roi = *state.camera_roi.read().await;
+    let rb = state.ring_buffer.read().await;
+    if q.full {
+        let (bytes, seq, w, h) = rb
+            .latest_full_frame_jpeg(480)
+            .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Camera is not running or no frame captured yet"))?;
+        return Ok(jpeg_response(bytes, seq, &[("x-frame-width", w.to_string()), ("x-frame-height", h.to_string())]));
+    }
+    let (bytes, seq) = rb
+        .latest_model_view_jpeg(MODEL_VIEW_SIZE, roi.as_ref())
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Camera is not running or no frame captured yet"))?;
+    Ok(jpeg_response(bytes, seq, &[]))
+}
+
+/// GET /api/camera/roi - Current region of interest (`null` when the full frame is used).
+pub async fn handle_get_roi(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
+    Ok(Json(json!({ "roi": *state.camera_roi.read().await })))
+}
+
+/// PUT /api/camera/roi - Set the region of interest (normalised x, y, w, h).
+pub async fn handle_set_roi(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(roi): Json<Roi>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
+    let roi = roi.normalized().map_err(engine_error)?;
+    *state.camera_roi.write().await = Some(roi);
+    persist_roi(&state.config, Some(roi));
+    tracing::info!("Camera ROI set to {:?}", roi);
+    Ok(Json(json!({ "roi": roi })))
+}
+
+/// DELETE /api/camera/roi - Use the full frame again.
+pub async fn handle_clear_roi(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
+    *state.camera_roi.write().await = None;
+    persist_roi(&state.config, None);
+    Ok(Json(json!({ "roi": null })))
 }

@@ -89,6 +89,11 @@ mod tests {
             variant: None,
             normalization: None,
             mlp_ratio: None,
+            tubelet_size: None,
+            input_width: None,
+            in_chans: None,
+            audio: None,
+            pooling: None,
         };
         let err = IJepaModel::load(manifest, Path::new("/nonexistent/model.safetensors"), Device::Cpu)
             .err()
@@ -116,6 +121,11 @@ mod tests {
             variant: None,
             normalization: None,
             mlp_ratio: None,
+            tubelet_size: None,
+            input_width: None,
+            in_chans: None,
+            audio: None,
+            pooling: None,
         };
 
         let device = Device::Cpu;

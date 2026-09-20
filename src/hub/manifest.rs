@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-use crate::engine::vit::VitVariant;
-use crate::types::{JepaError, ModelManifest, ModelModality, Normalization};
+use crate::engine::vit::{Pooling, VitVariant};
+use crate::types::{AudioSpec, JepaError, ModelManifest, ModelModality, Normalization};
 
 /// Parsable manifest file schema (.jepa or Jepafile)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +29,16 @@ pub struct JepafileConfig {
     pub normalization: Option<Normalization>,
     #[serde(default)]
     pub mlp_ratio: Option<f64>,
+    #[serde(default)]
+    pub tubelet_size: Option<usize>,
+    #[serde(default)]
+    pub input_width: Option<usize>,
+    #[serde(default)]
+    pub in_chans: Option<usize>,
+    #[serde(default)]
+    pub audio: Option<AudioSpec>,
+    #[serde(default)]
+    pub pooling: Option<Pooling>,
 }
 
 impl From<&ModelManifest> for JepafileConfig {
@@ -49,6 +59,11 @@ impl From<&ModelManifest> for JepafileConfig {
             variant: m.variant,
             normalization: m.normalization,
             mlp_ratio: m.mlp_ratio,
+            tubelet_size: m.tubelet_size,
+            input_width: m.input_width,
+            in_chans: m.in_chans,
+            audio: m.audio,
+            pooling: m.pooling,
         }
     }
 }
@@ -76,6 +91,11 @@ impl JepafileConfig {
             variant: self.variant,
             normalization: self.normalization,
             mlp_ratio: self.mlp_ratio,
+            tubelet_size: self.tubelet_size,
+            input_width: self.input_width,
+            in_chans: self.in_chans,
+            audio: self.audio,
+            pooling: self.pooling,
         })
     }
 
@@ -92,6 +112,14 @@ impl JepafileConfig {
                 "Unsupported patch_size {}. Supported: 14 or 16",
                 self.patch_size
             )));
+        }
+        if let Some(w) = self.input_width {
+            if !w.is_multiple_of(self.patch_size) {
+                return Err(JepaError::InvalidPayload(format!(
+                    "input_width ({}) must be a multiple of patch_size ({})",
+                    w, self.patch_size
+                )));
+            }
         }
         if !self.image_size.is_multiple_of(self.patch_size) {
             return Err(JepaError::InvalidPayload(format!(
@@ -135,6 +163,13 @@ impl JepafileConfig {
 /// custom `Jepafile.json`, but is not promised to load.
 struct Verified {
     name: &'static str,
+    modality: ModelModality,
+    frames: Option<usize>,
+    tubelet_size: Option<usize>,
+    input_width: Option<usize>,
+    in_chans: Option<usize>,
+    audio: Option<AudioSpec>,
+    pooling: Pooling,
     architecture: &'static str,
     patch_size: usize,
     embed_dim: usize,
@@ -150,7 +185,56 @@ struct Verified {
 
 const VERIFIED: &[Verified] = &[
     Verified {
+        name: "facebook/vjepa2-vitl-fpc64-256",
+        modality: ModelModality::Video,
+        frames: Some(16),
+        tubelet_size: Some(2),
+        input_width: None,
+        in_chans: None,
+        audio: None,
+        pooling: Pooling::Mean,
+        architecture: "V-JEPA 2 ViT-L/16 (video, RoPE)",
+        patch_size: 16,
+        embed_dim: 1024,
+        num_layers: 24,
+        num_heads: 16,
+        image_size: 256,
+        parameter_count: "300M (encoder)",
+        disk_size_bytes: 1_303_947_864,
+        variant: VitVariant::VJepa2,
+        normalization: Normalization::ImageNet,
+        mlp_ratio: 4.0,
+    },
+    Verified {
+        name: "gaunernst/vit_base_patch16_1024_128.audiomae_as2m",
+        modality: ModelModality::Audio,
+        frames: None,
+        tubelet_size: None,
+        input_width: Some(128),
+        in_chans: Some(1),
+        audio: Some(AudioSpec { sample_rate: 16_000, n_mels: 128, frames: 1024, mean: -4.2677393, std: 4.5689974 }),
+        pooling: Pooling::Mean,
+        architecture: "AudioMAE ViT-B/16 (log-mel 1024x128, AudioSet-2M)",
+        patch_size: 16,
+        embed_dim: 768,
+        num_layers: 12,
+        num_heads: 12,
+        image_size: 1024,
+        parameter_count: "86M",
+        disk_size_bytes: 342_606_472,
+        variant: VitVariant::Cls,
+        normalization: Normalization::ImageNet,
+        mlp_ratio: 4.0,
+    },
+    Verified {
         name: "facebook/ijepa_vith14_1k",
+        modality: ModelModality::Image,
+        frames: None,
+        tubelet_size: None,
+        input_width: None,
+        in_chans: None,
+        audio: None,
+        pooling: Pooling::Mean,
         architecture: "I-JEPA ViT-H/14 (ImageNet-1k)",
         patch_size: 14,
         embed_dim: 1280,
@@ -165,6 +249,13 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         name: "facebook/ijepa_vith14_22k",
+        modality: ModelModality::Image,
+        frames: None,
+        tubelet_size: None,
+        input_width: None,
+        in_chans: None,
+        audio: None,
+        pooling: Pooling::Mean,
         architecture: "I-JEPA ViT-H/14 (ImageNet-22k)",
         patch_size: 14,
         embed_dim: 1280,
@@ -179,6 +270,13 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         name: "facebook/dinov2-small",
+        modality: ModelModality::Image,
+        frames: None,
+        tubelet_size: None,
+        input_width: None,
+        in_chans: None,
+        audio: None,
+        pooling: Pooling::Cls,
         architecture: "DINOv2 ViT-S/14",
         patch_size: 14,
         embed_dim: 384,
@@ -193,6 +291,13 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         name: "facebook/dinov2-base",
+        modality: ModelModality::Image,
+        frames: None,
+        tubelet_size: None,
+        input_width: None,
+        in_chans: None,
+        audio: None,
+        pooling: Pooling::Cls,
         architecture: "DINOv2 ViT-B/14",
         patch_size: 14,
         embed_dim: 768,
@@ -207,6 +312,13 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         name: "google/vit-base-patch16-224",
+        modality: ModelModality::Image,
+        frames: None,
+        tubelet_size: None,
+        input_width: None,
+        in_chans: None,
+        audio: None,
+        pooling: Pooling::Cls,
         architecture: "ViT-B/16 (ImageNet-21k+1k)",
         patch_size: 16,
         embed_dim: 768,
@@ -221,6 +333,13 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         name: "timm/vit_base_patch16_224.augreg_in21k",
+        modality: ModelModality::Image,
+        frames: None,
+        tubelet_size: None,
+        input_width: None,
+        in_chans: None,
+        audio: None,
+        pooling: Pooling::Cls,
         architecture: "ViT-B/16 AugReg (ImageNet-21k)",
         patch_size: 16,
         embed_dim: 768,
@@ -243,13 +362,13 @@ pub fn get_verified_manifests() -> Vec<ModelManifest> {
             name: v.name.to_string(),
             repo_id: v.name.to_string(),
             architecture: v.architecture.to_string(),
-            modality: ModelModality::Image,
+            modality: v.modality,
             patch_size: v.patch_size,
             embed_dim: v.embed_dim,
             num_layers: v.num_layers,
             num_heads: v.num_heads,
             image_size: v.image_size,
-            frames: None,
+            frames: v.frames,
             parameter_count: v.parameter_count.to_string(),
             disk_size_bytes: v.disk_size_bytes,
             weights_file: "model.safetensors".to_string(),
@@ -257,6 +376,11 @@ pub fn get_verified_manifests() -> Vec<ModelManifest> {
             variant: Some(v.variant),
             normalization: Some(v.normalization),
             mlp_ratio: Some(v.mlp_ratio),
+            tubelet_size: v.tubelet_size,
+            input_width: v.input_width,
+            in_chans: v.in_chans,
+            audio: v.audio,
+            pooling: Some(v.pooling),
         })
         .collect()
 }

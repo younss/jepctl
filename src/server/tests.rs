@@ -43,6 +43,11 @@ fn test_manifest() -> ModelManifest {
         variant: None,
         normalization: None,
         mlp_ratio: None,
+        tubelet_size: None,
+        input_width: None,
+        in_chans: None,
+        audio: None,
+        pooling: None,
     }
 }
 
@@ -70,6 +75,20 @@ mod tempdir {
 
 async fn app(with_model: bool) -> TestApp {
     app_with(with_model, true).await
+}
+
+fn audio_manifest() -> ModelManifest {
+    ModelManifest {
+        name: "test/audio-tiny".into(),
+        modality: ModelModality::Audio,
+        image_size: 64,
+        input_width: Some(32),
+        in_chans: Some(1),
+        audio: Some(crate::types::AudioSpec { sample_rate: 16_000, n_mels: 32, frames: 64, mean: 0.0, std: 1.0 }),
+        variant: Some(crate::engine::vit::VitVariant::Cls),
+        pooling: Some(crate::engine::vit::Pooling::Mean),
+        ..test_manifest()
+    }
 }
 
 async fn app_with(with_model: bool, no_auth: bool) -> TestApp {
@@ -105,6 +124,7 @@ async fn app_with(with_model: bool, no_auth: bool) -> TestApp {
         ring_buffer,
         embeddings_total: Arc::new(AtomicU64::new(0)),
         gestures: Arc::new(tokio::sync::RwLock::new(GestureStore::load(&config.gestures_path))),
+        camera_roi: Arc::new(tokio::sync::RwLock::new(None)),
         start_time: Instant::now(),
         config,
     };
@@ -383,4 +403,147 @@ async fn gesture_bundle_export_import_over_http() {
     bad["gestures"][0]["dimension"] = json!(3);
     let (status, _) = call(&t2.router, "POST", "/api/gestures/import", Some(bad)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn embed_accepts_gif_clips() {
+    let t = app(true).await;
+    // 6-frame 32x32 GIF built in memory (same helper as media::video tests).
+    let gif = {
+        use image::codecs::gif::GifEncoder;
+        use image::{Delay, Frame, Rgba, RgbaImage};
+        let mut buf = Vec::new();
+        let mut enc = GifEncoder::new(&mut buf);
+        for i in 0..6u32 {
+            let img = RgbaImage::from_fn(32, 32, |x, _| {
+                if (x / 8 + i) % 2 == 0 {
+                    Rgba([255, 255, 255, 255])
+                } else {
+                    Rgba([0, 0, 0, 255])
+                }
+            });
+            enc.encode_frame(Frame::from_parts(img, 0, 0, Delay::from_numer_denom_ms(100, 1))).unwrap();
+        }
+        drop(enc);
+        buf
+    };
+    let boundary = "XBOUNDARY";
+    let mut body = format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"clip.gif\"\r\nContent-Type: image/gif\r\n\r\n").into_bytes();
+    body.extend_from_slice(&gif);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    let req = Request::post("/api/embed")
+        .header("content-type", format!("multipart/form-data; boundary={boundary}"))
+        .body(Body::from(body))
+        .unwrap();
+    let res = t.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), 1 << 20).await.unwrap();
+    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["dimension"], 32);
+    assert_eq!(json["embedding"].as_array().unwrap().len(), 32);
+    // Image model over a clip: mean of frames, no spatial tokens.
+    assert!(json["patch_embeddings"].is_null());
+}
+
+#[tokio::test]
+async fn roi_changes_what_the_model_sees_and_travels_in_bundles() {
+    let t = app(true).await;
+    let r = &t.router;
+    // Left half red, right half green.
+    let img =
+        image::RgbImage::from_fn(
+            200,
+            100,
+            |x, _| if x < 100 { image::Rgb([220, 20, 20]) } else { image::Rgb([20, 220, 20]) },
+        );
+    t.state.ring_buffer.write().await.push_frame(img, 1);
+
+    let (status, body) = call(r, "GET", "/api/camera/roi", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["roi"].is_null());
+
+    let (status, _) = call(r, "PUT", "/api/camera/roi", Some(json!({ "x": 0.5, "y": 0.0, "w": 0.5, "h": 1.0 }))).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) =
+        call(r, "PUT", "/api/camera/roi", Some(json!({ "x": 0.5, "y": 0.5, "w": 0.001, "h": 0.001 }))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    // The model view is now the green half.
+    let res = r.clone().oneshot(Request::get("/api/camera/frame").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), 1 << 20).await.unwrap();
+    let decoded = image::load_from_memory(&bytes).unwrap().to_rgb8();
+    assert!(decoded.pixels().all(|p| p[1] > 150 && p[0] < 80));
+
+    // Full frame for the editor keeps its aspect ratio and reports the source size.
+    let res =
+        r.clone().oneshot(Request::get("/api/camera/frame?full=true").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.headers()["x-frame-width"], "200");
+    assert_eq!(res.headers()["x-frame-height"], "100");
+
+    // ROI is recorded in the bundle and restored on import; it is kept across settings saves.
+    let (_, bundle) = call(r, "GET", "/api/gestures/export?thumbnails=false", None).await;
+    assert_eq!(bundle["roi"]["x"], 0.5);
+    let (_, settings) = call(r, "GET", "/api/settings", None).await;
+    let (status, _) = call(r, "POST", "/api/settings", Some(settings)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(t.state.config.load_settings().camera_roi.is_some());
+
+    let (status, _) = call(r, "DELETE", "/api/camera/roi", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(t.state.camera_roi.read().await.is_none());
+    let (status, _) = call(r, "POST", "/api/gestures/import", Some(bundle)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(t.state.camera_roi.read().await.map(|r| r.w), Some(0.5));
+}
+
+#[tokio::test]
+async fn embed_accepts_wav_with_an_audio_model_and_rejects_images() {
+    let t = app(false).await;
+    let model = crate::engine::audio::AudioModel::load_random(audio_manifest(), candle_core::Device::Cpu).unwrap();
+    *t.state.engine.engine_active_model_for_test().await = Some(Box::new(model));
+
+    // 0.5 s of a 440 Hz tone, PCM16 mono 16 kHz.
+    let mut data = Vec::new();
+    for i in 0..8000u32 {
+        let v = (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 16_000.0).sin() * 0.5;
+        data.extend_from_slice(&((v * 32767.0) as i16).to_le_bytes());
+    }
+    let mut wav = Vec::new();
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&((36 + data.len()) as u32).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&16_000u32.to_le_bytes());
+    wav.extend_from_slice(&32_000u32.to_le_bytes());
+    wav.extend_from_slice(&2u16.to_le_bytes());
+    wav.extend_from_slice(&16u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    wav.extend_from_slice(&data);
+
+    let multipart = |name: &str, ctype: &str, bytes: &[u8]| {
+        let boundary = "XBOUNDARY";
+        let mut body = format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\nContent-Type: {ctype}\r\n\r\n").into_bytes();
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        Request::post("/api/embed")
+            .header("content-type", format!("multipart/form-data; boundary={boundary}"))
+            .body(Body::from(body))
+            .unwrap()
+    };
+
+    let res = t.router.clone().oneshot(multipart("tone.wav", "audio/wav", &wav)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let json: Value = serde_json::from_slice(&to_bytes(res.into_body(), 1 << 20).await.unwrap()).unwrap();
+    assert_eq!(json["model"], "test/audio-tiny");
+    assert_eq!(json["embedding"].as_array().unwrap().len(), 32);
+    assert_eq!(json["patch_embeddings"].as_array().unwrap().len(), (64 / 16) * (32 / 16));
+
+    // A PNG sent to an audio model is a clear 400, not a silent embedding.
+    let png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D];
+    let res = t.router.clone().oneshot(multipart("a.png", "image/png", &png)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }

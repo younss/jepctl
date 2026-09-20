@@ -10,7 +10,7 @@ use tokio::sync::RwLock;
 
 use crate::config::RING_BUFFER_CAPACITY;
 use crate::media::image::preprocess_dynamic_image;
-use crate::types::{JepaError, Preprocessing};
+use crate::types::{JepaError, Preprocessing, Roi};
 
 /// Side length of the "model view": the centre-cropped square every frame is
 /// reduced to before it is embedded.
@@ -27,6 +27,24 @@ pub struct FrameEntry {
     pub timestamp_ms: u64,
     /// Monotonic sequence number assigned at push time.
     pub sequence: u64,
+}
+
+/// Crop a frame to a normalised region of interest (pixel-clamped, never empty).
+pub fn crop_roi(image: &RgbImage, roi: &Roi) -> RgbImage {
+    let (w, h) = (image.width() as f32, image.height() as f32);
+    let x0 = (roi.x * w).round().clamp(0.0, w - 1.0) as u32;
+    let y0 = (roi.y * h).round().clamp(0.0, h - 1.0) as u32;
+    let cw = ((roi.w * w).round() as u32).clamp(1, image.width() - x0);
+    let ch = ((roi.h * h).round() as u32).clamp(1, image.height() - y0);
+    DynamicImage::ImageRgb8(image.clone()).crop_imm(x0, y0, cw, ch).to_rgb8()
+}
+
+/// What the model sees: optional ROI crop, then centre square crop, then resize.
+pub fn model_input_image(image: &RgbImage, roi: Option<&Roi>) -> RgbImage {
+    match roi {
+        Some(r) => crop_roi(image, r),
+        None => image.clone(),
+    }
 }
 
 /// Centre-crop a frame to a square and resize it to the model's input size.
@@ -90,9 +108,38 @@ impl RingBuffer {
     }
 
     /// Preprocess only the latest frame into an image tensor [1, 3, H, W].
-    pub fn latest_image_tensor(&self, prep: &Preprocessing, device: &Device) -> Result<Tensor, JepaError> {
+    pub fn latest_image_tensor(
+        &self,
+        prep: &Preprocessing,
+        roi: Option<&Roi>,
+        device: &Device,
+    ) -> Result<Tensor, JepaError> {
         let entry = self.latest().ok_or_else(|| JepaError::InvalidPayload("Ring buffer is empty".into()))?;
-        preprocess_dynamic_image(&DynamicImage::ImageRgb8(entry.rgb_image.clone()), prep, device)
+        preprocess_dynamic_image(&DynamicImage::ImageRgb8(model_input_image(&entry.rgb_image, roi)), prep, device)
+    }
+
+    /// JPEG of exactly what the model receives from the latest frame (ROI applied,
+    /// centre crop, `size`×`size`), plus its sequence number.
+    pub fn latest_model_view_jpeg(&self, size: u32, roi: Option<&Roi>) -> Option<(Vec<u8>, u64)> {
+        let entry = self.latest()?;
+        if roi.is_none() {
+            return Some((entry.model_view_jpeg.as_ref().clone(), entry.sequence));
+        }
+        let view = to_model_view(&model_input_image(&entry.rgb_image, roi), size);
+        let mut bytes = Cursor::new(Vec::new());
+        DynamicImage::ImageRgb8(view).write_to(&mut bytes, ImageFormat::Jpeg).ok()?;
+        Some((bytes.into_inner(), entry.sequence))
+    }
+
+    /// Small JPEG of the full latest frame (for the ROI editor).
+    pub fn latest_full_frame_jpeg(&self, max_side: u32) -> Option<(Vec<u8>, u64, u32, u32)> {
+        let entry = self.latest()?;
+        let img = DynamicImage::ImageRgb8(entry.rgb_image.clone());
+        let (w, h) = (img.width(), img.height());
+        let scaled = if w.max(h) > max_side { img.resize(max_side, max_side, FilterType::Triangle) } else { img };
+        let mut bytes = Cursor::new(Vec::new());
+        scaled.write_to(&mut bytes, ImageFormat::Jpeg).ok()?;
+        Some((bytes.into_inner(), entry.sequence, w, h))
     }
 
     /// Retrieve the number of frames currently in the buffer
@@ -111,7 +158,12 @@ impl RingBuffer {
     }
 
     /// Construct 5D spatio-temporal video tensor [1, 3, T, H, W] for V-JEPA
-    pub fn to_video_tensor(&self, prep: &Preprocessing, device: &Device) -> Result<Tensor, JepaError> {
+    pub fn to_video_tensor(
+        &self,
+        prep: &Preprocessing,
+        roi: Option<&Roi>,
+        device: &Device,
+    ) -> Result<Tensor, JepaError> {
         if self.frames.is_empty() {
             return Err(JepaError::InvalidPayload("Ring buffer is empty".into()));
         }
@@ -120,7 +172,7 @@ impl RingBuffer {
 
         // Collect existing frames
         for entry in &self.frames {
-            let dyn_img = DynamicImage::ImageRgb8(entry.rgb_image.clone());
+            let dyn_img = DynamicImage::ImageRgb8(model_input_image(&entry.rgb_image, roi));
             let tensor = preprocess_dynamic_image(&dyn_img, prep, device)?; // [1, 3, H, W]
             frame_tensors.push(tensor);
         }
@@ -172,6 +224,28 @@ mod tests {
     }
 
     #[test]
+    fn roi_crop_selects_the_region() {
+        // Left half red, right half green.
+        let img =
+            RgbImage::from_fn(200, 100, |x, _| if x < 100 { image::Rgb([255, 0, 0]) } else { image::Rgb([0, 255, 0]) });
+        let right = crop_roi(&img, &Roi { x: 0.5, y: 0.0, w: 0.5, h: 1.0 });
+        assert_eq!((right.width(), right.height()), (100, 100));
+        assert!(right.pixels().all(|p| p[1] == 255));
+        // Out-of-range boxes are clamped, never empty.
+        let tiny = crop_roi(&img, &Roi { x: 0.99, y: 0.99, w: 0.5, h: 0.5 });
+        assert!(tiny.width() >= 1 && tiny.height() >= 1);
+
+        let mut rb = RingBuffer::new(2);
+        rb.push_frame(img, 0);
+        let (jpeg, seq) = rb.latest_model_view_jpeg(32, Some(&Roi { x: 0.5, y: 0.0, w: 0.5, h: 1.0 })).unwrap();
+        assert_eq!(seq, 1);
+        let decoded = image::load_from_memory(&jpeg).unwrap().to_rgb8();
+        assert_eq!((decoded.width(), decoded.height()), (32, 32));
+        assert!(decoded.pixels().all(|p| p[1] > 200 && p[0] < 60));
+        assert!(rb.latest_full_frame_jpeg(64).is_some());
+    }
+
+    #[test]
     fn ring_buffer_keeps_capacity_and_sequence() {
         let mut rb = RingBuffer::new(3);
         for i in 0..5 {
@@ -183,9 +257,9 @@ mod tests {
         assert!(!rb.latest().unwrap().model_view_jpeg.is_empty());
 
         let prep = Preprocessing { size: 16, ..Default::default() };
-        let t = rb.to_video_tensor(&prep, &Device::Cpu).unwrap();
+        let t = rb.to_video_tensor(&prep, None, &Device::Cpu).unwrap();
         assert_eq!(t.dims(), &[1, 3, 3, 16, 16]);
-        let img = rb.latest_image_tensor(&prep, &Device::Cpu).unwrap();
+        let img = rb.latest_image_tensor(&prep, None, &Device::Cpu).unwrap();
         assert_eq!(img.dims(), &[1, 3, 16, 16]);
     }
 }

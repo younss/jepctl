@@ -324,6 +324,9 @@ pub struct GestureBundle {
     /// Decision parameters the exporter was tuned with (pass them to `/api/gestures/match`).
     pub threshold: f32,
     pub margin: f32,
+    /// Camera region of interest the prototypes were captured with, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roi: Option<crate::types::Roi>,
     pub gestures: Vec<RegisteredGesture>,
 }
 
@@ -418,7 +421,7 @@ impl GestureStore {
             })
             .collect();
         gestures.sort_by_key(|g| g.created_at);
-        GestureBundle { version: BUNDLE_VERSION, exported_at: now, threshold, margin, gestures }
+        GestureBundle { version: BUNDLE_VERSION, exported_at: now, threshold, margin, roi: None, gestures }
     }
 
     /// Import a bundle. With `replace`, gestures of every model present in the bundle are

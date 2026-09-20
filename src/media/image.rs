@@ -23,6 +23,11 @@ pub fn sniff_media_format(buffer: &[u8]) -> Result<&'static str, JepaError> {
         return Ok("jpeg");
     }
 
+    // GIF magic bytes: GIF87a / GIF89a
+    if buffer.starts_with(b"GIF87a") || buffer.starts_with(b"GIF89a") {
+        return Ok("gif");
+    }
+
     // WebP magic bytes: RIFF....WEBP
     if buffer.starts_with(b"RIFF") && &buffer[8..12] == b"WEBP" {
         return Ok("webp");
@@ -110,6 +115,7 @@ mod tests {
         assert_eq!(sniff_media_format(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0]).unwrap(), "png");
         assert_eq!(sniff_media_format(&[0xFF, 0xD8, 0xFF, 0, 0, 0, 0, 0, 0, 0, 0, 0]).unwrap(), "jpeg");
         assert_eq!(sniff_media_format(b"RIFF\0\0\0\0WEBPVP8 ").unwrap(), "webp");
+        assert_eq!(sniff_media_format(b"GIF89a\0\0\0\0\0\0\0").unwrap(), "gif");
         assert!(sniff_media_format(b"hello world!").is_err());
         assert!(sniff_media_format(&[1, 2]).is_err());
     }

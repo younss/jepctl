@@ -23,10 +23,10 @@ use crate::hub::manifest::JepafileConfig;
 use crate::hub::ModelCatalog;
 use crate::media::capture::{list_camera_devices, CameraSupervisor};
 use crate::media::image::{preprocess_image_bytes, sniff_media_format};
-use crate::media::ring_buffer::SharedRingBuffer;
+use crate::media::ring_buffer::{SharedRingBuffer, MODEL_VIEW_SIZE};
 use crate::server::middleware::{authenticate_request, SharedAuditLog};
 use crate::types::{
-    CreateKeyRequest, EmbedResponse, EnergyRequest, EnergyResponse, JepaError, ModelModality, Role, SettingsDto,
+    CreateKeyRequest, EmbedResponse, EnergyRequest, EnergyResponse, JepaError, ModelModality, Roi, Role, SettingsDto,
     StatusResponse, StreamEvent,
 };
 
@@ -41,8 +41,24 @@ pub struct AppState {
     pub ring_buffer: SharedRingBuffer,
     pub embeddings_total: Arc<AtomicU64>,
     pub gestures: Arc<tokio::sync::RwLock<GestureStore>>,
+    /// Region of interest applied to camera frames (see `types::Roi`).
+    pub camera_roi: Arc<tokio::sync::RwLock<Option<Roi>>>,
     pub start_time: Instant,
     pub config: Arc<RuntimeConfig>,
+}
+
+/// Persist the current ROI into settings.json without touching other settings.
+pub fn persist_roi(config: &RuntimeConfig, roi: Option<Roi>) {
+    let mut settings = config.load_settings();
+    settings.camera_roi = roi;
+    match serde_json::to_string_pretty(&settings) {
+        Ok(data) => {
+            if let Err(e) = std::fs::write(&config.settings_path, data) {
+                tracing::warn!("Could not persist ROI: {}", e);
+            }
+        }
+        Err(e) => tracing::warn!("Could not serialise settings: {}", e),
+    }
 }
 
 /// JSON error tuple used by every handler.
@@ -109,20 +125,19 @@ pub async fn embed_current_view(state: &AppState) -> Result<CurrentViewEmbedding
     let model = ensure_model_loaded(state).await?;
     let modality = state.engine.get_active_modality().await.unwrap_or(ModelModality::Image);
     let prep = state.engine.preprocessing().await;
+    let roi = *state.camera_roi.read().await;
 
     let (tensor, frame_sequence, frame_jpeg) = {
         let rb = state.ring_buffer.read().await;
-        let latest = rb
-            .latest()
+        let (jpeg, seq) = rb
+            .latest_model_view_jpeg(MODEL_VIEW_SIZE, roi.as_ref())
             .ok_or_else(|| api_error(StatusCode::CONFLICT, "Camera is not running or no frame captured yet"))?;
-        let seq = latest.sequence;
-        let jpeg = latest.model_view_jpeg.clone();
         let tensor = match modality {
-            ModelModality::Image => rb.latest_image_tensor(&prep, &state.engine.device),
-            _ => rb.to_video_tensor(&prep, &state.engine.device),
+            ModelModality::Image => rb.latest_image_tensor(&prep, roi.as_ref(), &state.engine.device),
+            _ => rb.to_video_tensor(&prep, roi.as_ref(), &state.engine.device),
         }
         .map_err(engine_error)?;
-        (tensor, seq, jpeg)
+        (tensor, seq, Arc::new(jpeg))
     };
 
     let (embedding, patches, latency_ms) = match modality {
@@ -131,8 +146,8 @@ pub async fn embed_current_view(state: &AppState) -> Result<CurrentViewEmbedding
             (emb, patches, lat)
         }
         _ => {
-            let (_m, _d, emb, lat) = state.engine.embed_video(&tensor).await.map_err(engine_error)?;
-            (emb, None, lat)
+            let (_m, _d, emb, patches, lat) = state.engine.embed_video(&tensor).await.map_err(engine_error)?;
+            (emb, patches, lat)
         }
     };
     state.embeddings_total.fetch_add(1, Ordering::Relaxed);
@@ -325,12 +340,38 @@ pub async fn handle_embed(
         return Err((StatusCode::PAYLOAD_TOO_LARGE, Json(json!({ "error": "Payload exceeds 200 MB maximum limit" }))));
     }
 
+    // Audio first (WAV/MP3/FLAC/OGG), then images and clips.
+    if let Some(audio_fmt) = crate::media::audio::sniff_audio_format(&buffer) {
+        ensure_model_loaded(&state).await?;
+        let clip = tokio::task::spawn_blocking({
+            let buffer = buffer.clone();
+            move || crate::media::audio::decode_audio_bytes(&buffer)
+        })
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Decode task failed: {e}")))?
+        .map_err(engine_error)?;
+        let (model, dim, embedding, patches, latency_ms) =
+            state.engine.embed_audio(&clip).await.map_err(engine_error)?;
+        state.embeddings_total.fetch_add(1, Ordering::Relaxed);
+        tracing::debug!(
+            "Embedded {} audio ({} samples @ {} Hz) with {}",
+            audio_fmt,
+            clip.samples.len(),
+            clip.sample_rate,
+            model
+        );
+        return Ok(Json(EmbedResponse { model, dimension: dim, latency_ms, embedding, patch_embeddings: patches }));
+    }
+
     // Sniff media format
     let format = sniff_media_format(&buffer)
         .map_err(|e| (StatusCode::UNSUPPORTED_MEDIA_TYPE, Json(json!({ "error": e.to_string() }))))?;
 
-    // If image format: PNG, JPEG, WebP
-    if matches!(format, "png" | "jpeg" | "webp") {
+    // Animated WebP is a clip; a still WebP is an image.
+    let animated_webp = format == "webp" && crate::media::video::decode_clip_bytes(&buffer, 1, 1.0).is_ok();
+
+    // If image format: PNG, JPEG, still WebP
+    if matches!(format, "png" | "jpeg") || (format == "webp" && !animated_webp) {
         if buffer.len() > MAX_IMAGE_PAYLOAD_SIZE {
             return Err((
                 StatusCode::PAYLOAD_TOO_LARGE,
@@ -350,15 +391,22 @@ pub async fn handle_embed(
 
         Ok(Json(EmbedResponse { model, dimension: dim, latency_ms, embedding, patch_embeddings: patches }))
     } else {
-        // Decoding uploaded video containers is not implemented yet. Say so rather
-        // than silently embedding whatever the camera ring buffer holds.
-        Err(api_error(
-            StatusCode::NOT_IMPLEMENTED,
-            format!(
-                "Video file embedding ({}) is not supported yet. Use the live camera stream (/api/embed/stream) instead.",
-                format
-            ),
-        ))
+        // Video: GIF/WebP natively, MP4/WebM through ffmpeg (see media::video).
+        ensure_model_loaded(&state).await?;
+        let frames = tokio::task::spawn_blocking({
+            let buffer = buffer.clone();
+            move || crate::media::video::decode_clip_bytes(&buffer, crate::media::video::MAX_DECODED_FRAMES, 8.0)
+        })
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Decode task failed: {e}")))?
+        .map_err(engine_error)?;
+
+        let (model, dim, embedding, patches, latency_ms, used) =
+            state.engine.embed_frames(&frames).await.map_err(engine_error)?;
+        state.embeddings_total.fetch_add(1, Ordering::Relaxed);
+        tracing::debug!("Embedded a {}-frame clip ({} sampled) with {}", frames.len(), used, model);
+
+        Ok(Json(EmbedResponse { model, dimension: dim, latency_ms, embedding, patch_embeddings: patches }))
     }
 }
 
@@ -638,9 +686,14 @@ pub async fn handle_save_settings(
     Json(dto): Json<SettingsDto>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let _ = authenticate_request(&headers, &state.auth, Role::Admin).await?;
+    let mut dto = dto;
+    if dto.camera_roi.is_none() {
+        dto.camera_roi = *state.camera_roi.read().await;
+    }
     let data = serde_json::to_string_pretty(&dto)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))))?;
-    let _ = std::fs::write(&state.config.settings_path, data);
+    std::fs::write(&state.config.settings_path, data)
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Could not write settings: {e}")))?;
     Ok(Json(json!({ "status": "saved" })))
 }
 

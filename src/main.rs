@@ -90,9 +90,9 @@ enum Commands {
         model: String,
     },
 
-    /// Compute the latent representation vector of an image file
+    /// Compute the latent representation of an image or a clip (GIF/WebP natively, MP4/WebM via ffmpeg)
     Embed {
-        /// Path to target image (PNG, JPEG, WebP)
+        /// Path to an image (PNG, JPEG, WebP) or a clip (GIF, animated WebP, MP4, WebM)
         path: PathBuf,
 
         /// Model name to use for embedding
@@ -307,6 +307,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ring_buffer: ring_buffer.clone(),
         embeddings_total,
         gestures: gestures.clone(),
+        camera_roi: Arc::new(tokio::sync::RwLock::new(settings.camera_roi)),
         start_time: Instant::now(),
         config: config.clone(),
     };
@@ -409,27 +410,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let file_bytes = std::fs::read(&path)?;
-            let prep = engine.preprocessing().await;
-            let tensor = preprocess_image_bytes(&file_bytes, &prep, &engine.device)?;
-            let (m_name, dim, embedding, _patches, latency_ms) = engine.embed_image(&tensor).await?;
-
-            if format == "raw" {
-                for (i, val) in embedding.iter().enumerate() {
-                    if i > 0 {
-                        print!(", ");
-                    }
-                    print!("{:.6}", val);
-                }
-                println!();
-            } else {
-                let out = serde_json::json!({
-                    "model": m_name,
-                    "dimension": dim,
-                    "latency_ms": latency_ms,
-                    "embedding": embedding
-                });
-                println!("{}", serde_json::to_string_pretty(&out)?);
+            if crate::media::audio::sniff_audio_format(&file_bytes).is_some() {
+                let clip = crate::media::audio::decode_audio_path(&path)?;
+                let (m, d, e, _p, lat) = engine.embed_audio(&clip).await?;
+                eprintln!(
+                    "Decoded {:.2} s of audio @ {} Hz for {}.",
+                    clip.samples.len() as f32 / clip.sample_rate as f32,
+                    clip.sample_rate,
+                    m
+                );
+                print_embedding(&format, &m, d, &e, lat)?;
+                return Ok(());
             }
+            let media = crate::media::image::sniff_media_format(&file_bytes)?;
+            let animated_webp = media == "webp" && crate::media::video::decode_clip_bytes(&file_bytes, 1, 1.0).is_ok();
+            let (m_name, dim, embedding, latency_ms) = if matches!(media, "gif" | "mp4" | "webm") || animated_webp {
+                let frames =
+                    crate::media::video::decode_clip_path(&path, crate::media::video::MAX_DECODED_FRAMES, 8.0)?;
+                let (m, d, e, _p, lat, used) = engine.embed_frames(&frames).await?;
+                eprintln!("Decoded {} frame(s), sampled {} for {}.", frames.len(), used, m);
+                (m, d, e, lat)
+            } else {
+                let prep = engine.preprocessing().await;
+                let tensor = preprocess_image_bytes(&file_bytes, &prep, &engine.device)?;
+                let (m, d, e, _p, lat) = engine.embed_image(&tensor).await?;
+                (m, d, e, lat)
+            };
+
+            print_embedding(&format, &m_name, dim, &embedding, latency_ms)?;
         }
 
         Some(Commands::Stream { camera, fps, model }) => {
@@ -453,10 +461,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 frame_count += 1;
                 let vid_tensor = {
                     let lock = ring_buffer.read().await;
-                    lock.to_video_tensor(&prep, &engine.device)?
+                    lock.to_video_tensor(&prep, settings.camera_roi.as_ref(), &engine.device)?
                 };
 
-                let (m_name, _dim, embedding, latency_ms) = engine.embed_video(&vid_tensor).await?;
+                let (m_name, _dim, embedding, _patches, latency_ms) = engine.embed_video(&vid_tensor).await?;
                 let out = serde_json::json!({
                     "frame": frame_count,
                     "model": m_name,
@@ -642,6 +650,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     }
 
+    Ok(())
+}
+
+/// `jepa embed` output: `raw` comma-separated floats, or JSON.
+fn print_embedding(
+    format: &str,
+    model: &str,
+    dim: usize,
+    embedding: &[f32],
+    latency_ms: f64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if format == "raw" {
+        let line: Vec<String> = embedding.iter().map(|v| format!("{v:.6}")).collect();
+        println!("{}", line.join(", "));
+    } else {
+        let out =
+            serde_json::json!({ "model": model, "dimension": dim, "latency_ms": latency_ms, "embedding": embedding });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    }
     Ok(())
 }
 

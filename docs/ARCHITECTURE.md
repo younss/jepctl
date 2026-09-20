@@ -29,14 +29,16 @@ gesture logic.
 
 A single ViT implementation covers every supported checkpoint through `VitVariant`:
 
-| variant | CLS token | LayerScale | pooled output | families |
+| variant | CLS token | LayerScale | default pooling | families |
 |---|---|---|---|---|
-| `Plain` | no | no | mean of patch tokens | I-JEPA, V-JEPA-style |
-| `Cls` | yes | no | CLS token | HF `ViTModel`, timm ViT |
+| `Plain` | no | no | mean of patch tokens | I-JEPA |
+| `Cls` | yes | no | CLS token (`mean` for AudioMAE) | HF `ViTModel`, timm ViT, AudioMAE |
 | `DinoV2` | yes | yes | CLS token | HF `Dinov2Model` |
+| `VJepa2` | — | — | mean of space-time tokens | separate struct, see 2.4 |
 
 `VitBackbone::forward` returns `(patch_tokens [B, N, D], pooled [B, D])`. Patch tokens
-exclude the CLS row so `N == grid²` for every variant; the gesture heatmap relies on this.
+exclude the CLS row so `N == grid_h × grid_w` for every variant; the gesture heatmap relies
+on this. Inputs may be rectangular and single-channel (`VitConfig::img_w`, `in_chans`).
 
 Positional embeddings are a plain `Tensor` (sin-cos by default, `[1, N(+1), D]`), not a
 trainable var, so they do not count toward checkpoint coverage. `adapt_pos_embed` handles
@@ -48,7 +50,8 @@ code).
 ```
 checkpoint ──► candidate_sources(target) ──► first shape-compatible tensor ──► var.set
                         │
-                        └─ HF ViT/I-JEPA names, HF DINOv2 names, timm/Meta fused-QKV slices
+                        └─ HF ViT/I-JEPA, HF DINOv2, HF V-JEPA 2, timm/Meta fused-QKV slices;
+                           equal-element-count tensors are reshaped (Conv3d kernel → Linear)
 ```
 
 - Every trainable parameter of the backbone must be filled. `loaded != expected` is a hard
@@ -77,6 +80,44 @@ active model and **every** producer of an input tensor uses it:
 Centre-crop to a square, bicubic resize to `size`, per-channel `(x/255 − mean)/std`.
 The ring buffer also stores a JPEG of the 224 px centre crop of each frame — the
 "model view" served by `/api/camera/frame`.
+
+### 2.4 V-JEPA 2 (`engine/vjepa2.rs`)
+
+Not a 2D backbone: its own struct implementing `JepaModelTrait`.
+
+- **Tubelet embedding**: `Conv3d(3, D, (t, p, p), stride (t, p, p))` has no Candle kernel, so
+  the input `[B, C, T, H, W]` is unfolded to `[B, (T/t)(H/p)(W/p), C·t·p·p]` and multiplied by
+  the kernel reshaped to `[D, C·t·p·p]` (the loader reshapes on equal element count).
+- **3D RoPE** inside every attention: head_dim is split into three `2·((hd/3)/2)` slices
+  rotated by the token's frame, row and column index; the remainder is left unrotated.
+  The reference tiles the sin/cos tables (`[s, s]`) while rotating interleaved pairs
+  `(-x₂, x₁)`; we replicate that exactly (`rotation_matches_reference_formula`).
+- **Memory**: attention is computed one head at a time. A 16-frame 256 px clip is 2048
+  tokens; a full `[B, 16, 2048, 2048]` f32 score tensor per layer, kept alive by the Metal
+  allocator, reached 70 GB. Per head the working set is `N²·4 B` ≈ 16 MB.
+- Pooled output is the mean over all space-time tokens; the "patch tokens" returned for the
+  heatmap are those of the last temporal slot.
+- Still images are embedded as `tubelet_size` identical frames.
+
+### 2.5 Audio (`engine/audio.rs`, `media/audio.rs`)
+
+The 2D backbone with `in_chans = 1` and a rectangular grid (`frames/patch × n_mels/patch`).
+The front-end follows Kaldi `fbank` as used by AudioMAE/AST: 25 ms Povey window
+(Hamming^0.85), 10 ms hop, DC removal, pre-emphasis 0.97, 512-point FFT, 128 mel bins
+(1127·ln(1 + f/700)) from 20 Hz to Nyquist, `ln(max(e, ε))`, zero-pad to 1024 frames, then
+`(x − mean) / (2·std)` with the AudioSet statistics carried in the manifest.
+
+**Pooling is a manifest parameter.** MAE-pretrained encoders keep a CLS token that the
+pre-training objective never trains as a summary; reading it out yields the same vector for
+every input (observed: cosine 1.000 between a tone, a chirp and noise). AudioMAE pools by mean.
+
+### 2.6 Clip and audio decoding (`media/video.rs`, `media/audio.rs`)
+
+GIF, animated WebP and WAV are decoded in Rust. MP4/WebM and MP3/FLAC/OGG are decoded by an
+external `ffmpeg` (raw RGB / f32 PCM over stdout) because no dependable pure-Rust H.264/MP3
+decoder exists; without `ffmpeg` the error names the binary. Clips are uniformly sub-sampled
+to `clip_frames()` of the model (16 for V-JEPA 2); image models embed each sampled frame
+and average the pooled vectors.
 
 ## 3. Gestures (`gestures.rs`)
 
@@ -128,7 +169,15 @@ The client adds temporal smoothing (moving average over N frames of `combined`) 
 its own threshold/margin on the smoothed values; the server decision uses the values passed
 in the SSE query. Both decisions and their reasons are displayed side by side.
 
-### 3.4 Neutral pose
+### 3.4 Region of interest
+
+`types::Roi { x, y, w, h }` (normalised on the raw frame) lives in `AppState::camera_roi`,
+is persisted in `settings.json` and travels inside gesture bundles. Every camera path —
+`embed_current_view`, `/api/camera/frame`, `jepa stream` — crops to it *before* the centre
+square crop, so the hand can fill the model input. Because prototypes captured with a crop
+only match frames cropped the same way, importing a bundle restores its ROI.
+
+### 3.5 Neutral pose
 
 A gesture flagged `is_neutral` competes in scoring (it contributes to the centroid and can
 win) but is never reported as a detection. It absorbs "nothing is being shown" frames that
@@ -152,7 +201,9 @@ would otherwise be forced onto the nearest real gesture.
 | Layer | Where | What |
 |---|---|---|
 | scoring, prototypes, persistence | `gestures.rs` tests | pure logic, deterministic vectors |
-| backbone variants, name mapping, pos-embed | `engine/vit.rs` tests | tiny configs on CPU |
+| backbone variants, name mapping, pos-embed | `engine/vit.rs` tests | tiny configs on CPU, rectangular grids |
+| V-JEPA 2 rotary tables and rotation, shapes | `engine/vjepa2.rs` tests | reference formulas on tiny configs |
+| audio front-end (WAV, FFT, fbank), clip decoding | `media/audio.rs`, `media/video.rs` tests | synthetic tones, in-memory GIFs |
 | preprocessing, ring buffer | `media/*` tests | shapes, crops, normalisation values |
 | HTTP behaviour | `server/tests.rs` | full router, random 32-d model, temp `~/.jepa`, auth on/off |
 | UI/HTML consistency | `types.rs` | every static DOM id used by `app.js` exists |
@@ -162,11 +213,10 @@ not download gigabytes of weights.
 
 ## 6. Known limitations
 
-- V-JEPA: `VJepaModel` is a frame-wise ViT with mean pooling over `T × N` tokens. It cannot
-  load Meta's V-JEPA / V-JEPA 2 checkpoints (3D patch embedding, RoPE, different naming) and
-  is therefore not in the verified catalog. It is kept for custom Jepafiles and as a starting
-  point.
-- Gestures use a global embedding of the whole frame; small hands in a big frame have little
-  influence. A region-of-interest crop is the natural next step and fits the pipeline
-  (crop before `preprocess_dynamic_image`).
+- No numerical parity test against PyTorch: implementations follow the reference code and
+  are checked for determinism and discrimination on synthetic inputs. A contributor with a
+  Python environment can close this gap (CONTRIBUTING → verification).
+- V-JEPA 2 on CPU takes ≈10 s per 16-frame clip; the live stream then emits one event per
+  clip. Metal/CUDA are the intended targets for video.
+- Audio has no live capture yet (files only); Audio-JEPA has no loadable public checkpoint.
 - The desktop window (`tao` + `wry`) is a thin WebView over the same HTTP UI.

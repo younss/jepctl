@@ -38,6 +38,10 @@
         lastAudioToneTime: 0,
         registeredGestures: [],
         streamStarting: null,
+        cameraRoi: null,
+        roiTimer: null,
+        roiObjectUrl: null,
+        roiDrag: null,
         modelViewTimer: null,
         modelViewObjectUrl: null,
         modelViewSequence: null,
@@ -89,6 +93,15 @@
         btnApiMatch: document.getElementById("btn-api-match"),
         btnApiRegister: document.getElementById("btn-api-register"),
         btnGesturesExport: document.getElementById("btn-gestures-export"),
+        roiCard: document.getElementById("roi-card"),
+        roiStage: document.getElementById("roi-stage"),
+        roiFullFrame: document.getElementById("roi-full-frame"),
+        roiBox: document.getElementById("roi-box"),
+        roiPlaceholder: document.getElementById("roi-placeholder"),
+        roiValues: document.getElementById("roi-values"),
+        roiStatusText: document.getElementById("roi-status-text"),
+        btnRoiClear: document.getElementById("btn-roi-clear"),
+        btnApiRoi: document.getElementById("btn-api-roi"),
         btnGesturesImport: document.getElementById("btn-gestures-import"),
         inputGesturesImport: document.getElementById("input-gestures-import"),
 
@@ -491,6 +504,7 @@
         setupSecurityAndKeys();
         setupSettings();
         setupGestureSandbox();
+        setupRoiEditor();
         setupHeader();
 
         // Initial fetch
@@ -739,6 +753,7 @@
                     <div class="badge-row">
                         <span class="badge badge-image">${escapeHtml(org)}</span>
                         <span class="badge badge-dim">${m.embed_dim} dims</span>
+                        <span class="badge badge-dim">${escapeHtml(m.modality || "image")}</span>
                         <span class="badge badge-dim">${escapeHtml(m.variant || "plain")}</span>
                     </div>
                     <h4>${escapeHtml(m.name)}</h4>
@@ -1074,17 +1089,24 @@
     }
 
     async function processUploadedImage(file) {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const img = new Image();
-            img.onload = () => {
-                window.currentInspectionImg = img;
-                el.canvasWrapper.style.display = "block";
-                drawInspectionCanvas(img);
+        const isImage = /^image\/(png|jpeg|webp)$/.test(file.type);
+        if (isImage) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = new Image();
+                img.onload = () => {
+                    window.currentInspectionImg = img;
+                    el.canvasWrapper.style.display = "block";
+                    drawInspectionCanvas(img);
+                };
+                img.src = e.target.result;
             };
-            img.src = e.target.result;
-        };
-        reader.readAsDataURL(file);
+            reader.readAsDataURL(file);
+        } else {
+            // Clips and audio have no still to inspect; the vector panel is the output.
+            el.canvasWrapper.style.display = "none";
+            notify(`Embedding ${file.name} (${(file.size / 1e6).toFixed(1)} MB)…`, "info", 3000);
+        }
 
         // Upload and embed
         const formData = new FormData();
@@ -2059,6 +2081,7 @@
         };
         tick();
         state.modelViewTimer = setInterval(tick, interval);
+        startRoiPolling();
     }
 
     function stopModelViewPolling() {
@@ -2066,6 +2089,7 @@
             clearInterval(state.modelViewTimer);
             state.modelViewTimer = null;
         }
+        stopRoiPolling();
         if (el.gestureViewPlaceholder) el.gestureViewPlaceholder.style.display = "flex";
         clearHeatmap();
     }
@@ -2098,6 +2122,133 @@
             const g = Math.round(180 * Math.max(0, 1 - Math.abs(v - 0.5) * 2));
             ctx.fillStyle = `rgba(${r}, ${g}, 40, ${(0.15 + 0.7 * v).toFixed(2)})`;
             ctx.fillRect(x, y, cell, cell);
+        }
+    }
+
+    // --- Region of interest editor -------------------------------------------
+
+    function renderRoi() {
+        const roi = state.cameraRoi;
+        if (el.roiValues) el.roiValues.textContent = roi ? `x ${roi.x.toFixed(3)} · y ${roi.y.toFixed(3)} · w ${roi.w.toFixed(3)} · h ${roi.h.toFixed(3)}` : "none";
+        if (el.roiStatusText) el.roiStatusText.textContent = roi ? `${Math.round(roi.w * 100)}% × ${Math.round(roi.h * 100)}% crop` : "full frame";
+        if (el.roiBox) {
+            if (roi) {
+                el.roiBox.style.display = "block";
+                el.roiBox.style.left = `${roi.x * 100}%`;
+                el.roiBox.style.top = `${roi.y * 100}%`;
+                el.roiBox.style.width = `${roi.w * 100}%`;
+                el.roiBox.style.height = `${roi.h * 100}%`;
+            } else {
+                el.roiBox.style.display = "none";
+            }
+        }
+    }
+
+    async function fetchRoi() {
+        try {
+            const res = await apiFetch("/api/camera/roi");
+            if (res.ok) {
+                const data = await res.json();
+                state.cameraRoi = data.roi || null;
+                renderRoi();
+            }
+        } catch (e) {
+            console.warn("roi fetch failed:", e);
+        }
+    }
+
+    async function saveRoi(roi) {
+        try {
+            const res = roi
+                ? await apiFetch("/api/camera/roi", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(roi) })
+                : await apiFetch("/api/camera/roi", { method: "DELETE" });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || `${res.status}`);
+            state.cameraRoi = data.roi || null;
+            renderRoi();
+            state.gestureHistory = {};
+            notify(roi ? "Region of interest saved — re-capture your samples with this crop." : "Using the full frame.", "success");
+        } catch (e) {
+            notify(`Could not save the region: ${e.message}`, "error");
+        }
+    }
+
+    function startRoiPolling() {
+        stopRoiPolling();
+        if (el.roiPlaceholder) el.roiPlaceholder.style.display = "none";
+        const tick = async () => {
+            if (!state.isStreaming || !el.roiCard || !el.roiCard.open) return;
+            try {
+                const res = await apiFetch("/api/camera/frame?full=true");
+                if (!res.ok) return;
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                el.roiFullFrame.src = url;
+                if (state.roiObjectUrl) URL.revokeObjectURL(state.roiObjectUrl);
+                state.roiObjectUrl = url;
+            } catch (e) {
+                console.warn("roi frame fetch failed:", e);
+            }
+        };
+        tick();
+        state.roiTimer = setInterval(tick, 500);
+    }
+
+    function stopRoiPolling() {
+        if (state.roiTimer) {
+            clearInterval(state.roiTimer);
+            state.roiTimer = null;
+        }
+        if (el.roiPlaceholder) el.roiPlaceholder.style.display = "flex";
+    }
+
+    function setupRoiEditor() {
+        if (!el.roiStage) return;
+        fetchRoi();
+        if (el.roiCard) el.roiCard.addEventListener("toggle", () => { if (el.roiCard.open && state.isStreaming) startRoiPolling(); });
+
+        const pointFrom = (e) => {
+            const r = el.roiStage.getBoundingClientRect();
+            return {
+                x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
+                y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))
+            };
+        };
+        el.roiStage.addEventListener("pointerdown", (e) => {
+            if (!state.isStreaming) return;
+            state.roiDrag = { start: pointFrom(e) };
+            el.roiStage.setPointerCapture(e.pointerId);
+        });
+        el.roiStage.addEventListener("pointermove", (e) => {
+            if (!state.roiDrag) return;
+            const a = state.roiDrag.start, b = pointFrom(e);
+            const roi = { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(b.x - a.x), h: Math.abs(b.y - a.y) };
+            state.roiDrag.current = roi;
+            el.roiBox.style.display = "block";
+            el.roiBox.style.left = `${roi.x * 100}%`;
+            el.roiBox.style.top = `${roi.y * 100}%`;
+            el.roiBox.style.width = `${roi.w * 100}%`;
+            el.roiBox.style.height = `${roi.h * 100}%`;
+        });
+        const finish = () => {
+            if (!state.roiDrag) return;
+            const roi = state.roiDrag.current;
+            state.roiDrag = null;
+            if (roi && roi.w > 0.02 && roi.h > 0.02) {
+                saveRoi({ x: +roi.x.toFixed(4), y: +roi.y.toFixed(4), w: +roi.w.toFixed(4), h: +roi.h.toFixed(4) });
+            } else {
+                renderRoi();
+            }
+        };
+        el.roiStage.addEventListener("pointerup", finish);
+        el.roiStage.addEventListener("pointercancel", finish);
+        if (el.btnRoiClear) el.btnRoiClear.addEventListener("click", () => saveRoi(null));
+        if (el.btnApiRoi) {
+            el.btnApiRoi.addEventListener("click", () => {
+                const roi = state.cameraRoi || { x: 0.3, y: 0.2, w: 0.4, h: 0.6 };
+                showApiDialog("Set the camera region of interest", "Inference role. Normalised coordinates on the raw camera frame. DELETE /api/camera/roi restores the full frame. Exported bundles carry the ROI so deployments crop identically.",
+                    { method: "PUT", path: "/api/camera/roi", json: roi });
+            });
         }
     }
 

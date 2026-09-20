@@ -274,6 +274,11 @@ mod tests {
             variant: None,
             normalization: None,
             mlp_ratio: None,
+            tubelet_size: None,
+            input_width: None,
+            in_chans: None,
+            audio: None,
+            pooling: None,
         };
 
         catalog.register_jepafile(custom_jepafile).unwrap();

@@ -150,6 +150,31 @@ impl Default for Preprocessing {
     }
 }
 
+/// Region of interest on the raw camera frame, normalised to `[0, 1]` (x, y = top-left).
+/// When set, the camera pipeline crops to it *before* the centre crop and resize, so a
+/// hand can fill the model input instead of being a few patches in a wide frame.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Roi {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl Roi {
+    /// Clamp to the unit square and refuse degenerate boxes.
+    pub fn normalized(self) -> Result<Self, JepaError> {
+        let x = self.x.clamp(0.0, 1.0);
+        let y = self.y.clamp(0.0, 1.0);
+        let w = self.w.min(1.0 - x);
+        let h = self.h.min(1.0 - y);
+        if !(w > 0.02 && h > 0.02) || !x.is_finite() || !y.is_finite() {
+            return Err(JepaError::InvalidPayload("ROI must be at least 2% of the frame in both dimensions".into()));
+        }
+        Ok(Self { x, y, w, h })
+    }
+}
+
 /// Jepafile manifest definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelManifest {
@@ -176,6 +201,40 @@ pub struct ModelManifest {
     /// MLP hidden ratio (4.0 for every catalog model except ViT-g).
     #[serde(default)]
     pub mlp_ratio: Option<f64>,
+    /// Temporal patch size of video encoders (V-JEPA 2: 2).
+    #[serde(default)]
+    pub tubelet_size: Option<usize>,
+    /// Input width when it differs from `image_size` (audio spectrograms: mel bins).
+    #[serde(default)]
+    pub input_width: Option<usize>,
+    /// Input channels (1 for spectrograms, 3 for RGB).
+    #[serde(default)]
+    pub in_chans: Option<usize>,
+    /// Audio front-end parameters for `modality: audio`.
+    #[serde(default)]
+    pub audio: Option<AudioSpec>,
+    /// Pooled-output read-out (`cls` or `mean`). Default: `cls` for CLS backbones, else `mean`.
+    #[serde(default)]
+    pub pooling: Option<crate::engine::vit::Pooling>,
+}
+
+/// Log-mel front-end parameters (Kaldi fbank conventions, as used by AudioMAE / AST).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct AudioSpec {
+    pub sample_rate: u32,
+    pub n_mels: usize,
+    /// Number of 10 ms frames the model expects (time axis, rows).
+    pub frames: usize,
+    /// Dataset mean/std applied as `(fbank - mean) / (2 * std)`.
+    pub mean: f32,
+    pub std: f32,
+}
+
+impl Default for AudioSpec {
+    fn default() -> Self {
+        // AudioMAE / AST defaults (AudioSet statistics).
+        Self { sample_rate: 16_000, n_mels: 128, frames: 1024, mean: -4.2677393, std: 4.5689974 }
+    }
 }
 
 impl ModelManifest {
@@ -186,7 +245,11 @@ impl ModelManifest {
             return v;
         }
         let n = self.name.to_ascii_lowercase();
-        if n.contains("dinov2") {
+        if n.contains("vjepa2") || self.modality == ModelModality::Video {
+            VitVariant::VJepa2
+        } else if n.contains("audiomae") || n.contains("ast") && self.modality == ModelModality::Audio {
+            VitVariant::Cls
+        } else if n.contains("dinov2") {
             VitVariant::DinoV2
         } else if n.contains("jepa") {
             VitVariant::Plain
@@ -212,6 +275,23 @@ impl ModelManifest {
 
     pub fn mlp_ratio(&self) -> f64 {
         self.mlp_ratio.unwrap_or(4.0)
+    }
+
+    /// Pooling read-out, explicit or inferred. MAE-style encoders keep a CLS token that
+    /// was never trained as a summary, so they must pool by mean.
+    pub fn pooling(&self) -> crate::engine::vit::Pooling {
+        use crate::engine::vit::Pooling;
+        if let Some(p) = self.pooling {
+            return p;
+        }
+        let n = self.name.to_ascii_lowercase();
+        if n.contains("mae") {
+            Pooling::Mean
+        } else if self.backbone_variant().has_cls() {
+            Pooling::Cls
+        } else {
+            Pooling::Mean
+        }
     }
 }
 
@@ -378,6 +458,9 @@ pub struct SettingsDto {
     pub gpu_memory_high_watermark: f32,
     pub idle_unload_timeout_minutes: i64,
     pub storage_dir: String,
+    /// Region of interest applied to camera frames before embedding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera_roi: Option<Roi>,
 }
 
 /// Compute L2 norm and normalize vector to unit length (norm L2 = 1.0)

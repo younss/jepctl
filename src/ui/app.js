@@ -4404,134 +4404,275 @@
     }
 
     // ------------------------------------------------------------------
-    // World: a live 3D reconstruction of the camera scene from the model's
-    // per-patch embeddings (/api/world/frame). One column per ViT patch,
-    // height = salience, colour = a fixed projection of the patch vector
-    // (or the real camera colour). Not a photo, not a depth scan: what the
-    // model perceives, rebuilt in space.
+    // World: a near-real 3D reconstruction of the camera scene. The live
+    // camera frame is draped as a texture over a mesh whose relief is driven
+    // by JEPA: the model separates foreground from background in embedding
+    // space (/api/world/frame -> heights), so the object or person in front
+    // of the camera stands out in 3D. Not generative, not metric depth: the
+    // real scene, given shape by what the model perceives.
     // ------------------------------------------------------------------
 
+    const WORLD_RES = 96; // mesh grid resolution (vertices are RES+1 per side)
+
     const world = {
-        gfx: null,
-        orbit: { yaw: 0.7, pitch: 0.5, dist: 2.2, dragging: false, lastX: 0, lastY: 0 },
+        gl: null,
+        program: null,
+        loc: null,
+        mesh: null,
+        tex: null,
+        texReady: false,
+        pendingImg: null,
+        orbit: { yaw: 0, pitch: 0.15, dist: 2.4, dragging: false, lastX: 0, lastY: 0 },
         raf: null,
-        frame: null,
+        field: null,
         heightScale: 1,
         rateHz: 6,
-        colorMode: "latent",
-        spin: true,
+        shade: true,
+        spin: false,
         pollTimer: null,
-        eyeTimer: null,
-        busy: false,
-        eyeBusy: false,
-        eyeUrl: null
+        busy: false
     };
 
+    const WORLD_VS = `
+        attribute vec3 a_pos;
+        attribute vec2 a_uv;
+        attribute vec3 a_normal;
+        uniform mat4 u_mvp;
+        uniform mat4 u_model;
+        varying vec2 v_uv;
+        varying vec3 v_normal;
+        void main() {
+            v_uv = a_uv;
+            v_normal = mat3(u_model) * a_normal;
+            gl_Position = u_mvp * vec4(a_pos, 1.0);
+        }`;
+
+    const WORLD_FS = `
+        precision mediump float;
+        uniform sampler2D u_tex;
+        uniform float u_shade;
+        varying vec2 v_uv;
+        varying vec3 v_normal;
+        void main() {
+            vec3 base = texture2D(u_tex, v_uv).rgb;
+            vec3 n = normalize(v_normal);
+            float d = max(dot(n, normalize(vec3(0.3, 0.5, 0.8))), 0.0);
+            float sh = mix(1.0, 0.45 + 0.65 * d, u_shade);
+            gl_FragColor = vec4(base * sh, 1.0);
+        }`;
+
+    function worldInitGl(canvas) {
+        const gl = canvas.getContext("webgl", { antialias: true, preserveDrawingBuffer: true });
+        if (!gl) return null;
+        const program = gl.createProgram();
+        gl.attachShader(program, robotCompile(gl, gl.VERTEX_SHADER, WORLD_VS));
+        gl.attachShader(program, robotCompile(gl, gl.FRAGMENT_SHADER, WORLD_FS));
+        gl.linkProgram(program);
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+        gl.useProgram(program);
+        gl.enable(gl.DEPTH_TEST);
+        world.gl = gl;
+        world.program = program;
+        world.loc = {
+            pos: gl.getAttribLocation(program, "a_pos"),
+            uv: gl.getAttribLocation(program, "a_uv"),
+            normal: gl.getAttribLocation(program, "a_normal"),
+            mvp: gl.getUniformLocation(program, "u_mvp"),
+            model: gl.getUniformLocation(program, "u_model"),
+            tex: gl.getUniformLocation(program, "u_tex"),
+            shade: gl.getUniformLocation(program, "u_shade")
+        };
+        world.mesh = worldBuildMesh(gl, WORLD_RES);
+        // Placeholder texture until the first frame arrives.
+        world.tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, world.tex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([40, 44, 52, 255]));
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        return gl;
+    }
+
+    function worldBuildMesh(gl, res) {
+        const n = res + 1;
+        const verts = n * n;
+        const positions = new Float32Array(verts * 3); // updated per frame (z displaced)
+        const normals = new Float32Array(verts * 3);   // updated per frame
+        const uvs = new Float32Array(verts * 2);
+        const span = 1.8;
+        for (let y = 0; y < n; y++) {
+            for (let x = 0; x < n; x++) {
+                const i = y * n + x;
+                const u = x / res, v = y / res;
+                positions[i * 3] = -span / 2 + u * span;       // right
+                positions[i * 3 + 1] = span / 2 - v * span;    // up (image top at top)
+                positions[i * 3 + 2] = 0;                      // toward camera, set per frame
+                uvs[i * 2] = u;
+                uvs[i * 2 + 1] = v;                            // texture: v=0 is image top
+            }
+        }
+        const idx = [];
+        for (let y = 0; y < res; y++) {
+            for (let x = 0; x < res; x++) {
+                const a = y * n + x, b = a + 1, c = a + n, d = c + 1;
+                idx.push(a, c, b, b, c, d);
+            }
+        }
+        const posBuf = gl.createBuffer();
+        const normBuf = gl.createBuffer();
+        const uvBuf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, uvs, gl.STATIC_DRAW);
+        const idxBuf = gl.createBuffer();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(idx), gl.STATIC_DRAW);
+        return { n, verts, positions, normals, uvs, posBuf, normBuf, uvBuf, idxBuf, count: idx.length };
+    }
+
+    // Bilinear sample of the JEPA field (grid_w x grid_h) at normalized (u, v).
+    function worldSampleField(f, u, v) {
+        const gw = f.grid_w, gh = f.grid_h;
+        const fx = u * (gw - 1), fy = v * (gh - 1);
+        const x0 = Math.floor(fx), y0 = Math.floor(fy);
+        const x1 = Math.min(x0 + 1, gw - 1), y1 = Math.min(y0 + 1, gh - 1);
+        const tx = fx - x0, ty = fy - y0;
+        const h = f.heights;
+        const h00 = h[y0 * gw + x0], h10 = h[y0 * gw + x1];
+        const h01 = h[y1 * gw + x0], h11 = h[y1 * gw + x1];
+        return (h00 * (1 - tx) + h10 * tx) * (1 - ty) + (h01 * (1 - tx) + h11 * tx) * ty;
+    }
+
+    function worldUpdateMesh() {
+        const f = world.field, m = world.mesh;
+        if (!f || !m) return;
+        const n = m.n, pos = m.positions;
+        for (let y = 0; y < n; y++) {
+            for (let x = 0; x < n; x++) {
+                const i = y * n + x;
+                const u = x / (n - 1), v = y / (n - 1);
+                pos[i * 3 + 2] = worldSampleField(f, u, v) * world.heightScale * 0.7;
+            }
+        }
+        // Normals from neighbouring heights (finite differences).
+        const norm = m.normals;
+        const step = 1.8 / (n - 1);
+        for (let y = 0; y < n; y++) {
+            for (let x = 0; x < n; x++) {
+                const i = y * n + x;
+                const zl = pos[(y * n + Math.max(0, x - 1)) * 3 + 2];
+                const zr = pos[(y * n + Math.min(n - 1, x + 1)) * 3 + 2];
+                const zd = pos[(Math.max(0, y - 1) * n + x) * 3 + 2];
+                const zu = pos[(Math.min(n - 1, y + 1) * n + x) * 3 + 2];
+                const nx = (zl - zr) / (2 * step);
+                const ny = (zd - zu) / (2 * step);
+                const nz = 1.0;
+                const len = Math.hypot(nx, ny, nz) || 1;
+                norm[i * 3] = nx / len; norm[i * 3 + 1] = ny / len; norm[i * 3 + 2] = nz / len;
+            }
+        }
+        const gl = world.gl;
+        gl.bindBuffer(gl.ARRAY_BUFFER, m.posBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, pos, gl.DYNAMIC_DRAW);
+        gl.bindBuffer(gl.ARRAY_BUFFER, m.normBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, m.normals, gl.DYNAMIC_DRAW);
+    }
+
+    function worldUploadTexture() {
+        if (!world.pendingImg || !world.gl) return;
+        const gl = world.gl;
+        gl.bindTexture(gl.TEXTURE_2D, world.tex);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+        try {
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, world.pendingImg);
+            world.texReady = true;
+        } catch (e) {
+            console.warn("world texture upload failed", e);
+        }
+        world.pendingImg = null;
+    }
+
     function worldRender() {
-        const gfx = world.gfx;
-        if (!gfx) return;
-        const gl = gfx.gl;
+        const gl = world.gl, m = world.mesh;
+        if (!gl || !m) return;
+        worldUploadTexture();
         const canvas = gl.canvas;
         gl.viewport(0, 0, canvas.width, canvas.height);
         gl.clearColor(0.03, 0.04, 0.06, 1);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        if (!world.field) return;
         const o = world.orbit;
         const eye = [
             o.dist * Math.cos(o.pitch) * Math.sin(o.yaw),
-            0.4 + o.dist * Math.sin(o.pitch),
+            o.dist * Math.sin(o.pitch),
             o.dist * Math.cos(o.pitch) * Math.cos(o.yaw)
         ];
-        const view = m4lookAt(eye, [0, 0.15, 0], [0, 1, 0]);
+        const view = m4lookAt(eye, [0, 0, 0], [0, 1, 0]);
         const proj = m4perspective(0.8, canvas.width / canvas.height, 0.05, 30);
-        const viewProj = m4multiply(proj, view);
-        gfx.drawGrid(viewProj, [0.18, 0.2, 0.26]);
-
-        const f = world.frame;
-        if (!f) return;
-        const gw = f.grid_w, gh = f.grid_h;
-        const span = 1.6;
-        const cell = span / Math.max(gw, gh);
-        const half = span / 2;
-        for (let y = 0; y < gh; y++) {
-            for (let x = 0; x < gw; x++) {
-                const i = y * gw + x;
-                const hRaw = f.heights[i] || 0;
-                const h = Math.max(0.02, hRaw * world.heightScale * 0.9);
-                let r, g, b;
-                if (world.colorMode === "real") {
-                    r = f.pixels[i * 3]; g = f.pixels[i * 3 + 1]; b = f.pixels[i * 3 + 2];
-                } else if (world.colorMode === "blend") {
-                    r = (f.colors[i * 3] + f.pixels[i * 3]) / 2;
-                    g = (f.colors[i * 3 + 1] + f.pixels[i * 3 + 1]) / 2;
-                    b = (f.colors[i * 3 + 2] + f.pixels[i * 3 + 2]) / 2;
-                } else {
-                    r = f.colors[i * 3]; g = f.colors[i * 3 + 1]; b = f.colors[i * 3 + 2];
-                }
-                // Camera x maps left-right, patch y (top of image) maps to far side.
-                const px = -half + (x + 0.5) * cell;
-                const pz = -half + (y + 0.5) * cell;
-                const model = m4multiply(m4translate(px, h / 2, pz), m4identity());
-                gfx.drawBox(viewProj, model, [cell * 0.82, h, cell * 0.82], [r, g, b], 1);
-            }
-        }
+        const mvp = m4multiply(proj, view);
+        const model = m4identity();
+        gl.useProgram(world.program);
+        gl.uniformMatrix4fv(world.loc.mvp, false, mvp);
+        gl.uniformMatrix4fv(world.loc.model, false, model);
+        gl.uniform1f(world.loc.shade, world.shade ? 1 : 0);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, world.tex);
+        gl.uniform1i(world.loc.tex, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, m.posBuf);
+        gl.enableVertexAttribArray(world.loc.pos);
+        gl.vertexAttribPointer(world.loc.pos, 3, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, m.normBuf);
+        gl.enableVertexAttribArray(world.loc.normal);
+        gl.vertexAttribPointer(world.loc.normal, 3, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, m.uvBuf);
+        gl.enableVertexAttribArray(world.loc.uv);
+        gl.vertexAttribPointer(world.loc.uv, 2, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, m.idxBuf);
+        gl.drawElements(gl.TRIANGLES, m.count, gl.UNSIGNED_SHORT, 0);
     }
 
     function worldAnimate() {
         world.raf = null;
         if (state.activeSection !== "world") return;
-        if (world.spin && !world.orbit.dragging) world.orbit.yaw += 0.0025;
+        if (world.spin && !world.orbit.dragging) world.orbit.yaw += 0.003;
         worldRender();
         world.raf = requestAnimationFrame(worldAnimate);
     }
 
     async function worldPoll() {
-        if (world.busy || state.activeSection !== "world") return;
-        if (!state.isStreaming) return;
+        if (world.busy || state.activeSection !== "world" || !state.isStreaming) return;
         world.busy = true;
         try {
             const res = await apiFetch("/api/world/frame");
             if (res.ok) {
-                world.frame = await res.json();
+                const f = await res.json();
+                world.field = f;
+                worldUpdateMesh();
+                if (f.image) {
+                    const img = new Image();
+                    img.onload = () => { world.pendingImg = img; };
+                    img.src = f.image;
+                }
                 const chip = document.getElementById("world-chip");
                 const ct = document.getElementById("world-chip-text");
                 if (chip) chip.classList.add("on");
-                if (ct) ct.textContent = `live ${Math.round(world.frame.latency_ms)} ms`;
+                if (ct) ct.textContent = `live ${Math.round(f.latency_ms)} ms`;
                 const grid = document.getElementById("world-grid-text");
-                if (grid) grid.textContent = `${world.frame.grid_w} x ${world.frame.grid_h} patches`;
+                if (grid) grid.textContent = `${f.grid_w} x ${f.grid_h} patches`;
                 const readout = document.getElementById("world-readout");
-                if (readout) readout.textContent = `${world.frame.model}: ${world.frame.grid_w * world.frame.grid_h} patches, ${Math.round(world.frame.latency_ms)} ms/frame`;
+                if (readout) readout.textContent = `${f.model}: relief from ${f.grid_w * f.grid_h} patches, textured with the live frame`;
                 const mt = document.getElementById("world-model-text");
-                if (mt) mt.textContent = world.frame.model;
+                if (mt) mt.textContent = f.model;
             } else {
                 const err = await res.json().catch(() => ({}));
                 const ct = document.getElementById("world-chip-text");
-                if (ct) ct.textContent = err.error && res.status === 409 ? "waiting for camera" : `error ${res.status}`;
+                if (ct) ct.textContent = res.status === 409 ? "waiting for camera" : `error ${res.status}`;
             }
         } catch (e) {
             console.warn("world frame failed", e);
         } finally {
             world.busy = false;
         }
-    }
-
-    async function worldRefreshEye() {
-        const img = document.getElementById("world-eye");
-        const ph = document.getElementById("world-eye-placeholder");
-        if (!img) return;
-        if (!state.isStreaming) { if (ph) { ph.style.display = "flex"; ph.textContent = "Camera stopped"; } return; }
-        if (world.eyeBusy) return;
-        world.eyeBusy = true;
-        try {
-            const res = await apiFetch("/api/camera/frame");
-            if (res.ok) {
-                const blob = await res.blob();
-                const url = URL.createObjectURL(blob);
-                img.src = url;
-                if (world.eyeUrl) URL.revokeObjectURL(world.eyeUrl);
-                world.eyeUrl = url;
-                if (ph) ph.style.display = "none";
-            }
-        } catch (_) {} finally { world.eyeBusy = false; }
     }
 
     function worldUpdateCameraButton() {
@@ -4548,12 +4689,16 @@
         if (world.pollTimer) { clearInterval(world.pollTimer); world.pollTimer = null; }
     }
 
+    function worldUpdateBanner() {
+        const banner = document.getElementById("world-model-banner");
+        if (banner) banner.style.display = state.activeModel ? "none" : "flex";
+    }
+
     function setupWorld() {
         const canvas = document.getElementById("world-canvas");
         if (!canvas) return;
         try {
-            world.gfx = createGlRenderer(canvas);
-            if (!world.gfx) notify("WebGL is not available in this window; the world view cannot render.", "warning", 8000);
+            if (!worldInitGl(canvas)) notify("WebGL is not available in this window; the world view cannot render.", "warning", 8000);
         } catch (e) {
             notify(`WebGL init failed: ${e.message}`, "error");
         }
@@ -4564,7 +4709,7 @@
         canvas.addEventListener("pointermove", (e) => {
             if (!world.orbit.dragging) return;
             world.orbit.yaw -= (e.clientX - world.orbit.lastX) * 0.01;
-            world.orbit.pitch = Math.max(0.1, Math.min(1.45, world.orbit.pitch + (e.clientY - world.orbit.lastY) * 0.01));
+            world.orbit.pitch = Math.max(-1.2, Math.min(1.3, world.orbit.pitch + (e.clientY - world.orbit.lastY) * 0.01));
             world.orbit.lastX = e.clientX; world.orbit.lastY = e.clientY;
         });
         const stop = () => { world.orbit.dragging = false; };
@@ -4572,7 +4717,7 @@
         canvas.addEventListener("pointercancel", stop);
         canvas.addEventListener("wheel", (e) => {
             e.preventDefault();
-            world.orbit.dist = Math.max(0.8, Math.min(6, world.orbit.dist * (e.deltaY > 0 ? 1.1 : 0.9)));
+            world.orbit.dist = Math.max(1.0, Math.min(6, world.orbit.dist * (e.deltaY > 0 ? 1.1 : 0.9)));
         }, { passive: false });
 
         const bind = (id, fn) => { const n = document.getElementById(id); if (n) n.addEventListener("click", fn); };
@@ -4581,14 +4726,15 @@
             else await robotEnsureCamera();
             worldUpdateCameraButton();
         });
-        const colorSel = document.getElementById("select-world-color");
-        if (colorSel) colorSel.addEventListener("change", () => { world.colorMode = colorSel.value; });
+        const shadeSel = document.getElementById("select-world-color");
+        if (shadeSel) shadeSel.addEventListener("change", () => { world.shade = shadeSel.value !== "flat"; });
         const spin = document.getElementById("toggle-world-spin");
-        if (spin) spin.addEventListener("change", () => { world.spin = spin.checked; });
+        if (spin) { world.spin = spin.checked; spin.addEventListener("change", () => { world.spin = spin.checked; }); }
         const hs = document.getElementById("slider-world-height");
         if (hs) hs.addEventListener("input", () => {
             world.heightScale = parseFloat(hs.value);
             const v = document.getElementById("val-world-height"); if (v) v.textContent = `${world.heightScale.toFixed(1)}x`;
+            worldUpdateMesh();
         });
         const rate = document.getElementById("slider-world-rate");
         if (rate) rate.addEventListener("input", () => {
@@ -4597,27 +4743,20 @@
             if (world.pollTimer) worldStartPoll();
         });
         bind("btn-api-world", () => {
-            showApiDialog("Reconstruct the scene", "Inference role. Embeds the current camera frame and returns, per ViT patch, a latent colour, the real pixel colour and a salience height. Poll it while the camera runs to animate the scene.",
+            showApiDialog("Reconstruct the scene", "Inference role. Embeds the current camera frame and returns, per ViT patch, a foreground relief (from JEPA's background separation) plus the aligned frame as a texture. The UI drapes the frame over the relief. Poll it while the camera runs.",
                 { method: "GET", path: "/api/world/frame" });
         });
-    }
-
-    function worldUpdateBanner() {
-        const banner = document.getElementById("world-model-banner");
-        if (banner) banner.style.display = state.activeModel ? "none" : "flex";
     }
 
     async function worldEnterSection() {
         worldUpdateCameraButton();
         worldUpdateBanner();
         worldStartPoll();
-        if (!world.eyeTimer) world.eyeTimer = setInterval(worldRefreshEye, 250);
         if (!world.raf) world.raf = requestAnimationFrame(worldAnimate);
     }
 
     function worldLeaveSection() {
         worldStopPoll();
-        if (world.eyeTimer) { clearInterval(world.eyeTimer); world.eyeTimer = null; }
         if (world.raf) { cancelAnimationFrame(world.raf); world.raf = null; }
     }
 

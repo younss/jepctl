@@ -309,24 +309,25 @@ The Companion tab is a second WebGL character (head that pans and tilts, two arm
 | DELETE | `/api/companion/cues/{kind}/{name}` | forget a cue |
 | GET | `/api/companion/ws[?token=]` | WebSocket telemetry at 30 Hz, accepts a pose back |
 
-## World (live latent reconstruction)
+## World (live scene reconstruction)
 
-The World tab turns the camera into a live 3D scene built from what the model
-perceives. The active vision model embeds each frame into one vector per ViT patch;
-`GET /api/world/frame` maps that grid to a field the UI renders as a terrain of
-columns, one per patch:
+The World tab drapes the **live camera frame** over a **3D surface whose relief comes
+from JEPA**. The active vision model embeds each frame into one vector per patch;
+`GET /api/world/frame` separates foreground from background in that embedding space
+(each patch's distance from the frame's background prototype) and returns a smoothed
+relief field plus the aligned frame as a texture. The UI builds a textured mesh and
+displaces it by the field, so a person or object in front of the camera stands out in
+3D, in the real colours of the scene, live as you move.
 
-- **height** is salience: how far a patch stands out from the frame's average patch, so edges, objects and faces rise while flat walls stay low;
-- **colour** is either the *Perception* view (a fixed projection of the patch embedding, so similar-looking regions share a colour), the *Realistic* view (the real average pixel colour of the patch), or a blend.
-
-Move something in front of the camera and its column rises and shifts live. This is
-a map of the model's latent view, not a photograph or a metric depth scan: JEPA
-encoders describe *what* is where, not distances. Load a vision model
-(`facebook/dinov2-small` is the cleanest), start the camera, open World.
+Be clear about what it is and is not: JEPA encoders are **not generative** and do not
+predict pixels or metric depth. This is the real camera image given **shape** by what
+the model perceives (its foreground/background structure), not a synthesised image and
+not a laser-accurate depth scan. `facebook/dinov2-small` gives the cleanest relief.
+Controls: surface shading, relief height scale, refresh rate.
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/world/frame` | inference: embeds the current camera frame, returns per patch `colors` (latent), `pixels` (camera) and `heights` (salience), plus `grid_w`/`grid_h` |
+| GET | `/api/world/frame` | inference: embeds the current camera frame and returns per patch `heights` (JEPA foreground relief, smoothed), `colors` (latent projection), `pixels` (camera), the aligned `image` (JPEG data URI used as the texture) and `grid_w`/`grid_h` |
 
 ## Jepafile (custom models)
 

@@ -938,14 +938,13 @@
                         <span class="status-chip" id="world-chip"><span class="chip-dot" id="world-dot"></span><span id="world-chip-text">idle</span></span>
                     </div>
                     <div class="robot-topbar-group">
-                        <label class="fact-label" for="select-world-color">Colour</label>
+                        <label class="fact-label" for="select-world-color">Surface</label>
                         <select id="select-world-color" class="select-input select-compact">
-                            <option value="latent">Perception (latent)</option>
-                            <option value="real">Realistic (camera)</option>
-                            <option value="blend">Blend</option>
+                            <option value="shaded">Textured + relief shading</option>
+                            <option value="flat">Textured (flat)</option>
                         </select>
                         <label class="toggle-label compact" for="toggle-world-spin">
-                            <input type="checkbox" id="toggle-world-spin" class="checkbox-input" checked>
+                            <input type="checkbox" id="toggle-world-spin" class="checkbox-input">
                             <span>Auto-rotate</span>
                         </label>
                     </div>
@@ -964,7 +963,7 @@
                         <div class="gesture-card-header">
                             <div>
                                 <h3>Reconstructed scene</h3>
-                                <p class="card-subtitle">Drag to orbit, wheel to zoom. Height is how much each region stands out to the model; move an object in front of the camera and watch it rise.</p>
+                                <p class="card-subtitle">Drag to orbit, wheel to zoom. Move toward the camera and watch your shape push out of the surface. The relief comes from JEPA, the texture from the live frame.</p>
                             </div>
                         </div>
                         <canvas id="world-canvas" width="720" height="440" role="img" aria-label="Live 3D reconstruction of the camera scene"></canvas>
@@ -988,7 +987,7 @@
                                 </div>
                                 <input type="range" id="slider-world-rate" min="1" max="12" step="1" value="6" class="range-slider">
                             </div>
-                            <p class="card-subtitle">This is a live map of the model's latent view, not a photograph or a depth scan. Colour in <em>Perception</em> mode is a fixed projection of each patch embedding: similar-looking regions get similar colours. Height is salience: distinctive regions (edges, objects, faces) rise, flat walls stay low.</p>
+                            <p class="card-subtitle">The live camera frame is draped over a 3D surface whose relief comes from JEPA: the model separates the foreground from the background in embedding space, so a person or object in front of the camera stands out in 3D. It is the real scene given shape by what the model perceives, not a generated image or a metric depth scan.</p>
                         </div>
                         <div class="card">
                             <div class="gesture-card-header">

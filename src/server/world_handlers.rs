@@ -15,6 +15,7 @@ use std::sync::{Mutex, OnceLock};
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::Json;
+use base64::prelude::*;
 use serde::Serialize;
 
 use crate::server::handlers::{ApiError, AppState, api_error, embed_current_view};
@@ -55,8 +56,12 @@ pub struct WorldFrame {
     pub colors: Vec<f32>,
     /// Actual average pixel colour per patch, same layout (recognisable tint).
     pub pixels: Vec<f32>,
-    /// Salience per patch, `grid_w * grid_h` values in `[0, 1]`.
+    /// Foreground relief per patch, `grid_w * grid_h` values in `[0, 1]`: how far the
+    /// patch is from the background prototype, smoothed. This is the geometry.
     pub heights: Vec<f32>,
+    /// The model-view frame as a JPEG data URI, aligned with the grid: the UI drapes
+    /// it over the relief as a texture, so the surface shows the real scene.
+    pub image: String,
     pub latency_ms: f64,
 }
 
@@ -78,7 +83,11 @@ pub async fn handle_world_frame(
     let side = (n as f64).sqrt().round() as usize;
     let (grid_w, grid_h) = if side * side == n { (side, side) } else { (n, 1) };
 
-    // Frame centroid: salience is the distance of each patch from it.
+    // Background prototype: the mean of the patches that look most alike (the bulk of
+    // the frame is background). Distance from it is how much a patch belongs to the
+    // foreground, which is where JEPA earns its keep: a person or an object sits far
+    // from a flat wall in embedding space even when their pixels are not that
+    // different. This gives geometry that tracks the real object, not just edges.
     let mut centroid = vec![0.0f32; dim];
     for p in &patches {
         for (c, v) in centroid.iter_mut().zip(p.iter()) {
@@ -88,33 +97,87 @@ pub async fn handle_world_frame(
     for c in centroid.iter_mut() {
         *c /= n as f32;
     }
+    let mut cdist: Vec<f32> =
+        patches.iter().map(|p| p.iter().zip(&centroid).map(|(a, b)| (a - b) * (a - b)).sum::<f32>().sqrt()).collect();
+    let mut sorted = cdist.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = sorted[sorted.len() / 2].max(1e-6);
+    let mut bg = vec![0.0f32; dim];
+    let mut bg_count = 0usize;
+    for (p, &d) in patches.iter().zip(&cdist) {
+        if d <= median {
+            for (b, v) in bg.iter_mut().zip(p.iter()) {
+                *b += v;
+            }
+            bg_count += 1;
+        }
+    }
+    for b in bg.iter_mut() {
+        *b /= bg_count.max(1) as f32;
+    }
 
     let proj = projection(dim);
     let mut colors = Vec::with_capacity(n * 3);
-    let mut heights = Vec::with_capacity(n);
+    let mut raw = Vec::with_capacity(n);
     let mut max_dist = 1e-6f32;
     for p in &patches {
-        let dist: f32 = p.iter().zip(centroid.iter()).map(|(a, b)| (a - b) * (a - b)).sum::<f32>().sqrt();
+        let dist: f32 = p.iter().zip(&bg).map(|(a, b)| (a - b) * (a - b)).sum::<f32>().sqrt();
         max_dist = max_dist.max(dist);
-        heights.push(dist);
-        // Colour from the unit patch vector projected onto three fixed axes.
+        raw.push(dist);
         let unit = normalize_l2(p);
         for k in 0..3 {
             let mut acc = 0.0f32;
             for (i, &u) in unit.iter().enumerate() {
                 acc += u * proj[i * 3 + k];
             }
-            // tanh into [0, 1]; the scale keeps mid-range values well separated.
             colors.push((acc * 2.0).tanh() * 0.5 + 0.5);
         }
     }
-    for h in heights.iter_mut() {
-        *h /= max_dist;
+    for r in raw.iter_mut() {
+        *r /= max_dist;
     }
-
+    let _ = &mut cdist;
+    // Smooth the relief so the draped surface is continuous, not stepped.
+    let heights = smooth_grid(&raw, grid_w, grid_h);
     let pixels = average_patch_colors(&view.frame_jpeg, grid_w, grid_h);
+    let image = format!("data:image/jpeg;base64,{}", BASE64_STANDARD.encode(view.frame_jpeg.as_slice()));
 
-    Ok(Json(WorldFrame { model: view.model, grid_w, grid_h, colors, pixels, heights, latency_ms: view.latency_ms }))
+    Ok(Json(WorldFrame {
+        model: view.model,
+        grid_w,
+        grid_h,
+        colors,
+        pixels,
+        heights,
+        image,
+        latency_ms: view.latency_ms,
+    }))
+}
+
+/// 3x3 box blur over a `w x h` grid (edges clamp).
+fn smooth_grid(v: &[f32], w: usize, h: usize) -> Vec<f32> {
+    if w == 0 || h == 0 || v.len() != w * h {
+        return v.to_vec();
+    }
+    let mut out = vec![0.0f32; v.len()];
+    for y in 0..h {
+        for x in 0..w {
+            let mut sum = 0.0f32;
+            let mut cnt = 0.0f32;
+            for dy in -1i32..=1 {
+                for dx in -1i32..=1 {
+                    let nx = x as i32 + dx;
+                    let ny = y as i32 + dy;
+                    if nx >= 0 && nx < w as i32 && ny >= 0 && ny < h as i32 {
+                        sum += v[ny as usize * w + nx as usize];
+                        cnt += 1.0;
+                    }
+                }
+            }
+            out[y * w + x] = sum / cnt;
+        }
+    }
+    out
 }
 
 /// Average RGB of the model-view frame in each grid cell, `grid_w * grid_h * 3` in `[0, 1]`.

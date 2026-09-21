@@ -269,13 +269,17 @@ CompanionCore   { mode, pose (actual), target (manual), mirror_target, animation
 ## 3d. World reconstruction (`server/world_handlers.rs`)
 
 `GET /api/world/frame` embeds the current camera frame and turns the per-patch
-tokens into a small field for the UI: `heights` (each patch's L2 distance from the
-frame centroid, normalised), `colors` (the unit patch vector projected onto a fixed,
-deterministic `dim x 3` matrix, `tanh`-squashed to `[0, 1]`) and `pixels` (the
-model-view JPEG averaged into the grid). The projection is cached per embedding
-dimension so colours are stable across frames and restarts. The UI polls this a few
-times a second and draws one WebGL column per patch. It visualises the latent
-representation in space; it is not a generative or depth model.
+tokens into a relief field. `heights` is the foreground signal: a background
+prototype is the mean of the patches whose distance from the frame centroid is below
+the median (the bulk of a scene is background), and each patch's distance from that
+prototype is how much it belongs to the foreground; the grid is then 3x3 smoothed.
+This uses JEPA's structure rather than pixel edges, so it tracks the actual object.
+The handler also returns `colors` (a fixed, cached `dim x 3` projection of the unit
+patch vector), `pixels` (the frame averaged into the grid) and `image` (the aligned
+model-view JPEG as a data URI). The UI builds a textured mesh once, and each tick
+displaces its vertices by the bilinearly upsampled relief and re-uploads `image` as
+the texture, so the real scene appears in 3D. It is neither generative nor a metric
+depth model: the real frame given shape by what the encoder perceives.
 
 ## 4. HTTP layer
 

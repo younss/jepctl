@@ -49,8 +49,8 @@ which compiles both and lets you download the `.bbl`.
 
 The source already satisfies the stated requirements: no line numbers, single-spaced,
 11 pt type, 1-inch margins on every side, no watermark, no highlighted text, no embedded
-JavaScript, and no animated figures. Both figures are TikZ, so the PDF contains vector
-graphics and no raster assets.
+JavaScript, and no animated figures. Figures 2 and 3 are TikZ vector graphics; Figure 1 is
+a single static JPEG.
 
 ## Figures
 

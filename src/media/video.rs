@@ -90,10 +90,10 @@ fn decode_animation<'a, D: AnimationDecoder<'a>>(decoder: D, max_frames: usize) 
 
 /// Locate an ffmpeg binary (`JEPA_FFMPEG` overrides `PATH`).
 pub fn ffmpeg_binary() -> Option<String> {
-    if let Ok(p) = std::env::var("JEPA_FFMPEG") {
-        if Path::new(&p).is_file() {
-            return Some(p);
-        }
+    if let Ok(p) = std::env::var("JEPA_FFMPEG")
+        && Path::new(&p).is_file()
+    {
+        return Some(p);
     }
     let ok = Command::new("ffmpeg").arg("-version").output().map(|o| o.status.success()).unwrap_or(false);
     ok.then(|| "ffmpeg".to_string())
@@ -163,11 +163,7 @@ mod tests {
             for i in 0..frames {
                 let img = RgbaImage::from_fn(side, side, |x, _| {
                     let on = ((x / 8) as usize + i).is_multiple_of(2);
-                    if on {
-                        Rgba([255, 255, 255, 255])
-                    } else {
-                        Rgba([0, 0, 0, 255])
-                    }
+                    if on { Rgba([255, 255, 255, 255]) } else { Rgba([0, 0, 0, 255]) }
                 });
                 enc.encode_frame(Frame::from_parts(img, 0, 0, Delay::from_numer_denom_ms(100, 1))).unwrap();
             }

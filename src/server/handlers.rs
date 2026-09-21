@@ -1,8 +1,8 @@
 //! Axum HTTP and SSE route handlers for embedding, streaming, and energy scoring.
 
 use std::convert::Infallible;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use axum::extract::{Multipart, Path, Query, State};
@@ -12,19 +12,19 @@ use axum::response::{Json, Response};
 use futures_util::stream::Stream;
 use serde::Deserialize;
 use serde_json::json;
-use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
+use tokio_stream::wrappers::BroadcastStream;
 
 use crate::auth::AuthManager;
-use crate::config::{RuntimeConfig, MAX_IMAGE_PAYLOAD_SIZE, MAX_VIDEO_PAYLOAD_SIZE};
+use crate::config::{MAX_IMAGE_PAYLOAD_SIZE, MAX_VIDEO_PAYLOAD_SIZE, RuntimeConfig};
 use crate::engine::EngineManager;
-use crate::gestures::{match_gestures, GestureStore, DEFAULT_MARGIN, DEFAULT_THRESHOLD};
-use crate::hub::manifest::JepafileConfig;
+use crate::gestures::{DEFAULT_MARGIN, DEFAULT_THRESHOLD, GestureStore, match_gestures};
 use crate::hub::ModelCatalog;
-use crate::media::capture::{list_camera_devices, CameraSupervisor};
+use crate::hub::manifest::JepafileConfig;
+use crate::media::capture::{CameraSupervisor, list_camera_devices};
 use crate::media::image::{preprocess_image_bytes, sniff_media_format};
-use crate::media::ring_buffer::{SharedRingBuffer, MODEL_VIEW_SIZE};
-use crate::server::middleware::{authenticate_request, SharedAuditLog};
+use crate::media::ring_buffer::{MODEL_VIEW_SIZE, SharedRingBuffer};
+use crate::server::middleware::{SharedAuditLog, authenticate_request};
 use crate::types::{
     CreateKeyRequest, EmbedResponse, EnergyRequest, EnergyResponse, JepaError, ModelModality, Roi, Role, SettingsDto,
     StatusResponse, StreamEvent,
@@ -453,10 +453,10 @@ pub async fn handle_embed_stream(
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     // `EventSource` cannot set headers, so the token may also come as `?token=`.
     let mut headers = headers;
-    if let Some(t) = params.token.as_deref() {
-        if let Ok(v) = format!("Bearer {t}").parse() {
-            headers.insert(axum::http::header::AUTHORIZATION, v);
-        }
+    if let Some(t) = params.token.as_deref()
+        && let Ok(v) = format!("Bearer {t}").parse()
+    {
+        headers.insert(axum::http::header::AUTHORIZATION, v);
     }
     let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
 
@@ -501,11 +501,10 @@ pub async fn handle_embed_stream(
                     // mirror mode blends every mapped pose by score.
                     if let Some(m) = gesture_match.as_ref() {
                         let mut core = state.robot.core.lock().await;
-                        if let Some(name) = m.matched.as_deref() {
-                            if let Err(e) = core.apply_gesture(name) {
+                        if let Some(name) = m.matched.as_deref()
+                            && let Err(e) = core.apply_gesture(name) {
                                 core.last_error = Some(e.to_string());
                             }
-                        }
                         if let Err(e) = core.apply_mirror(&m.scores) {
                             core.last_error = Some(e.to_string());
                         }

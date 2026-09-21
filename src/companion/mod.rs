@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::{watch, Mutex};
+use tokio::sync::{Mutex, watch};
 
 use crate::gestures::GestureScore;
 
@@ -403,10 +403,10 @@ impl CompanionCore {
             self.seeing.last_gesture = Some(name.to_string());
             self.seeing.last_gesture_confidence = confidence;
             self.seeing.last_gesture_at = Some(now);
-            if let Some(cue) = self.cues.get(&Cue::key(CueKind::Gesture, name)).cloned() {
-                if !matches!(cue.behaviour, Behaviour::Pose { .. }) {
-                    self.trigger(&Cue::key(CueKind::Gesture, name), cue.behaviour);
-                }
+            if let Some(cue) = self.cues.get(&Cue::key(CueKind::Gesture, name)).cloned()
+                && !matches!(cue.behaviour, Behaviour::Pose { .. })
+            {
+                self.trigger(&Cue::key(CueKind::Gesture, name), cue.behaviour);
             }
         }
         // Mirror: blend every taught pose by similarity.
@@ -444,10 +444,10 @@ impl CompanionCore {
 
     fn trigger(&mut self, key: &str, behaviour: Behaviour) {
         let cooldown = CONTROL_HZ as u64 * 2;
-        if let Some(last) = self.last_trigger.get(key) {
-            if self.tick.saturating_sub(*last) < cooldown {
-                return;
-            }
+        if let Some(last) = self.last_trigger.get(key)
+            && self.tick.saturating_sub(*last) < cooldown
+        {
+            return;
         }
         self.last_trigger.insert(key.to_string(), self.tick);
         self.perform(behaviour);

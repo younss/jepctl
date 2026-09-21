@@ -10,7 +10,7 @@ use tokio::sync::broadcast;
 
 use crate::config::RuntimeConfig;
 use crate::hub::downloader::ModelDownloader;
-use crate::hub::manifest::{get_verified_manifests, JepafileConfig};
+use crate::hub::manifest::{JepafileConfig, get_verified_manifests};
 use crate::types::{JepaError, ModelManifest, PullProgressEvent};
 
 pub struct ModelCatalog {
@@ -34,19 +34,19 @@ impl ModelCatalog {
 
         // 1. Scan verified models and check if present on disk
         for verified in get_verified_manifests() {
-            if let Ok(safe_path) = self.config.safe_resolve_model_path(&verified.name) {
-                if safe_path.exists() {
-                    let weights_path = safe_path.join("model.safetensors");
-                    let mut m = verified.clone();
-                    if weights_path.exists() {
-                        if let Ok(metadata) = fs::metadata(&weights_path) {
-                            m.disk_size_bytes = metadata.len();
-                        }
-                    } else {
-                        m.disk_size_bytes = 0;
+            if let Ok(safe_path) = self.config.safe_resolve_model_path(&verified.name)
+                && safe_path.exists()
+            {
+                let weights_path = safe_path.join("model.safetensors");
+                let mut m = verified.clone();
+                if weights_path.exists() {
+                    if let Ok(metadata) = fs::metadata(&weights_path) {
+                        m.disk_size_bytes = metadata.len();
                     }
-                    models.push(m);
+                } else {
+                    m.disk_size_bytes = 0;
                 }
+                models.push(m);
             }
         }
 
@@ -54,15 +54,15 @@ impl ModelCatalog {
         let mut manifests = Vec::new();
         scan_manifests_recursive(models_dir, 0, &mut manifests);
         for manifest_file in manifests {
-            if let Ok(cfg) = JepafileConfig::load_from_file(&manifest_file) {
-                if let Some(parent) = manifest_file.parent() {
-                    let weights = parent.join("model.safetensors");
-                    let size = fs::metadata(&weights).map(|m| m.len()).unwrap_or(0);
-                    if let Ok(m) = cfg.to_manifest(size) {
-                        if !models.iter().any(|existing| existing.name == m.name || existing.repo_id == m.repo_id) {
-                            models.push(m);
-                        }
-                    }
+            if let Ok(cfg) = JepafileConfig::load_from_file(&manifest_file)
+                && let Some(parent) = manifest_file.parent()
+            {
+                let weights = parent.join("model.safetensors");
+                let size = fs::metadata(&weights).map(|m| m.len()).unwrap_or(0);
+                if let Ok(m) = cfg.to_manifest(size)
+                    && !models.iter().any(|existing| existing.name == m.name || existing.repo_id == m.repo_id)
+                {
+                    models.push(m);
                 }
             }
         }
@@ -132,29 +132,28 @@ impl ModelCatalog {
             } else {
                 clean_name.clone()
             };
-            if let Ok(alt_path) = self.config.safe_resolve_model_path(&alt_name) {
-                if alt_path.exists() {
-                    if alt_path.is_dir() {
-                        fs::remove_dir_all(&alt_path)?;
-                    } else {
-                        fs::remove_file(&alt_path)?;
-                    }
-                    tracing::info!("Deleted model storage via alternate path: {}", alt_path.display());
-                    deleted = true;
+            if let Ok(alt_path) = self.config.safe_resolve_model_path(&alt_name)
+                && alt_path.exists()
+            {
+                if alt_path.is_dir() {
+                    fs::remove_dir_all(&alt_path)?;
+                } else {
+                    fs::remove_file(&alt_path)?;
                 }
+                tracing::info!("Deleted model storage via alternate path: {}", alt_path.display());
+                deleted = true;
             }
         }
 
         if deleted {
             // Prune empty parent directories up to models_dir (e.g. ~/.jepctl/models/google/)
-            if let Some(parent) = safe_path.parent() {
-                if parent != self.config.models_dir && parent.starts_with(&self.config.models_dir) {
-                    if let Ok(mut read) = fs::read_dir(parent) {
-                        if read.next().is_none() {
-                            let _ = fs::remove_dir(parent);
-                        }
-                    }
-                }
+            if let Some(parent) = safe_path.parent()
+                && parent != self.config.models_dir
+                && parent.starts_with(&self.config.models_dir)
+                && let Ok(mut read) = fs::read_dir(parent)
+                && read.next().is_none()
+            {
+                let _ = fs::remove_dir(parent);
             }
             Ok(true)
         } else {

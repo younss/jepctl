@@ -2,7 +2,7 @@
 
 use base64::prelude::*;
 use candle_core::{Device, Tensor};
-use image::{imageops::FilterType, DynamicImage, ImageFormat, RgbImage};
+use image::{DynamicImage, ImageFormat, RgbImage, imageops::FilterType};
 use std::collections::VecDeque;
 use std::io::Cursor;
 use std::sync::Arc;
@@ -179,11 +179,8 @@ impl RingBuffer {
 
         // Pad with latest frame if buffer is not yet full
         while frame_tensors.len() < self.capacity {
-            if let Some(last) = frame_tensors.last().cloned() {
-                frame_tensors.push(last);
-            } else {
-                break;
-            }
+            let Some(last) = frame_tensors.last().cloned() else { break };
+            frame_tensors.push(last);
         }
 
         // Stack across temporal dimension T: list of [1, 3, H, W] -> [1, 3, T, H, W]
@@ -211,11 +208,7 @@ mod tests {
     #[test]
     fn model_view_is_square_centre_crop() {
         let img = RgbImage::from_fn(640, 360, |x, _| {
-            if !(140..500).contains(&x) {
-                image::Rgb([255, 0, 0])
-            } else {
-                image::Rgb([0, 255, 0])
-            }
+            if !(140..500).contains(&x) { image::Rgb([255, 0, 0]) } else { image::Rgb([0, 255, 0]) }
         });
         let view = to_model_view(&img, 224);
         assert_eq!((view.width(), view.height()), (224, 224));

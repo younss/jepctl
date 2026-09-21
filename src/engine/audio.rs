@@ -11,7 +11,7 @@ use candle_core::{Device, Tensor};
 
 use crate::engine::vit::VitBackbone;
 use crate::engine::{build_backbone, freeze_backbone, load_checkpoint_strict};
-use crate::media::audio::{clip_to_spectrogram_tensor, AudioClip};
+use crate::media::audio::{AudioClip, clip_to_spectrogram_tensor};
 use crate::types::{AudioSpec, JepaError, ModelManifest, WeightReport};
 
 /// `(pooled embedding, patch tokens, latency in ms)`.

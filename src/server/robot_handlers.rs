@@ -10,8 +10,8 @@ use serde_json::json;
 
 use crate::media::image::preprocess_image_bytes;
 use crate::robot::hal::BackendKind;
-use crate::robot::{GestureAction, JointCommand, RobotError, RobotMode, RobotTelemetry, DOF};
-use crate::server::handlers::{api_error, engine_error, ensure_model_loaded, ApiError, AppState};
+use crate::robot::{DOF, GestureAction, JointCommand, RobotError, RobotMode, RobotTelemetry};
+use crate::server::handlers::{ApiError, AppState, api_error, engine_error, ensure_model_loaded};
 use crate::server::middleware::authenticate_request;
 use crate::types::Role;
 
@@ -437,13 +437,13 @@ pub async fn handle_robot_gesture_map_put(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
     for (name, action) in &map {
-        if let GestureAction::JointDelta { joint, .. } = action {
-            if *joint >= DOF {
-                return Err(api_error(
-                    StatusCode::BAD_REQUEST,
-                    format!("'{name}': joint index {joint} out of range (0..{DOF})"),
-                ));
-            }
+        if let GestureAction::JointDelta { joint, .. } = action
+            && *joint >= DOF
+        {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                format!("'{name}': joint index {joint} out of range (0..{DOF})"),
+            ));
         }
     }
     let n = map.len();
@@ -465,10 +465,10 @@ pub async fn handle_robot_ws(
 ) -> Result<Response, ApiError> {
     // Browsers cannot set headers on a WebSocket: accept `?token=` like the SSE stream.
     let mut headers = headers;
-    if let Some(t) = q.token.as_deref() {
-        if let Ok(v) = format!("Bearer {t}").parse() {
-            headers.insert(axum::http::header::AUTHORIZATION, v);
-        }
+    if let Some(t) = q.token.as_deref()
+        && let Ok(v) = format!("Bearer {t}").parse()
+    {
+        headers.insert(axum::http::header::AUTHORIZATION, v);
     }
     let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
     Ok(ws.on_upgrade(move |socket| robot_ws_session(socket, state)))
@@ -478,10 +478,10 @@ async fn robot_ws_session(mut socket: WebSocket, state: AppState) {
     let mut rx = state.robot.subscribe();
     // Send the current state immediately, then every change.
     let first = rx.borrow().clone();
-    if let Ok(text) = serde_json::to_string(&first) {
-        if socket.send(Message::Text(text.into())).await.is_err() {
-            return;
-        }
+    if let Ok(text) = serde_json::to_string(&first)
+        && socket.send(Message::Text(text.into())).await.is_err()
+    {
+        return;
     }
     loop {
         tokio::select! {

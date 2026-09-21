@@ -1,7 +1,7 @@
 //! Axum router configuration binding REST endpoints, SSE streams, and embedded UI.
 
-use axum::routing::{delete, get, post};
 use axum::Router;
+use axum::routing::{delete, get, post};
 
 use crate::server::companion_handlers::{
     handle_clear_sounds, handle_companion_behaviour, handle_companion_cues, handle_companion_delete_cue,
@@ -15,11 +15,11 @@ use crate::server::gesture_handlers::{
     handle_set_roi,
 };
 use crate::server::handlers::{
-    handle_audit, handle_camera_start, handle_camera_stop, handle_cameras, handle_catalog, handle_create_key,
+    AppState, handle_audit, handle_camera_start, handle_camera_stop, handle_cameras, handle_catalog, handle_create_key,
     handle_delete_model, handle_delete_model_root, handle_embed, handle_embed_stream, handle_energy,
     handle_get_session_token, handle_get_settings, handle_list_keys, handle_load_model, handle_pull,
     handle_register_manifest, handle_revoke_key, handle_ring_buffer, handle_save_settings, handle_status, handle_tags,
-    handle_unload_model, AppState,
+    handle_unload_model,
 };
 use crate::server::robot_handlers::{
     handle_robot_approve, handle_robot_background, handle_robot_clear_goal, handle_robot_estop,

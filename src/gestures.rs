@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::{dot_product, normalize_l2, JepaError};
+use crate::types::{JepaError, dot_product, normalize_l2};
 
 /// Minimum score lead over the runner-up required to declare a detection.
 pub const DEFAULT_MARGIN: f32 = 0.04;

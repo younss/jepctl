@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::robot::{JointCommand, RobotError, DOF};
+use crate::robot::{DOF, JointCommand, RobotError};
 
 /// Per joint angle limits in radians, `[min, max]`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

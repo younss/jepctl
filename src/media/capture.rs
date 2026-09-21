@@ -1,11 +1,11 @@
 //! Cross-platform camera capture runner with nokhwa and synthetic fallback.
 
 use image::{Rgb, RgbImage};
+use nokhwa::Camera;
 use nokhwa::pixel_format::RgbFormat;
 use nokhwa::utils::{ApiBackend, CameraIndex, RequestedFormat, RequestedFormatType};
-use nokhwa::Camera;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 

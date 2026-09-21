@@ -113,13 +113,13 @@ impl JepafileConfig {
                 self.patch_size
             )));
         }
-        if let Some(w) = self.input_width {
-            if !w.is_multiple_of(self.patch_size) {
-                return Err(JepaError::InvalidPayload(format!(
-                    "input_width ({}) must be a multiple of patch_size ({})",
-                    w, self.patch_size
-                )));
-            }
+        if let Some(w) = self.input_width
+            && !w.is_multiple_of(self.patch_size)
+        {
+            return Err(JepaError::InvalidPayload(format!(
+                "input_width ({}) must be a multiple of patch_size ({})",
+                w, self.patch_size
+            )));
         }
         if !self.image_size.is_multiple_of(self.patch_size) {
             return Err(JepaError::InvalidPayload(format!(

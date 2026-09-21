@@ -13,7 +13,7 @@ use std::time::Duration;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::{Deserialize, Serialize};
 
-use crate::media::audio::{resample, AudioClip};
+use crate::media::audio::{AudioClip, resample};
 use crate::types::JepaError;
 
 /// Seconds of audio kept in memory (AudioMAE's window is 10.24 s).

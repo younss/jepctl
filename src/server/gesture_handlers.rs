@@ -1,20 +1,20 @@
 //! HTTP handlers for the few-shot gesture registry and the camera "model view".
 
 use axum::extract::{Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Json, Response};
 use base64::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::gestures::{
-    match_gestures, GestureBundle, GestureMatchResult, ImportReport, RegisteredGesture, DEFAULT_MARGIN,
-    DEFAULT_THRESHOLD,
+    DEFAULT_MARGIN, DEFAULT_THRESHOLD, GestureBundle, GestureMatchResult, ImportReport, RegisteredGesture,
+    match_gestures,
 };
 use crate::media::image::preprocess_image_bytes;
 use crate::media::ring_buffer::MODEL_VIEW_SIZE;
 use crate::server::handlers::{
-    api_error, embed_current_view, engine_error, ensure_model_loaded, persist_roi, ApiError, AppState,
+    ApiError, AppState, api_error, embed_current_view, engine_error, ensure_model_loaded, persist_roi,
 };
 use crate::server::middleware::authenticate_request;
 use crate::types::{Roi, Role};

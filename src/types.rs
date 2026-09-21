@@ -481,11 +481,7 @@ pub struct SettingsDto {
 pub fn normalize_l2(v: &[f32]) -> Vec<f32> {
     let norm_sq: f32 = v.iter().map(|x| x * x).sum();
     let norm = norm_sq.sqrt();
-    if norm > 1e-12 {
-        v.iter().map(|x| x / norm).collect()
-    } else {
-        v.to_vec()
-    }
+    if norm > 1e-12 { v.iter().map(|x| x / norm).collect() } else { v.to_vec() }
 }
 
 /// Compute cosine similarity between two unit vectors via vector dot product
@@ -522,10 +518,10 @@ mod tests {
         let html = include_str!("ui/index.html");
         let mut missing = Vec::new();
         for chunk in js.split("getElementById(\"").skip(1) {
-            if let Some(id) = chunk.split('"').next() {
-                if !html.contains(&format!("id=\"{id}\"")) {
-                    missing.push(id.to_string());
-                }
+            if let Some(id) = chunk.split('"').next()
+                && !html.contains(&format!("id=\"{id}\""))
+            {
+                missing.push(id.to_string());
             }
         }
         missing.sort();

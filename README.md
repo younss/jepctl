@@ -31,7 +31,7 @@ Open the testbench, go to **8. Gesture Sandbox**, start the camera, register a *
 
 ### Requirements
 
-- A recent stable Rust (`rust-toolchain.toml` selects stable; CI tracks it).
+- Rust 1.88 or newer, edition 2024 (`rust-toolchain.toml` selects stable; CI tracks it; `rust-version` in `Cargo.toml` is enforced by cargo and clippy).
 - macOS: Xcode command-line tools. Linux: `libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev libayatana-appindicator3-dev` (desktop window): the daemon itself needs nothing. Windows: MSVC build tools + WebView2 (preinstalled on Windows 11).
 - A camera is optional: without one the daemon serves a synthetic test pattern so every code path still runs.
 

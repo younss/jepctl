@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::robot::{RobotError, DOF};
+use crate::robot::{DOF, RobotError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -51,11 +51,7 @@ impl RuntimeConfig {
     /// - macOS and Linux: ~/.jepctl/
     /// - Windows: %USERPROFILE%/.jepctl/
     pub fn default_root_dir() -> PathBuf {
-        if let Some(home) = dirs::home_dir() {
-            home.join(".jepctl")
-        } else {
-            PathBuf::from(".jepctl")
-        }
+        if let Some(home) = dirs::home_dir() { home.join(".jepctl") } else { PathBuf::from(".jepctl") }
     }
 
     /// Initialize directory structure and create required subfolders
@@ -118,12 +114,11 @@ impl RuntimeConfig {
 
     /// Load runtime settings from disk if available, or return defaults.
     pub fn load_settings(&self) -> SettingsDto {
-        if self.settings_path.exists() {
-            if let Ok(data) = fs::read_to_string(&self.settings_path) {
-                if let Ok(settings) = serde_json::from_str::<SettingsDto>(&data) {
-                    return settings;
-                }
-            }
+        if self.settings_path.exists()
+            && let Ok(data) = fs::read_to_string(&self.settings_path)
+            && let Ok(settings) = serde_json::from_str::<SettingsDto>(&data)
+        {
+            return settings;
         }
         SettingsDto {
             compute_backend: "auto".to_string(),
@@ -171,17 +166,15 @@ impl RuntimeConfig {
         let resolved = self.models_dir.join(sanitized);
 
         // Double check canonicalization if parent exists
-        if let Some(parent) = resolved.parent() {
-            if parent.exists() {
-                if let (Ok(can_models), Ok(can_parent)) = (self.models_dir.canonicalize(), parent.canonicalize()) {
-                    if !can_parent.starts_with(&can_models) {
-                        return Err(JepaError::PathTraversal(format!(
-                            "Resolved path escaped model directory: {}",
-                            model_name_or_file
-                        )));
-                    }
-                }
-            }
+        if let Some(parent) = resolved.parent()
+            && parent.exists()
+            && let (Ok(can_models), Ok(can_parent)) = (self.models_dir.canonicalize(), parent.canonicalize())
+            && !can_parent.starts_with(&can_models)
+        {
+            return Err(JepaError::PathTraversal(format!(
+                "Resolved path escaped model directory: {}",
+                model_name_or_file
+            )));
         }
 
         Ok(resolved)

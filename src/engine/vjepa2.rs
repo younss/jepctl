@@ -15,8 +15,8 @@
 use std::path::Path;
 use std::time::Instant;
 
-use candle_core::{DType, Device, Module, Tensor, D};
-use candle_nn::{layer_norm, linear, LayerNorm, Linear, VarBuilder, VarMap};
+use candle_core::{D, DType, Device, Module, Tensor};
+use candle_nn::{LayerNorm, Linear, VarBuilder, VarMap, layer_norm, linear};
 
 use crate::engine::frozen_builder;
 use crate::engine::vit::map_checkpoint_vars;

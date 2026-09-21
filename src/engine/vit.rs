@@ -13,8 +13,8 @@
 //! the wild (HF ViT/I-JEPA, HF DINOv2, timm/Meta with fused QKV) onto the backbone
 //! and reports exactly which parameters were covered.
 
-use candle_core::{Device, Result, Tensor, D};
-use candle_nn::{conv2d, layer_norm, linear, Conv2d, Conv2dConfig, LayerNorm, Linear, Module, VarBuilder};
+use candle_core::{D, Device, Result, Tensor};
+use candle_nn::{Conv2d, Conv2dConfig, LayerNorm, Linear, Module, VarBuilder, conv2d, layer_norm, linear};
 use serde::{Deserialize, Serialize};
 
 use crate::types::JepaError;
@@ -378,73 +378,73 @@ fn candidate_sources(target: &str) -> Vec<Source> {
         "norm.bias" => push_named("layernorm.bias".into()),
         "cls_token" => push_named("embeddings.cls_token".into()),
         _ => {
-            if let Some(rest) = target.strip_prefix("blocks.") {
-                if let Some((idx, sub)) = rest.split_once('.') {
-                    // HF ViT / I-JEPA naming
-                    let hf_vit = match sub {
-                        "norm1.weight" => Some("layernorm_before.weight"),
-                        "norm1.bias" => Some("layernorm_before.bias"),
-                        "norm2.weight" => Some("layernorm_after.weight"),
-                        "norm2.bias" => Some("layernorm_after.bias"),
-                        "mlp.fc1.weight" => Some("intermediate.dense.weight"),
-                        "mlp.fc1.bias" => Some("intermediate.dense.bias"),
-                        "mlp.fc2.weight" => Some("output.dense.weight"),
-                        "mlp.fc2.bias" => Some("output.dense.bias"),
-                        _ => None,
-                    };
-                    // HF V-JEPA 2: `attention.{query,key,value,proj}` directly under the layer
-                    let hf_vjepa2 = match sub {
-                        "attn.q_proj.weight" => Some("attention.query.weight"),
-                        "attn.q_proj.bias" => Some("attention.query.bias"),
-                        "attn.k_proj.weight" => Some("attention.key.weight"),
-                        "attn.k_proj.bias" => Some("attention.key.bias"),
-                        "attn.v_proj.weight" => Some("attention.value.weight"),
-                        "attn.v_proj.bias" => Some("attention.value.bias"),
-                        "attn.out_proj.weight" => Some("attention.proj.weight"),
-                        "attn.out_proj.bias" => Some("attention.proj.bias"),
-                        _ => None,
-                    };
-                    // Shared by HF ViT and HF DINOv2
-                    let hf_attn = match sub {
-                        "attn.q_proj.weight" => Some("attention.attention.query.weight"),
-                        "attn.q_proj.bias" => Some("attention.attention.query.bias"),
-                        "attn.k_proj.weight" => Some("attention.attention.key.weight"),
-                        "attn.k_proj.bias" => Some("attention.attention.key.bias"),
-                        "attn.v_proj.weight" => Some("attention.attention.value.weight"),
-                        "attn.v_proj.bias" => Some("attention.attention.value.bias"),
-                        "attn.out_proj.weight" => Some("attention.output.dense.weight"),
-                        "attn.out_proj.bias" => Some("attention.output.dense.bias"),
-                        _ => None,
-                    };
-                    // HF DINOv2 naming (norm1/norm2/mlp keep timm names; LayerScale is separate)
-                    let hf_dino = match sub {
-                        "ls1" => Some("layer_scale1.lambda1"),
-                        "ls2" => Some("layer_scale2.lambda1"),
-                        "norm1.weight" | "norm1.bias" | "norm2.weight" | "norm2.bias" | "mlp.fc1.weight"
-                        | "mlp.fc1.bias" | "mlp.fc2.weight" | "mlp.fc2.bias" => Some(sub),
-                        _ => None,
-                    };
-                    for name in [hf_vit, hf_attn, hf_dino, hf_vjepa2].into_iter().flatten() {
-                        push_named(format!("encoder.layer.{idx}.{name}"));
-                    }
-                    // timm / Meta naming: fused qkv, `attn.proj`, `ls*.gamma`
-                    let fused = |what: &str, index: usize| Source::FusedQkv {
-                        name: format!("blocks.{idx}.attn.qkv.{what}"),
-                        index,
-                    };
-                    match sub {
-                        "attn.q_proj.weight" => out.push(fused("weight", 0)),
-                        "attn.k_proj.weight" => out.push(fused("weight", 1)),
-                        "attn.v_proj.weight" => out.push(fused("weight", 2)),
-                        "attn.q_proj.bias" => out.push(fused("bias", 0)),
-                        "attn.k_proj.bias" => out.push(fused("bias", 1)),
-                        "attn.v_proj.bias" => out.push(fused("bias", 2)),
-                        "attn.out_proj.weight" => out.push(Source::Named(format!("blocks.{idx}.attn.proj.weight"))),
-                        "attn.out_proj.bias" => out.push(Source::Named(format!("blocks.{idx}.attn.proj.bias"))),
-                        "ls1" => out.push(Source::Named(format!("blocks.{idx}.ls1.gamma"))),
-                        "ls2" => out.push(Source::Named(format!("blocks.{idx}.ls2.gamma"))),
-                        _ => {}
-                    }
+            if let Some(rest) = target.strip_prefix("blocks.")
+                && let Some((idx, sub)) = rest.split_once('.')
+            {
+                // HF ViT / I-JEPA naming
+                let hf_vit = match sub {
+                    "norm1.weight" => Some("layernorm_before.weight"),
+                    "norm1.bias" => Some("layernorm_before.bias"),
+                    "norm2.weight" => Some("layernorm_after.weight"),
+                    "norm2.bias" => Some("layernorm_after.bias"),
+                    "mlp.fc1.weight" => Some("intermediate.dense.weight"),
+                    "mlp.fc1.bias" => Some("intermediate.dense.bias"),
+                    "mlp.fc2.weight" => Some("output.dense.weight"),
+                    "mlp.fc2.bias" => Some("output.dense.bias"),
+                    _ => None,
+                };
+                // HF V-JEPA 2: `attention.{query,key,value,proj}` directly under the layer
+                let hf_vjepa2 = match sub {
+                    "attn.q_proj.weight" => Some("attention.query.weight"),
+                    "attn.q_proj.bias" => Some("attention.query.bias"),
+                    "attn.k_proj.weight" => Some("attention.key.weight"),
+                    "attn.k_proj.bias" => Some("attention.key.bias"),
+                    "attn.v_proj.weight" => Some("attention.value.weight"),
+                    "attn.v_proj.bias" => Some("attention.value.bias"),
+                    "attn.out_proj.weight" => Some("attention.proj.weight"),
+                    "attn.out_proj.bias" => Some("attention.proj.bias"),
+                    _ => None,
+                };
+                // Shared by HF ViT and HF DINOv2
+                let hf_attn = match sub {
+                    "attn.q_proj.weight" => Some("attention.attention.query.weight"),
+                    "attn.q_proj.bias" => Some("attention.attention.query.bias"),
+                    "attn.k_proj.weight" => Some("attention.attention.key.weight"),
+                    "attn.k_proj.bias" => Some("attention.attention.key.bias"),
+                    "attn.v_proj.weight" => Some("attention.attention.value.weight"),
+                    "attn.v_proj.bias" => Some("attention.attention.value.bias"),
+                    "attn.out_proj.weight" => Some("attention.output.dense.weight"),
+                    "attn.out_proj.bias" => Some("attention.output.dense.bias"),
+                    _ => None,
+                };
+                // HF DINOv2 naming (norm1/norm2/mlp keep timm names; LayerScale is separate)
+                let hf_dino = match sub {
+                    "ls1" => Some("layer_scale1.lambda1"),
+                    "ls2" => Some("layer_scale2.lambda1"),
+                    "norm1.weight" | "norm1.bias" | "norm2.weight" | "norm2.bias" | "mlp.fc1.weight"
+                    | "mlp.fc1.bias" | "mlp.fc2.weight" | "mlp.fc2.bias" => Some(sub),
+                    _ => None,
+                };
+                for name in [hf_vit, hf_attn, hf_dino, hf_vjepa2].into_iter().flatten() {
+                    push_named(format!("encoder.layer.{idx}.{name}"));
+                }
+                // timm / Meta naming: fused qkv, `attn.proj`, `ls*.gamma`
+                let fused = |what: &str, index: usize| Source::FusedQkv {
+                    name: format!("blocks.{idx}.attn.qkv.{what}"),
+                    index,
+                };
+                match sub {
+                    "attn.q_proj.weight" => out.push(fused("weight", 0)),
+                    "attn.k_proj.weight" => out.push(fused("weight", 1)),
+                    "attn.v_proj.weight" => out.push(fused("weight", 2)),
+                    "attn.q_proj.bias" => out.push(fused("bias", 0)),
+                    "attn.k_proj.bias" => out.push(fused("bias", 1)),
+                    "attn.v_proj.bias" => out.push(fused("bias", 2)),
+                    "attn.out_proj.weight" => out.push(Source::Named(format!("blocks.{idx}.attn.proj.weight"))),
+                    "attn.out_proj.bias" => out.push(Source::Named(format!("blocks.{idx}.attn.proj.bias"))),
+                    "ls1" => out.push(Source::Named(format!("blocks.{idx}.ls1.gamma"))),
+                    "ls2" => out.push(Source::Named(format!("blocks.{idx}.ls2.gamma"))),
+                    _ => {}
                 }
             }
         }
@@ -548,7 +548,7 @@ fn adapt_pos_embed(
         Some(src) => {
             return Err(JepaError::InferenceError(format!(
                 "Cannot resample a {src}x{src} positional grid to a non-square {grid_h}x{grid_w} grid"
-            )))
+            )));
         }
     };
 

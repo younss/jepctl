@@ -26,12 +26,11 @@ impl AuthManager {
         let mut map = HashMap::new();
 
         // 1. Load keys from keys.json if it exists
-        if keys_file.exists() {
-            if let Ok(data) = fs::read_to_string(keys_file) {
-                if let Ok(loaded) = serde_json::from_str::<HashMap<String, ApiKeyRecord>>(&data) {
-                    map = loaded;
-                }
-            }
+        if keys_file.exists()
+            && let Ok(data) = fs::read_to_string(keys_file)
+            && let Ok(loaded) = serde_json::from_str::<HashMap<String, ApiKeyRecord>>(&data)
+        {
+            map = loaded;
         }
 
         // 2. Check or create ~/.jepctl/auth.token (default admin token)
@@ -165,10 +164,10 @@ impl AuthManager {
             .ok_or_else(|| JepaError::AuthError("Invalid or missing Bearer authorization token".to_string()))?;
 
         // Verify expiration
-        if let Some(exp) = record.expires_at {
-            if Utc::now() > exp {
-                return Err(JepaError::AuthError("API key has expired".to_string()));
-            }
+        if let Some(exp) = record.expires_at
+            && Utc::now() > exp
+        {
+            return Err(JepaError::AuthError("API key has expired".to_string()));
         }
 
         // Role-based access control (RBAC) validation
@@ -204,14 +203,14 @@ impl AuthManager {
 
     /// Synchronous persistence on initialization
     fn persist_sync(&self) -> Result<(), JepaError> {
-        if let Ok(lock) = self.tokens.try_read() {
-            if let Ok(data) = serde_json::to_string_pretty(&*lock) {
-                let _ = fs::write(&self.keys_file, data);
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = fs::set_permissions(&self.keys_file, fs::Permissions::from_mode(0o600));
-                }
+        if let Ok(lock) = self.tokens.try_read()
+            && let Ok(data) = serde_json::to_string_pretty(&*lock)
+        {
+            let _ = fs::write(&self.keys_file, data);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&self.keys_file, fs::Permissions::from_mode(0o600));
             }
         }
         Ok(())

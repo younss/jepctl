@@ -1,21 +1,21 @@
 //! HTTP integration tests: the full Axum router with an in-memory, randomly
 //! initialised model. No weights, camera or network are required.
 
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::Instant;
 
-use axum::body::{to_bytes, Body};
-use axum::http::{Request, StatusCode};
 use axum::Router;
+use axum::body::{Body, to_bytes};
+use axum::http::{Request, StatusCode};
 use base64::Engine;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use crate::auth::AuthManager;
 use crate::config::RuntimeConfig;
-use crate::engine::device::select_device;
 use crate::engine::EngineManager;
+use crate::engine::device::select_device;
 use crate::gestures::GestureStore;
 use crate::hub::ModelCatalog;
 use crate::media::capture::CameraSupervisor;
@@ -428,11 +428,7 @@ async fn embed_accepts_gif_clips() {
         let mut enc = GifEncoder::new(&mut buf);
         for i in 0..6u32 {
             let img = RgbaImage::from_fn(32, 32, |x, _| {
-                if (x / 8 + i) % 2 == 0 {
-                    Rgba([255, 255, 255, 255])
-                } else {
-                    Rgba([0, 0, 0, 255])
-                }
+                if (x / 8 + i) % 2 == 0 { Rgba([255, 255, 255, 255]) } else { Rgba([0, 0, 0, 255]) }
             });
             enc.encode_frame(Frame::from_parts(img, 0, 0, Delay::from_numer_denom_ms(100, 1))).unwrap();
         }

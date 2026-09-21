@@ -15,8 +15,8 @@
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
 
-use crate::robot::controller::energy;
 use crate::robot::DOF;
+use crate::robot::controller::energy;
 use crate::types::normalize_l2;
 
 /// Action = joint deltas plus gripper delta.

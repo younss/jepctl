@@ -17,9 +17,9 @@ use rand::RngExt;
 
 use crate::robot::hal::BackendKind;
 use crate::robot::safety::SafetyGuard;
-use crate::robot::world_model::{LatentWorldModel, ACTION_DIM};
+use crate::robot::world_model::{ACTION_DIM, LatentWorldModel};
 use crate::robot::{
-    GestureAction, GoalProgress, JointCommand, RobotCore, RobotError, RobotHandle, RobotMode, CONTROL_HZ, DOF,
+    CONTROL_HZ, DOF, GestureAction, GoalProgress, JointCommand, RobotCore, RobotError, RobotHandle, RobotMode,
 };
 use crate::types::normalize_l2;
 
@@ -414,10 +414,11 @@ impl RobotCore {
         let moved = next != self.joints || (next_grip - self.gripper).abs() > 1e-6;
         self.joints = next;
         self.gripper = next_grip;
-        if moved && self.backend.is_connected() {
-            if let Err(e) = self.backend.set_joint_targets(&self.joints, self.gripper) {
-                self.last_error = Some(e.to_string());
-            }
+        if moved
+            && self.backend.is_connected()
+            && let Err(e) = self.backend.set_joint_targets(&self.joints, self.gripper)
+        {
+            self.last_error = Some(e.to_string());
         }
         if self.learning_mode() && !moved && self.settled() && self.pending.is_none() {
             self.agent.arrived();

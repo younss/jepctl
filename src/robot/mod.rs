@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::sync::{watch, Mutex};
+use tokio::sync::{Mutex, watch};
 
 use crate::robot::hal::{BackendKind, RobotBackend, VirtualWebGlBackend};
 use crate::robot::safety::{JointLimits, SafetyGuard};

@@ -15,7 +15,7 @@ use tokio::sync::RwLock;
 
 use crate::engine::audio::AudioModel;
 use crate::engine::ijepa::IJepaModel;
-use crate::engine::vit::{load_safetensors_into_backbone, VitBackbone, VitConfig};
+use crate::engine::vit::{VitBackbone, VitConfig, load_safetensors_into_backbone};
 use crate::engine::vjepa2::VJepa2Model;
 use crate::types::{HardwareInfo, JepaError, ModelManifest, ModelModality, Preprocessing, WeightReport};
 
@@ -304,7 +304,7 @@ impl EngineManager {
                         return Err(JepaError::InvalidPayload(format!(
                             "No engine implements the '{}' modality yet",
                             other
-                        )))
+                        )));
                     }
                 })
             })

@@ -7,11 +7,11 @@ use axum::response::{Json, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::companion::{motion_centroid, Behaviour, CompanionMode, CompanionPose, CompanionTelemetry, Cue, CueKind};
-use crate::gestures::{match_gestures, GestureMatchResult, DEFAULT_MARGIN, DEFAULT_THRESHOLD};
-use crate::media::mic::{list_mic_devices, MicHealth};
+use crate::companion::{Behaviour, CompanionMode, CompanionPose, CompanionTelemetry, Cue, CueKind, motion_centroid};
+use crate::gestures::{DEFAULT_MARGIN, DEFAULT_THRESHOLD, GestureMatchResult, match_gestures};
+use crate::media::mic::{MicHealth, list_mic_devices};
 use crate::server::gesture_handlers::GestureItem;
-use crate::server::handlers::{api_error, embed_current_view, engine_error, ApiError, AppState};
+use crate::server::handlers::{ApiError, AppState, api_error, embed_current_view, engine_error};
 use crate::server::middleware::authenticate_request;
 use crate::types::Role;
 
@@ -535,10 +535,10 @@ pub async fn handle_companion_ws(
     ws: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
     let mut headers = headers;
-    if let Some(t) = q.token.as_deref() {
-        if let Ok(v) = format!("Bearer {t}").parse() {
-            headers.insert(axum::http::header::AUTHORIZATION, v);
-        }
+    if let Some(t) = q.token.as_deref()
+        && let Ok(v) = format!("Bearer {t}").parse()
+    {
+        headers.insert(axum::http::header::AUTHORIZATION, v);
     }
     let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
     Ok(ws.on_upgrade(move |socket| companion_ws_session(socket, state)))
@@ -547,10 +547,10 @@ pub async fn handle_companion_ws(
 async fn companion_ws_session(mut socket: WebSocket, state: AppState) {
     let mut rx = state.companion.subscribe();
     let first = rx.borrow().clone();
-    if let Ok(text) = serde_json::to_string(&first) {
-        if socket.send(Message::Text(text.into())).await.is_err() {
-            return;
-        }
+    if let Ok(text) = serde_json::to_string(&first)
+        && socket.send(Message::Text(text.into())).await.is_err()
+    {
+        return;
     }
     loop {
         tokio::select! {
@@ -613,11 +613,11 @@ pub fn spawn_observers(state: AppState) {
                     continue;
                 }
                 if let Some((seq, cur)) = latest_thumbnail(&state, W, H).await {
-                    if let Some((pseq, p)) = &prev {
-                        if *pseq != seq {
-                            let (x, y, m) = motion_centroid(p, &cur, W as usize, H as usize);
-                            state.companion.core.lock().await.observe_motion(x, y, m);
-                        }
+                    if let Some((pseq, p)) = &prev
+                        && *pseq != seq
+                    {
+                        let (x, y, m) = motion_centroid(p, &cur, W as usize, H as usize);
+                        state.companion.core.lock().await.observe_motion(x, y, m);
                     }
                     prev = Some((seq, cur));
                 }

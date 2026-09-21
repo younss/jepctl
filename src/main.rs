@@ -13,19 +13,19 @@ pub mod server;
 pub mod types;
 
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::Instant;
 
 use clap::{Args, Parser, Subcommand};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::auth::AuthManager;
-use crate::config::{RuntimeConfig, DEFAULT_HOST, DEFAULT_MODEL, DEFAULT_PORT};
-use crate::engine::device::select_device;
+use crate::config::{DEFAULT_HOST, DEFAULT_MODEL, DEFAULT_PORT, RuntimeConfig};
 use crate::engine::EngineManager;
-use crate::hub::manifest::get_verified_manifests;
+use crate::engine::device::select_device;
 use crate::hub::ModelCatalog;
+use crate::hub::manifest::get_verified_manifests;
 use crate::media::capture::CameraSupervisor;
 use crate::media::image::preprocess_image_bytes;
 use crate::media::ring_buffer::RingBuffer;

@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Rust edition 2024 with `rust-version = "1.88"` (the oldest toolchain that has every std API the code uses). Nested `if let` chains became let chains; no behaviour change.
+
 ## [0.3.0]: 2026-09-20
 
 ### Added

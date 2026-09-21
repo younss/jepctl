@@ -1,2 +1,12 @@
 /target
 .DS_Store
+
+# LaTeX build artefacts (paper/)
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.synctex.gz
+*.fls
+*.fdb_latexmk

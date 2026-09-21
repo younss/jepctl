@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **World tab**: a live 3D reconstruction of the camera scene from the model's per-patch embeddings (`GET /api/world/frame`). One WebGL column per ViT patch, height = salience, colour = latent projection / real pixels / blend. `src/server/world_handlers.rs`.
 - Settings: **Allow access from other machines** toggle (off by default). Off binds `127.0.0.1`, on binds `0.0.0.0` on the next restart; authentication stays mandatory for network access and an explicit `--host` still overrides it.
 
 ### Fixed

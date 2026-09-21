@@ -28,6 +28,7 @@ use crate::server::robot_handlers::{
     handle_robot_view, handle_robot_world_model, handle_robot_world_model_clear, handle_robot_ws,
 };
 use crate::server::ui_assets::{serve_app_js, serve_index, serve_styles};
+use crate::server::world_handlers::handle_world_frame;
 
 /// Assemble all application routes and static assets into an Axum Router
 pub fn create_router(state: AppState) -> Router {
@@ -104,6 +105,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/companion/cues/{kind}/{name}", delete(handle_companion_delete_cue))
         .route("/api/companion/teach", post(handle_companion_teach))
         .route("/api/companion/ws", get(handle_companion_ws))
+        // API: Live latent reconstruction of the camera scene
+        .route("/api/world/frame", get(handle_world_frame))
         // Fallback for SPA routing
         .fallback(serve_index)
         .with_state(state)

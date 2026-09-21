@@ -9,6 +9,7 @@ pub mod routes;
 #[cfg(test)]
 mod tests;
 pub mod ui_assets;
+pub mod world_handlers;
 
 use std::net::SocketAddr;
 use tower_http::cors::{Any, CorsLayer};

@@ -513,6 +513,7 @@
         setupRoiEditor();
         setupRobotTwin();
         setupCompanion();
+        setupWorld();
         setupHeader();
 
         // Initial fetch
@@ -663,6 +664,7 @@
         workspaceScroll.set(state.activeSection, scrollNodes(previous).map((node) => ({ top: node.scrollTop, left: node.scrollLeft })));
         if (state.activeSection === "robot" && sectionId !== "robot") robotLeaveSection();
         if (state.activeSection === "companion" && sectionId !== "companion") companionLeaveSection();
+        if (state.activeSection === "world" && sectionId !== "world") worldLeaveSection();
         state.activeSection = sectionId;
         document.getElementById("current-section-label").textContent = selectedNav.querySelector(".nav-text").textContent;
 
@@ -699,6 +701,8 @@
             robotEnterSection();
         } else if (sectionId === "companion") {
             companionEnterSection();
+        } else if (sectionId === "world") {
+            worldEnterSection();
         }
     }
 
@@ -4397,6 +4401,224 @@
             cancelAnimationFrame(companion.raf);
             companion.raf = null;
         }
+    }
+
+    // ------------------------------------------------------------------
+    // World: a live 3D reconstruction of the camera scene from the model's
+    // per-patch embeddings (/api/world/frame). One column per ViT patch,
+    // height = salience, colour = a fixed projection of the patch vector
+    // (or the real camera colour). Not a photo, not a depth scan: what the
+    // model perceives, rebuilt in space.
+    // ------------------------------------------------------------------
+
+    const world = {
+        gfx: null,
+        orbit: { yaw: 0.7, pitch: 0.5, dist: 2.2, dragging: false, lastX: 0, lastY: 0 },
+        raf: null,
+        frame: null,
+        heightScale: 1,
+        rateHz: 6,
+        colorMode: "latent",
+        spin: true,
+        pollTimer: null,
+        eyeTimer: null,
+        busy: false,
+        eyeBusy: false,
+        eyeUrl: null
+    };
+
+    function worldRender() {
+        const gfx = world.gfx;
+        if (!gfx) return;
+        const gl = gfx.gl;
+        const canvas = gl.canvas;
+        gl.viewport(0, 0, canvas.width, canvas.height);
+        gl.clearColor(0.03, 0.04, 0.06, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        const o = world.orbit;
+        const eye = [
+            o.dist * Math.cos(o.pitch) * Math.sin(o.yaw),
+            0.4 + o.dist * Math.sin(o.pitch),
+            o.dist * Math.cos(o.pitch) * Math.cos(o.yaw)
+        ];
+        const view = m4lookAt(eye, [0, 0.15, 0], [0, 1, 0]);
+        const proj = m4perspective(0.8, canvas.width / canvas.height, 0.05, 30);
+        const viewProj = m4multiply(proj, view);
+        gfx.drawGrid(viewProj, [0.18, 0.2, 0.26]);
+
+        const f = world.frame;
+        if (!f) return;
+        const gw = f.grid_w, gh = f.grid_h;
+        const span = 1.6;
+        const cell = span / Math.max(gw, gh);
+        const half = span / 2;
+        for (let y = 0; y < gh; y++) {
+            for (let x = 0; x < gw; x++) {
+                const i = y * gw + x;
+                const hRaw = f.heights[i] || 0;
+                const h = Math.max(0.02, hRaw * world.heightScale * 0.9);
+                let r, g, b;
+                if (world.colorMode === "real") {
+                    r = f.pixels[i * 3]; g = f.pixels[i * 3 + 1]; b = f.pixels[i * 3 + 2];
+                } else if (world.colorMode === "blend") {
+                    r = (f.colors[i * 3] + f.pixels[i * 3]) / 2;
+                    g = (f.colors[i * 3 + 1] + f.pixels[i * 3 + 1]) / 2;
+                    b = (f.colors[i * 3 + 2] + f.pixels[i * 3 + 2]) / 2;
+                } else {
+                    r = f.colors[i * 3]; g = f.colors[i * 3 + 1]; b = f.colors[i * 3 + 2];
+                }
+                // Camera x maps left-right, patch y (top of image) maps to far side.
+                const px = -half + (x + 0.5) * cell;
+                const pz = -half + (y + 0.5) * cell;
+                const model = m4multiply(m4translate(px, h / 2, pz), m4identity());
+                gfx.drawBox(viewProj, model, [cell * 0.82, h, cell * 0.82], [r, g, b], 1);
+            }
+        }
+    }
+
+    function worldAnimate() {
+        world.raf = null;
+        if (state.activeSection !== "world") return;
+        if (world.spin && !world.orbit.dragging) world.orbit.yaw += 0.0025;
+        worldRender();
+        world.raf = requestAnimationFrame(worldAnimate);
+    }
+
+    async function worldPoll() {
+        if (world.busy || state.activeSection !== "world") return;
+        if (!state.isStreaming) return;
+        world.busy = true;
+        try {
+            const res = await apiFetch("/api/world/frame");
+            if (res.ok) {
+                world.frame = await res.json();
+                const chip = document.getElementById("world-chip");
+                const ct = document.getElementById("world-chip-text");
+                if (chip) chip.classList.add("on");
+                if (ct) ct.textContent = `live ${Math.round(world.frame.latency_ms)} ms`;
+                const grid = document.getElementById("world-grid-text");
+                if (grid) grid.textContent = `${world.frame.grid_w} x ${world.frame.grid_h} patches`;
+                const readout = document.getElementById("world-readout");
+                if (readout) readout.textContent = `${world.frame.model}: ${world.frame.grid_w * world.frame.grid_h} patches, ${Math.round(world.frame.latency_ms)} ms/frame`;
+                const mt = document.getElementById("world-model-text");
+                if (mt) mt.textContent = world.frame.model;
+            } else {
+                const err = await res.json().catch(() => ({}));
+                const ct = document.getElementById("world-chip-text");
+                if (ct) ct.textContent = err.error && res.status === 409 ? "waiting for camera" : `error ${res.status}`;
+            }
+        } catch (e) {
+            console.warn("world frame failed", e);
+        } finally {
+            world.busy = false;
+        }
+    }
+
+    async function worldRefreshEye() {
+        const img = document.getElementById("world-eye");
+        const ph = document.getElementById("world-eye-placeholder");
+        if (!img) return;
+        if (!state.isStreaming) { if (ph) { ph.style.display = "flex"; ph.textContent = "Camera stopped"; } return; }
+        if (world.eyeBusy) return;
+        world.eyeBusy = true;
+        try {
+            const res = await apiFetch("/api/camera/frame");
+            if (res.ok) {
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                img.src = url;
+                if (world.eyeUrl) URL.revokeObjectURL(world.eyeUrl);
+                world.eyeUrl = url;
+                if (ph) ph.style.display = "none";
+            }
+        } catch (_) {} finally { world.eyeBusy = false; }
+    }
+
+    function worldUpdateCameraButton() {
+        const t = document.getElementById("world-camera-btn-text");
+        if (t) t.textContent = state.isStreaming ? "Stop camera" : "Start camera";
+    }
+
+    function worldStartPoll() {
+        worldStopPoll();
+        world.pollTimer = setInterval(worldPoll, Math.round(1000 / world.rateHz));
+    }
+
+    function worldStopPoll() {
+        if (world.pollTimer) { clearInterval(world.pollTimer); world.pollTimer = null; }
+    }
+
+    function setupWorld() {
+        const canvas = document.getElementById("world-canvas");
+        if (!canvas) return;
+        try {
+            world.gfx = createGlRenderer(canvas);
+            if (!world.gfx) notify("WebGL is not available in this window; the world view cannot render.", "warning", 8000);
+        } catch (e) {
+            notify(`WebGL init failed: ${e.message}`, "error");
+        }
+        canvas.addEventListener("pointerdown", (e) => {
+            world.orbit.dragging = true; world.orbit.lastX = e.clientX; world.orbit.lastY = e.clientY;
+            canvas.setPointerCapture(e.pointerId);
+        });
+        canvas.addEventListener("pointermove", (e) => {
+            if (!world.orbit.dragging) return;
+            world.orbit.yaw -= (e.clientX - world.orbit.lastX) * 0.01;
+            world.orbit.pitch = Math.max(0.1, Math.min(1.45, world.orbit.pitch + (e.clientY - world.orbit.lastY) * 0.01));
+            world.orbit.lastX = e.clientX; world.orbit.lastY = e.clientY;
+        });
+        const stop = () => { world.orbit.dragging = false; };
+        canvas.addEventListener("pointerup", stop);
+        canvas.addEventListener("pointercancel", stop);
+        canvas.addEventListener("wheel", (e) => {
+            e.preventDefault();
+            world.orbit.dist = Math.max(0.8, Math.min(6, world.orbit.dist * (e.deltaY > 0 ? 1.1 : 0.9)));
+        }, { passive: false });
+
+        const bind = (id, fn) => { const n = document.getElementById(id); if (n) n.addEventListener("click", fn); };
+        bind("btn-world-camera", async () => {
+            if (state.isStreaming) await stopLiveStream();
+            else await robotEnsureCamera();
+            worldUpdateCameraButton();
+        });
+        const colorSel = document.getElementById("select-world-color");
+        if (colorSel) colorSel.addEventListener("change", () => { world.colorMode = colorSel.value; });
+        const spin = document.getElementById("toggle-world-spin");
+        if (spin) spin.addEventListener("change", () => { world.spin = spin.checked; });
+        const hs = document.getElementById("slider-world-height");
+        if (hs) hs.addEventListener("input", () => {
+            world.heightScale = parseFloat(hs.value);
+            const v = document.getElementById("val-world-height"); if (v) v.textContent = `${world.heightScale.toFixed(1)}x`;
+        });
+        const rate = document.getElementById("slider-world-rate");
+        if (rate) rate.addEventListener("input", () => {
+            world.rateHz = parseInt(rate.value, 10);
+            const v = document.getElementById("val-world-rate"); if (v) v.textContent = `${world.rateHz} Hz`;
+            if (world.pollTimer) worldStartPoll();
+        });
+        bind("btn-api-world", () => {
+            showApiDialog("Reconstruct the scene", "Inference role. Embeds the current camera frame and returns, per ViT patch, a latent colour, the real pixel colour and a salience height. Poll it while the camera runs to animate the scene.",
+                { method: "GET", path: "/api/world/frame" });
+        });
+    }
+
+    function worldUpdateBanner() {
+        const banner = document.getElementById("world-model-banner");
+        if (banner) banner.style.display = state.activeModel ? "none" : "flex";
+    }
+
+    async function worldEnterSection() {
+        worldUpdateCameraButton();
+        worldUpdateBanner();
+        worldStartPoll();
+        if (!world.eyeTimer) world.eyeTimer = setInterval(worldRefreshEye, 250);
+        if (!world.raf) world.raf = requestAnimationFrame(worldAnimate);
+    }
+
+    function worldLeaveSection() {
+        worldStopPoll();
+        if (world.eyeTimer) { clearInterval(world.eyeTimer); world.eyeTimer = null; }
+        if (world.raf) { cancelAnimationFrame(world.raf); world.raf = null; }
     }
 
     // Kickoff

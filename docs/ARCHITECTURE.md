@@ -266,6 +266,17 @@ CompanionCore   { mode, pose (actual), target (manual), mirror_target, animation
   name; the audio model has its own slot in `EngineManager` so both modalities stay
   loaded. Cues persist in `~/.jepctl/companion.json`.
 
+## 3d. World reconstruction (`server/world_handlers.rs`)
+
+`GET /api/world/frame` embeds the current camera frame and turns the per-patch
+tokens into a small field for the UI: `heights` (each patch's L2 distance from the
+frame centroid, normalised), `colors` (the unit patch vector projected onto a fixed,
+deterministic `dim x 3` matrix, `tanh`-squashed to `[0, 1]`) and `pixels` (the
+model-view JPEG averaged into the grid). The projection is cached per embedding
+dimension so colours are stable across frames and restarts. The UI polls this a few
+times a second and draws one WebGL column per patch. It visualises the latent
+representation in space; it is not a generative or depth model.
+
 ## 4. HTTP layer
 
 - `handlers.rs` holds the shared helpers: `ensure_model_loaded` (auto-loads the first

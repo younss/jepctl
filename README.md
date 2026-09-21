@@ -309,6 +309,25 @@ The Companion tab is a second WebGL character (head that pans and tilts, two arm
 | DELETE | `/api/companion/cues/{kind}/{name}` | forget a cue |
 | GET | `/api/companion/ws[?token=]` | WebSocket telemetry at 30 Hz, accepts a pose back |
 
+## World (live latent reconstruction)
+
+The World tab turns the camera into a live 3D scene built from what the model
+perceives. The active vision model embeds each frame into one vector per ViT patch;
+`GET /api/world/frame` maps that grid to a field the UI renders as a terrain of
+columns, one per patch:
+
+- **height** is salience: how far a patch stands out from the frame's average patch, so edges, objects and faces rise while flat walls stay low;
+- **colour** is either the *Perception* view (a fixed projection of the patch embedding, so similar-looking regions share a colour), the *Realistic* view (the real average pixel colour of the patch), or a blend.
+
+Move something in front of the camera and its column rises and shifts live. This is
+a map of the model's latent view, not a photograph or a metric depth scan: JEPA
+encoders describe *what* is where, not distances. Load a vision model
+(`facebook/dinov2-small` is the cleanest), start the camera, open World.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/world/frame` | inference: embeds the current camera frame, returns per patch `colors` (latent), `pixels` (camera) and `heights` (salience), plus `grid_w`/`grid_h` |
+
 ## Jepafile (custom models)
 
 `~/.jepctl/models/<org>/<name>/Jepafile.json` next to `model.safetensors`:

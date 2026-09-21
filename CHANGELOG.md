@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Security
+- Decoders capped (8192 px per side, 256 MB decoder allocations, 256 million pixels per animation): a decompression bomb is refused before allocation.
+- Model identifiers that resolve to the models directory itself (empty, `/`, `.`) are refused, so a delete cannot wipe the library.
+- SECURITY.md documents what an API client can and cannot do to the host.
 - `keys.json` stores SHA-256 digests of API keys instead of the raw tokens (legacy files migrate on first start); digests are never returned by `GET /api/keys`.
 
 ### Changed

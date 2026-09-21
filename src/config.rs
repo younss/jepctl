@@ -161,8 +161,13 @@ impl RuntimeConfig {
             }
         }
 
-        // Normalize slashes into safe directory path
+        // Normalize slashes into safe directory path. An identifier that resolves to
+        // the models directory itself (empty, "/", ".") is refused: deleting it would
+        // wipe every installed model.
         let sanitized = normalized.trim_matches('/');
+        if sanitized.is_empty() || !input_path.components().any(|c| matches!(c, Component::Normal(_))) {
+            return Err(JepaError::PathTraversal("Model identifier must name a model".into()));
+        }
         let resolved = self.models_dir.join(sanitized);
 
         // Double check canonicalization if parent exists
@@ -178,5 +183,19 @@ impl RuntimeConfig {
         }
 
         Ok(resolved)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn root_identifiers_are_refused() {
+        let cfg = RuntimeConfig::init("127.0.0.1".into(), 0, true).unwrap();
+        for bad in ["", "/", ".", "./", "..", "a/../..", "/etc/passwd"] {
+            assert!(cfg.safe_resolve_model_path(bad).is_err(), "{bad:?} must be refused");
+        }
+        assert!(cfg.safe_resolve_model_path("facebook/dinov2-small").unwrap().starts_with(&cfg.models_dir));
     }
 }

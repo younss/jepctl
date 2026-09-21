@@ -14,13 +14,17 @@ use std::process::Command;
 
 use image::codecs::gif::GifDecoder;
 use image::codecs::webp::WebPDecoder;
-use image::{AnimationDecoder, RgbImage};
+use image::{AnimationDecoder, ImageDecoder, RgbImage};
 
 use crate::media::image::sniff_media_format;
 use crate::types::JepaError;
 
 /// Upper bound on frames kept in memory from one file (before sub-sampling).
 pub const MAX_DECODED_FRAMES: usize = 512;
+
+/// Upper bound on decoded pixels kept in memory from one animation (about 768 MB of
+/// RGB): frames past this budget are dropped, sampling covers what was kept.
+pub const MAX_DECODED_PIXELS: u64 = 256 * 1024 * 1024;
 
 /// Whether `bytes` are a container this module can turn into frames.
 pub fn is_video_format(format: &str) -> bool {
@@ -33,12 +37,17 @@ pub fn is_video_format(format: &str) -> bool {
 pub fn decode_clip_bytes(bytes: &[u8], max_frames: usize, fps: f32) -> Result<Vec<RgbImage>, JepaError> {
     let format = sniff_media_format(bytes)?;
     match format {
-        "gif" => decode_animation(
-            GifDecoder::new(Cursor::new(bytes)).map_err(|e| JepaError::ImageProcessing(e.to_string()))?,
-            max_frames,
-        ),
+        "gif" => {
+            let mut dec = GifDecoder::new(Cursor::new(bytes)).map_err(|e| JepaError::ImageProcessing(e.to_string()))?;
+            dec.set_limits(crate::media::image::decode_limits())
+                .map_err(|e| JepaError::ImageProcessing(e.to_string()))?;
+            decode_animation(dec, max_frames)
+        }
         "webp" => {
-            let dec = WebPDecoder::new(Cursor::new(bytes)).map_err(|e| JepaError::ImageProcessing(e.to_string()))?;
+            let mut dec =
+                WebPDecoder::new(Cursor::new(bytes)).map_err(|e| JepaError::ImageProcessing(e.to_string()))?;
+            dec.set_limits(crate::media::image::decode_limits())
+                .map_err(|e| JepaError::ImageProcessing(e.to_string()))?;
             if dec.has_animation() {
                 decode_animation(dec, max_frames)
             } else {
@@ -75,10 +84,13 @@ pub fn decode_clip_path(path: &Path, max_frames: usize, fps: f32) -> Result<Vec<
 
 fn decode_animation<'a, D: AnimationDecoder<'a>>(decoder: D, max_frames: usize) -> Result<Vec<RgbImage>, JepaError> {
     let mut out = Vec::new();
+    let mut pixels: u64 = 0;
     for frame in decoder.into_frames() {
         let frame = frame.map_err(|e| JepaError::ImageProcessing(e.to_string()))?;
-        out.push(image::DynamicImage::ImageRgba8(frame.into_buffer()).to_rgb8());
-        if out.len() >= max_frames.min(MAX_DECODED_FRAMES) {
+        let rgb = image::DynamicImage::ImageRgba8(frame.into_buffer()).to_rgb8();
+        pixels += u64::from(rgb.width()) * u64::from(rgb.height());
+        out.push(rgb);
+        if out.len() >= max_frames.min(MAX_DECODED_FRAMES) || pixels >= MAX_DECODED_PIXELS {
             break;
         }
     }
@@ -181,6 +193,21 @@ mod tests {
         assert_eq!(sample_uniform(&frames, 4).len(), 4);
         assert_eq!(sample_uniform(&frames, 16).len(), 16);
         assert_eq!(decode_clip_bytes(&gif, 2, 10.0).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn oversized_images_are_refused_before_allocation() {
+        // A PNG header claiming 100000 x 100000 pixels: refused by the limits, not by OOM.
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, b'I', b'H', b'D', b'R'];
+        png.extend_from_slice(&100_000u32.to_be_bytes());
+        png.extend_from_slice(&100_000u32.to_be_bytes());
+        png.extend_from_slice(&[8, 2, 0, 0, 0, 0, 0, 0, 0]);
+        let err = crate::media::image::preprocess_image_bytes(&png, &Default::default(), &candle_core::Device::Cpu)
+            .unwrap_err()
+            .to_string();
+        assert!(!err.is_empty());
+        let frames = decode_clip_bytes(&demo_gif(3, 16), 100, 10.0).unwrap();
+        assert_eq!(frames.len(), 3);
     }
 
     #[test]

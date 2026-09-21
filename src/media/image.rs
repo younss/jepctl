@@ -52,15 +52,30 @@ pub fn preprocess_image_bytes(buffer: &[u8], prep: &Preprocessing, device: &Devi
     // 1. Verify format via magic bytes
     let _ = sniff_media_format(buffer)?;
 
-    // 2. Decode image using image crate
-    let reader = ImageReader::new(Cursor::new(buffer))
+    // 2. Decode image using image crate, with a hard cap on dimensions and on the
+    //    decoder's allocations: a tiny file can declare a huge canvas (a
+    //    "decompression bomb") and the model only ever needs a few hundred pixels.
+    let mut reader = ImageReader::new(Cursor::new(buffer))
         .with_guessed_format()
         .map_err(|e| JepaError::ImageProcessing(e.to_string()))?;
+    reader.limits(decode_limits());
 
     let img = reader.decode().map_err(|e| JepaError::ImageProcessing(e.to_string()))?;
 
     // 3. Resize using CatmullRom (bicubic filter)
     preprocess_dynamic_image(&img, prep, device)
+}
+
+/// Largest image side accepted from clients, in pixels.
+pub const MAX_IMAGE_SIDE: u32 = 8192;
+
+/// Decoder limits shared by every input path (stills and animation frames).
+pub fn decode_limits() -> image::Limits {
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_SIDE);
+    limits.max_image_height = Some(MAX_IMAGE_SIDE);
+    limits.max_alloc = Some(256 * 1024 * 1024);
+    limits
 }
 
 /// Preprocess a decoded image into a normalised Candle tensor `[1, 3, size, size]`.

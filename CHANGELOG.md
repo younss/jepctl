@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0]: 2026-09-20
+
 ### Added
 - **Companion**: a second virtual WebGL robot that learns from the person in front of it. Head follows motion, taught poses are mirrored by similarity, taught sounds and poses trigger behaviours (nod, shake, wave, cheer, dance, startle, sleep). `src/companion/`, `/api/companion/*`, persisted cues in `~/.jepctl/companion.json`.
 - **Microphone capture** (`cpal`) with a 12 s ring, `/api/mic/*`, and **sounds**: few-shot audio prototypes (`/api/sounds`, `~/.jepctl/sounds.json`) matched like gestures.

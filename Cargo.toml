@@ -1,6 +1,6 @@
 [package]
 name = "jepctl"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "jepctl: local runtime, CLI and testbench for JEPA style encoders (I-JEPA, V-JEPA 2, DINOv2, ViT, AudioMAE), like Ollama for representation learning"
 authors = ["Younss <younssiga@gmail.com>", "jepctl contributors"]

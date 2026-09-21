@@ -219,13 +219,169 @@ the models, and both the software's interface and Section~\ref{sec:limits} say s
 explicitly, because a visualisation that implies otherwise would mislead a user who is
 deciding whether the approach fits their problem.
 
-\section{System design}
+\section{Architecture}
 
-\jepctl{} is written in Rust and builds to one binary. Inference uses \code{candle}
-\cite{candle} with Metal, CUDA, or multi-threaded CPU backends selected at runtime. The
-HTTP layer is \code{axum}; the desktop testbench is a native window hosting a
-dependency-free web UI. Figure~\ref{fig:overview} gives the overall picture and
-Figure~\ref{fig:arch} the dataflow.
+\jepctl{} is written in Rust and builds to one binary of roughly 14\,000 lines across
+eleven top-level modules. Inference uses \code{candle} \cite{candle} with Metal, CUDA, or
+multi-threaded CPU backends selected at runtime. The HTTP layer is \code{axum}; the
+desktop testbench is a native window hosting a dependency-free web UI. This section
+documents the structure, the runtime behaviour, and the interactions between components,
+since those are the parts an integrator has to reason about. Figure~\ref{fig:overview}
+gives the overall picture; Figure~\ref{fig:arch} the dataflow.
+
+\subsection{Module structure}
+\label{sec:modules}
+
+Figure~\ref{fig:components} shows the modules and the direction of their dependencies.
+The layering is deliberate: perception and control modules know nothing about HTTP, and
+the transport layer knows nothing about tensors. Table~\ref{tab:modules} states each
+module's responsibility.
+
+\begin{figure}[t]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  font=\small\sffamily,
+  mod/.style={draw, rounded corners=2pt, align=center, minimum height=9mm, minimum width=26mm, inner sep=3pt},
+  lay/.style={draw, dashed, rounded corners=3pt, inner sep=5mm},
+  dep/.style={-{Stealth[length=2mm]}, thick, gray!70!black}
+]
+% layer 4: transport
+\node[mod, fill=blue!8] (server) at (0,0) {\code{server}\\[-1pt]\scriptsize routes, handlers, auth guard, WS/SSE};
+% layer 3: applications
+\node[mod, fill=green!8] (gest)  at (-5.4,-2.2) {\code{gestures}\\[-1pt]\scriptsize prototypes, scoring};
+\node[mod, fill=green!8] (robot) at (-1.8,-2.2) {\code{robot}\\[-1pt]\scriptsize HAL, safety, control};
+\node[mod, fill=green!8] (comp)  at ( 1.8,-2.2) {\code{companion}\\[-1pt]\scriptsize behaviours, cues};
+\node[mod, fill=green!8] (hub)   at ( 5.4,-2.2) {\code{hub}\\[-1pt]\scriptsize catalogue, pull};
+% layer 2: capability
+\node[mod, fill=orange!10] (engine) at (-2.7,-4.4) {\code{engine}\\[-1pt]\scriptsize ViT backbones, loading,\\[-2pt]\scriptsize scene predictor};
+\node[mod, fill=orange!10] (media)  at ( 2.7,-4.4) {\code{media}\\[-1pt]\scriptsize camera, mic, ring buffer,\\[-2pt]\scriptsize image/video/audio};
+% layer 1: foundation
+\node[mod, fill=black!5] (types)  at (-3.6,-6.4) {\code{types}};
+\node[mod, fill=black!5] (config) at ( 0,-6.4)   {\code{config}};
+\node[mod, fill=black!5] (auth)   at ( 3.6,-6.4) {\code{auth}};
+
+\draw[dep] (server) -- (gest);
+\draw[dep] (server) -- (robot);
+\draw[dep] (server) -- (comp);
+\draw[dep] (server) -- (hub);
+\draw[dep] (server.west) to[out=180,in=135] (engine.north west);
+\draw[dep] (server.east) to[out=0,in=45] (media.north east);
+\draw[dep] (robot) -- (gest);
+\draw[dep] (robot) -- (comp);
+\draw[dep] (comp)  -- (gest);
+\draw[dep] (hub)   -- (engine);
+\draw[dep] (engine) -- (media);
+\draw[dep] (engine) -- (types);
+\draw[dep] (engine) -- (config);
+\draw[dep] (media)  -- (config);
+\draw[dep] (media)  -- (types);
+\draw[dep] (gest)   -- (types);
+\draw[dep] (server.south east) to[out=-60,in=60] (auth.north);
+
+\node[align=left, font=\scriptsize\itshape, anchor=west] at (7.2,0)    {transport};
+\node[align=left, font=\scriptsize\itshape, anchor=west] at (7.2,-2.2) {applications};
+\node[align=left, font=\scriptsize\itshape, anchor=west] at (7.2,-4.4) {capability};
+\node[align=left, font=\scriptsize\itshape, anchor=west] at (7.2,-6.4) {foundation};
+\end{tikzpicture}}
+\caption{Module dependencies. Arrows point from a module to what it uses. Application
+modules depend on \code{engine} and \code{media} but never on \code{server}, so the same
+perception and control code is reachable from the CLI, the HTTP API, and the tests
+without a running daemon.}
+\label{fig:components}
+\end{figure}
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.18\textwidth}>{\raggedright\arraybackslash}p{0.52\textwidth}r@{}}
+\toprule
+Module & Responsibility & Lines \\
+\midrule
+\code{engine} & ViT backbones (plain, CLS, DINOv2, V-JEPA~2 tubelets, audio), checkpoint mapping and coverage, the active-model registry, the online scene predictor & 2\,400 \\
+\code{media} & Camera and microphone supervisors, frame ring buffer, region of interest, image/video/audio decoding and preprocessing & 1\,700 \\
+\code{server} & Routes, handlers, authentication guard, SSE stream, WebSocket telemetry, embedded UI assets & 3\,600 \\
+\code{robot} & Backend trait and two implementations, safety supervisor, control loop, latent world model, simulated camera view & 1\,800 \\
+\code{companion} & Behaviour state machine, cue memory, pose blending, 30\,Hz loop & 750 \\
+\code{gestures} & Prototype store, contrastive scoring, bundles & 620 \\
+\code{hub} & Model catalogue, manifests, download & 720 \\
+\code{auth}, \code{config}, \code{types} & Tokens and roles, paths and settings, shared data types & 1\,020 \\
+\bottomrule
+\end{tabular}
+\caption{Modules and their responsibilities. Line counts are rounded and include tests
+that live beside the code.}
+\label{tab:modules}
+\end{table}
+
+One departure from strict layering is worth naming: \code{types} references application
+modules because several API data types embed domain structures (a robot telemetry
+snapshot, a gesture score). It is a convenience that keeps the wire format in one file,
+at the cost of a dependency edge pointing the wrong way.
+
+\subsection{Runtime view: processes, threads and tasks}
+\label{sec:runtime}
+
+\jepctl{} is one operating-system process. Inside it, Figure~\ref{fig:runtime} shows the
+concurrent activities: two OS threads owning hardware that cannot be moved across threads,
+and six asynchronous tasks on the Tokio runtime.
+
+\begin{figure}[t]
+\centering
+\resizebox{0.96\textwidth}{!}{%
+\begin{tikzpicture}[
+  font=\small\sffamily,
+  th/.style={draw, rounded corners=2pt, fill=orange!12, align=center, minimum height=8mm, inner sep=3pt},
+  tk/.style={draw, rounded corners=2pt, fill=blue!8, align=center, minimum height=8mm, inner sep=3pt},
+  st/.style={draw, rounded corners=2pt, fill=green!10, align=center, minimum height=8mm, inner sep=3pt},
+  fl/.style={-{Stealth[length=2mm]}, thick}
+]
+\node[th] (camth) at (-6,1.6) {camera thread\\[-2pt]\scriptsize \code{nokhwa}, 10\,fps};
+\node[th] (micth) at (-6,0)   {microphone thread\\[-2pt]\scriptsize \code{cpal} callback};
+\node[st] (ring)  at (-2.4,1.6) {frame ring buffer\\[-2pt]\scriptsize 16 frames, \code{RwLock}};
+\node[st] (mics)  at (-2.4,0)   {audio ring\\[-2pt]\scriptsize 12\,s, \code{Mutex}};
+\node[st] (eng)   at (1.4,0.8)  {\code{EngineManager}\\[-2pt]\scriptsize active + audio model,\\[-3pt]\scriptsize inference mutex};
+
+\node[tk] (http)  at (5.4,2.4)  {HTTP / SSE / WS\\[-2pt]\scriptsize one task per request};
+\node[tk] (rloop) at (5.4,1.0)  {robot loop 30\,Hz};
+\node[tk] (cloop) at (5.4,-0.4) {companion loop 30\,Hz};
+\node[tk] (robs)  at (5.4,-1.8) {robot observer\\[-2pt]\scriptsize $\approx$6.7\,Hz};
+\node[tk] (ceyes) at (5.4,-3.2) {companion eyes 10\,Hz\\[-2pt]\scriptsize + matcher $\approx$3\,Hz};
+\node[tk] (cears) at (5.4,-4.6) {companion ears $\approx$1.4\,Hz};
+
+\draw[fl] (camth) -- (ring);
+\draw[fl] (micth) -- (mics);
+\draw[fl] (ring) -- (eng);
+\draw[fl] (mics) -- (eng);
+\draw[fl] (eng) -- (http);
+\draw[fl] (eng.east) to[out=0,in=180] (robs.west);
+\draw[fl] (eng.east) to[out=-20,in=180] (ceyes.west);
+\draw[fl] (eng.east) to[out=-30,in=180] (cears.west);
+\draw[fl] (ring.south) to[out=-90,in=180] (ceyes.west);
+\node[align=left, font=\scriptsize, anchor=north west] at (-6.9,-2.6)
+  {\textbf{Why two OS threads.} A \code{nokhwa} camera and a \code{cpal}\\
+   input stream are not \code{Send}: they cannot be moved between\\
+   threads, so each is owned by a dedicated thread that pushes\\
+   into a shared ring. Everything else is an async task.};
+\node[align=left, font=\scriptsize, anchor=north west] at (-6.9,-4.4)
+  {\textbf{Why one inference mutex.} Concurrent forward passes each\\
+   need their own working set of GPU buffers; serialising them\\
+   bounds peak memory (Section~\ref{sec:measure}).};
+\end{tikzpicture}}
+\caption{Runtime view. Orange: OS threads owning non-movable hardware handles. Blue:
+Tokio tasks. Green: shared state. Every consumer reaches the model through one
+\code{EngineManager} whose inference mutex serialises forward passes.}
+\label{fig:runtime}
+\end{figure}
+
+All shared state is reached through a single \code{AppState} handle cloned into every
+request: the engine, the model catalogue, the authentication manager, the camera and
+microphone supervisors, the frame ring buffer, the gesture and sound stores, the region
+of interest, the robot handle, the companion handle, and the scene predictor. Each is an
+\code{Arc} over the appropriate lock: \code{RwLock} where readers dominate (ring buffer,
+prototype stores), \code{Mutex} where every access mutates (robot core, scene predictor),
+and \code{watch} channels to broadcast telemetry without contention.
+
+
 
 \begin{figure}[t]
 \centering
@@ -268,6 +424,111 @@ Figure~\ref{fig:arch} the dataflow.
 only; none of them reads pixels. The same path serves the command line, the HTTP API, and
 the desktop testbench.}
 \label{fig:arch}
+\end{figure}
+
+\subsection{Interaction: pulling and loading a model}
+\label{sec:seq-load}
+
+Figure~\ref{fig:seq-load} traces the path that decides whether the runtime will serve a
+model at all. The coverage check is the only place in the system that can refuse work on
+correctness grounds, and it does so before a single embedding is produced.
+
+\begin{figure}[t]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[font=\small\sffamily, >=Stealth]
+  \foreach \i/\n in {0/{CLI or UI}, 1/{\code{server}}, 2/{\code{hub}}, 3/{\code{engine}}, 4/{Hugging Face}} {
+    \node[draw, rounded corners=2pt, fill=black!5, minimum height=6mm] (h\i) at (\i*3.1,0) {\n};
+    \draw[dashed, gray!70] (h\i.south) -- ++(0,-6.1);
+  }
+  \def\msg#1#2#3#4{\draw[->, thick] (#1*3.1,#3) -- node[above, font=\scriptsize, inner sep=1.5pt]{#4} (#2*3.1,#3);}
+  \msg{0}{1}{-0.8}{\code{pull <model>}}
+  \msg{1}{2}{-1.4}{resolve manifest}
+  \msg{2}{4}{-2.0}{GET \code{model.safetensors}}
+  \draw[<-, thick, dashed] (2*3.1,-2.6) -- node[above, font=\scriptsize]{stream to temp, rename atomically} (4*3.1,-2.6);
+  \msg{0}{1}{-3.3}{\code{load <model>}}
+  \msg{1}{3}{-3.9}{build backbone from manifest}
+  \msg{3}{3}{-4.5}{}
+  \draw[->, thick] (3*3.1+0.15,-4.35) arc (90:-90:0.35) node[right, font=\scriptsize, xshift=2pt, yshift=6pt]
+    {map every parameter, count coverage};
+  \draw[->, thick, red!70!black] (1*3.1,-5.5) -- node[above, font=\scriptsize]{\textbf{422} if coverage $<$ 100\,\%} (0*3.1,-5.5);
+  \draw[->, thick, green!45!black] (1*3.1,-5.95) -- node[below, font=\scriptsize]{\textbf{200} + \code{\{loaded, expected\}}} (0*3.1,-5.95);
+\end{tikzpicture}}
+\caption{Pulling and loading. The runtime never serves a partially loaded model: coverage
+below 100\,\% is an error carrying the count and the first missing tensor names, not a
+warning in a log.}
+\label{fig:seq-load}
+\end{figure}
+
+\subsection{Interaction: the live detection stream}
+\label{sec:seq-stream}
+
+Figure~\ref{fig:seq-stream} shows the loop that drives the few-shot demonstrations. The
+property worth noting for an integrator is that registration and matching traverse the
+same path: a prototype is captured through exactly the pipeline that will later be used
+to score it, so a crop, a region of interest, or a model change cannot silently desynchronise
+the two.
+
+\begin{figure}[t]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[font=\small\sffamily, >=Stealth]
+  \foreach \i/\n in {0/{Browser}, 1/{SSE handler}, 2/{ring buffer}, 3/{\code{engine}}, 4/{\code{gestures}}} {
+    \node[draw, rounded corners=2pt, fill=black!5, minimum height=6mm] (h\i) at (\i*3.1,0) {\n};
+    \draw[dashed, gray!70] (h\i.south) -- ++(0,-6.0);
+  }
+  \def\msg#1#2#3#4{\draw[->, thick] (#1*3.1,#3) -- node[above, font=\scriptsize, inner sep=1.5pt]{#4} (#2*3.1,#3);}
+  \msg{0}{1}{-0.8}{GET \code{/api/stream?token=}}
+  \node[draw, dashed, rounded corners, inner sep=3pt, font=\scriptsize, fill=yellow!8]
+    at (2*3.1,-1.5) {loop: on new frame, or every $1/\text{fps}$};
+  \msg{1}{2}{-2.2}{latest frame + sequence}
+  \msg{2}{3}{-2.8}{crop, ROI, normalise $\rightarrow$ tensor}
+  \msg{3}{4}{-3.4}{pooled $+$ per-patch embedding}
+  \draw[->, thick] (4*3.1+0.15,-3.85) arc (90:-90:0.32) node[right, font=\scriptsize, xshift=2pt, yshift=6pt]
+    {score, margin, patch diff};
+  \draw[->, thick] (4*3.1,-4.8) -- node[above, font=\scriptsize]{match result} (1*3.1,-4.8);
+  \draw[->, thick] (1*3.1,-5.4) -- node[above, font=\scriptsize]{\code{data:} event: scores, reason, heatmap} (0*3.1,-5.4);
+\end{tikzpicture}}
+\caption{The detection stream. Frames that have not changed are skipped by sequence
+number, so an idle scene costs no inference. The same handler feeds detections to the
+robot when it is in a gesture-driven mode.}
+\label{fig:seq-stream}
+\end{figure}
+
+\subsection{Interaction: the closed control loop}
+\label{sec:seq-control}
+
+Figure~\ref{fig:seq-control} is the only place where the system closes a loop through the
+physical world: the controller acts, waits for the arm to settle, observes the
+consequence through the camera, and learns from the difference. It is also where the
+safety supervisor sits between intent and actuation.
+
+\begin{figure}[t]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[font=\small\sffamily, >=Stealth]
+  \foreach \i/\n in {0/{observer task}, 1/{\code{engine}}, 2/{\code{LatentAgent}}, 3/{\code{SafetyGuard}}, 4/{backend}} {
+    \node[draw, rounded corners=2pt, fill=black!5, minimum height=6mm] (h\i) at (\i*3.05,0) {\n};
+    \draw[dashed, gray!70] (h\i.south) -- ++(0,-6.6);
+  }
+  \def\msg#1#2#3#4{\draw[->, thick] (#1*3.05,#3) -- node[above, font=\scriptsize, inner sep=1.5pt]{#4} (#2*3.05,#3);}
+  \node[draw, dashed, rounded corners, inner sep=3pt, font=\scriptsize, fill=yellow!8]
+    at (2*3.05,-0.7) {loop while a goal is set};
+  \msg{0}{1}{-1.4}{camera frame (twin drawn in, if virtual)}
+  \msg{1}{2}{-2.0}{embedding $z$}
+  \draw[->, thick] (2*3.05+0.15,-2.45) arc (90:-90:0.34) node[right, font=\scriptsize, xshift=2pt, yshift=7pt]
+    {record $(z,a,z')$, refit, score $E=\lVert z-z_\star\rVert_2/\sqrt{d}$};
+  \draw[->, thick] (2*3.05+0.15,-3.55) arc (90:-90:0.34) node[right, font=\scriptsize, xshift=2pt, yshift=7pt]
+    {sample 96 actions, keep the lowest predicted $E$};
+  \msg{2}{3}{-4.6}{joint command}
+  \draw[->, thick, red!70!black] (3*3.05,-5.2) -- node[above, font=\scriptsize]{held as \emph{pending} if the gate is on} (2*3.05,-5.2);
+  \msg{3}{4}{-5.8}{clamped, ramped at 1.5\,rad/s}
+  \draw[->, thick, dashed] (4*3.05,-6.35) -- node[above, font=\scriptsize]{settled} (0*3.05,-6.35);
+\end{tikzpicture}}
+\caption{The goal-seeking loop. The agent never commands the backend directly: every
+command passes the safety supervisor, which clamps it to the joint limits, ramps it, and
+on the physical backend parks it until a human approves.}
+\label{fig:seq-control}
 \end{figure}
 
 \subsection{Strict checkpoint loading}

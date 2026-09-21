@@ -71,13 +71,11 @@ a single static JPEG.
   you ever regenerate the artwork you only need to re-measure those three rectangles.
   Note: some venues ask authors to disclose AI-generated figures. arXiv does not currently
   require it, but a line in the caption costs nothing and pre-empts the question.
-- **Figure 2** — TikZ, the `jepctl` dataflow: sensors, preprocessing, encoder, and the
-  three latent-space consumers (few-shot matcher, online world model, control).
-- **Figure 3** — TikZ, the World loop: frozen encoder, online predictor, surprise as the
-  normalised prediction error, following the structure in arXiv:2603.19312.
+- **Figures 2 to 8** — all TikZ vector graphics: the module dependency graph, the runtime
+  view (threads, tasks and shared state), the dataflow, three sequence diagrams (model
+  pull and load, the detection stream, the closed control loop) and the World loop.
 
-Figures 2 and 3 are vector graphics; Figure 1 is the only raster asset, at 198 KB, well
-within arXiv's limits.
+Figure 1 is the only raster asset, at 198 KB, well within arXiv's limits.
 
 ## Reference provenance
 

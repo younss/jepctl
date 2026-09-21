@@ -861,13 +861,21 @@
 
                 <div class="robot-topbar card">
                     <div class="robot-topbar-group">
-                        <label class="fact-label" for="select-companion-mode">Mode</label>
-                        <select id="select-companion-mode" class="select-input select-compact">
-                            <option value="manual">Manual: sliders only</option>
-                            <option value="interactive">Interactive: watch and listen</option>
-                        </select>
+                        <button class="btn btn-primary" id="btn-companion-wake">
+                            <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-companion"></use></svg>
+                            <span id="companion-wake-text">Wake the companion</span>
+                        </button>
+                        <span class="card-subtitle-inline" id="companion-wake-hint">Loads both models, opens the camera and the microphone, and starts watching.</span>
                     </div>
                     <div class="robot-topbar-group">
+                        <details class="robot-advanced-modes">
+                            <summary class="roi-summary-hint">Manual setup</summary>
+                            <label class="visually-hidden" for="select-companion-mode">Mode</label>
+                            <select id="select-companion-mode" class="select-input select-compact">
+                                <option value="manual">Manual: sliders only</option>
+                                <option value="interactive">Interactive: watch and listen</option>
+                            </select>
+                        </details>
                         <button class="btn btn-sm btn-outline" id="btn-companion-camera">
                             <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-video"></use></svg> <span id="companion-camera-btn-text">Start camera</span>
                         </button>
@@ -895,13 +903,20 @@
                             </div>
                             <span class="status-chip" id="companion-anim-chip"><span class="chip-dot" id="companion-anim-dot"></span><span id="companion-anim-text">idle</span></span>
                         </div>
-                        <canvas id="companion-canvas" width="720" height="440" role="img" aria-label="3D view of the companion robot"></canvas>
-                        <div class="robot-readout" id="companion-readout">pan 0.00  tilt 0.00  left 0.00  right 0.00  lean 0.00  mood 30%</div>
+                        <div class="companion-canvas-wrap">
+                            <canvas id="companion-canvas" width="720" height="440" role="img" aria-label="3D view of the companion robot"></canvas>
+                            <div class="companion-bubble" id="companion-bubble" aria-live="polite">Asleep. Press Wake the companion.</div>
+                        </div>
+                        <details class="companion-raw">
+                            <summary class="roi-summary-hint">Raw pose values</summary>
+                            <div class="robot-readout" id="companion-readout">pan 0.00  tilt 0.00  left 0.00  right 0.00  lean 0.00  mood 30%</div>
+                        </details>
                         <div class="companion-senses">
                             <div class="companion-sense">
                                 <span class="fact-label">Eyes: what the model sees</span>
                                 <div class="agent-view-box companion-eye-box">
                                     <img id="companion-eye-view" alt="What the companion sees" width="224" height="224">
+                                    <div class="companion-reticle" id="companion-reticle" style="display: none;"></div>
                                     <div class="model-view-placeholder" id="companion-eye-placeholder">Camera stopped</div>
                                 </div>
                                 <strong id="companion-seeing">nothing yet</strong>
@@ -918,34 +933,52 @@
 
                     <div class="robot-side-col" tabindex="0" role="region" aria-label="Companion inspector">
                         <div class="card">
-                            <h3>Teach</h3>
-                            <ol class="slots-tips robot-steps" id="companion-steps">
-                                <li id="companion-step-models">Load a vision model (Gestures tab) and the AudioMAE audio model (Models tab). Both stay loaded side by side.</li>
-                                <li id="companion-step-senses">Start the camera and the microphone, switch to Interactive: the head follows you.</li>
-                                <li id="companion-step-pose">Pose the companion with the sliders, strike the matching pose yourself, teach it. It mirrors you between taught poses.</li>
-                                <li id="companion-step-sound">Teach the quiet room first (neutral), then pick a behaviour, make a sound (clap, whistle, a word) and teach it. Repeat each sound two or three times.</li>
-                            </ol>
-                            <div class="companion-teach-row">
-                                <label class="visually-hidden" for="input-companion-teach-name">Cue name</label>
-                                <input type="text" id="input-companion-teach-name" class="input-text" placeholder="Cue name (for example wave, clap)" maxlength="64">
-                                <select id="select-companion-behaviour" class="select-input select-compact" aria-label="Behaviour">
-                                    <option value="pose">Hold this pose (mirror)</option>
-                                    <option value="nod">Nod</option>
-                                    <option value="shake">Shake head</option>
-                                    <option value="wave_left">Wave left arm</option>
-                                    <option value="wave_right">Wave right arm</option>
-                                    <option value="cheer">Cheer</option>
-                                    <option value="dance">Dance</option>
-                                    <option value="startle">Startle</option>
-                                    <option value="sleep">Sleep</option>
-                                </select>
+                            <h3>Teach a trick</h3>
+                            <p class="card-subtitle">Each card captures one prototype in JEPA latent space and wires it to a reaction. No training run, no cloud: recognition is a nearest-prototype lookup on local embeddings.</p>
+                            <div class="trick-cards">
+                                <button class="trick-card" id="btn-trick-clap">
+                                    <span class="trick-title">Train on a clap</span>
+                                    <span class="trick-desc">Listens for 2 s: clap your hands. Then every clap makes it dance.</span>
+                                </button>
+                                <button class="trick-card" id="btn-trick-wave">
+                                    <span class="trick-title">Train on a wave</span>
+                                    <span class="trick-desc">Wave at the camera. It waves back whenever it sees that again.</span>
+                                </button>
+                                <button class="trick-card" id="btn-trick-mirror">
+                                    <span class="trick-title">Body mirror</span>
+                                    <span class="trick-desc">Two quick captures (arms up, arms down) and it follows your arms continuously.</span>
+                                </button>
                             </div>
-                            <div class="robot-side-actions">
-                                <button class="btn btn-sm btn-primary" id="btn-companion-teach-pose">Teach from camera</button>
-                                <button class="btn btn-sm btn-primary" id="btn-companion-teach-sound">Teach from microphone</button>
-                                <button class="btn btn-sm btn-outline" id="btn-companion-teach-ambient" title="Register the room's background noise as a neutral sound so silence never triggers a cue">Teach quiet room</button>
-                                <button class="btn btn-sm btn-outline" id="btn-companion-try">Try behaviour</button>
-                            </div>
+                            <details class="companion-manual-teach">
+                                <summary class="roi-summary-hint">Teach something else manually</summary>
+                                <ol class="slots-tips robot-steps" id="companion-steps">
+                                    <li id="companion-step-models">Load a vision model and the AudioMAE audio model (both stay loaded side by side).</li>
+                                    <li id="companion-step-senses">Start the camera and the microphone, switch to Interactive: the head follows you.</li>
+                                    <li id="companion-step-pose">Pose the companion with the sliders, strike the matching pose yourself, teach it. It mirrors you between taught poses.</li>
+                                    <li id="companion-step-sound">Teach the quiet room first (neutral), then pick a behaviour, make a sound and teach it. Repeat each sound two or three times.</li>
+                                </ol>
+                                <div class="companion-teach-row">
+                                    <label class="visually-hidden" for="input-companion-teach-name">Cue name</label>
+                                    <input type="text" id="input-companion-teach-name" class="input-text" placeholder="Cue name (for example wave, clap)" maxlength="64">
+                                    <select id="select-companion-behaviour" class="select-input select-compact" aria-label="Behaviour">
+                                        <option value="pose">Hold this pose (mirror)</option>
+                                        <option value="nod">Nod</option>
+                                        <option value="shake">Shake head</option>
+                                        <option value="wave_left">Wave left arm</option>
+                                        <option value="wave_right">Wave right arm</option>
+                                        <option value="cheer">Cheer</option>
+                                        <option value="dance">Dance</option>
+                                        <option value="startle">Startle</option>
+                                        <option value="sleep">Sleep</option>
+                                    </select>
+                                </div>
+                                <div class="robot-side-actions">
+                                    <button class="btn btn-sm btn-primary" id="btn-companion-teach-pose">Teach from camera</button>
+                                    <button class="btn btn-sm btn-primary" id="btn-companion-teach-sound">Teach from microphone</button>
+                                    <button class="btn btn-sm btn-outline" id="btn-companion-teach-ambient" title="Register the room's background noise as a neutral sound so silence never triggers a cue">Teach quiet room</button>
+                                    <button class="btn btn-sm btn-outline" id="btn-companion-try">Try behaviour</button>
+                                </div>
+                            </details>
                             <div class="mirror-weights" id="companion-mirror-weights" aria-live="polite"></div>
                             <div class="lesson-card" id="companion-lesson" aria-live="polite" style="display: none;">
                                 <div class="lesson-evidence">

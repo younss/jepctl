@@ -286,6 +286,14 @@ Serial settings (port, baud, servo IDs, tick calibration, direction) live under 
 
 The Companion tab is a second WebGL character (head that pans and tilts, two arms, lean, a mood light) meant to be taught by a person rather than by moving hardware. It does not need an arm: it learns from **you**, through the camera and the microphone. Nothing is trained; every lesson is one embedding added to a few-shot prototype, exactly like the gesture sandbox, in two modalities.
 
+**One-click start.** Press **Wake the companion**: it loads the vision and audio
+models, opens the camera and the microphone, learns the room's silence as a neutral
+sound, switches to interactive and greets you. Then **Teach a trick** gives three
+guided one-click lessons (train on a clap, train on a wave, body mirror). A speech
+bubble over the robot says what it is doing ("Gesture recognised: wave (88%) -> wave
+right arm"), a green reticle on its eye view shows where its attention is, and the ear
+scope turns yellow when a taught sound fires. The steps below are the manual path.
+
 ### Step by step
 
 1. **Load two models.** In *Gestures* load a vision model (`facebook/dinov2-small` recommended); in *Models* load `gaunernst/vit_base_patch16_1024_128.audiomae_as2m`. The audio model has its own slot, so both stay loaded; the header shows the vision model and `/api/status` shows both.

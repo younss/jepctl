@@ -4270,6 +4270,7 @@
         if (level) level.style.width = `${Math.min(100, Math.round(Math.sqrt(t.hearing.level) * 100))}%`;
         renderMirrorWeights("companion-mirror-weights", t.seeing.mirror, t.mode === "interactive" && t.cues.some((c) => c.kind === "gesture" && c.behaviour === "pose"));
         companionRenderCues(t.cues || []);
+        companionLiveFeedback(t);
         const stepDone = (id, on) => { const n = document.getElementById(id); if (n) n.classList.toggle("done", !!on); };
         stepDone("companion-step-models", state.activeModel && state.audioModel);
         stepDone("companion-step-senses", t.mode === "interactive" && state.isStreaming && companion.mic && companion.mic.active);
@@ -4277,6 +4278,51 @@
         stepDone("companion-step-sound", (t.cues || []).some((c) => c.kind === "sound"));
         companionUpdateBanner();
         if (!companion.raf && state.activeSection === "companion") companion.raf = requestAnimationFrame(companionAnimate);
+    }
+
+    // Action C: a living, plain-language status instead of raw numbers.
+    // Action D: the attention reticle on the eye view.
+    function companionLiveFeedback(t) {
+        const now = Date.now() / 1000;
+        const cueAction = (kind, name) => {
+            const c = (t.cues || []).find((x) => x.kind === kind && x.name === name);
+            return c ? companionBehaviourLabel(c) : null;
+        };
+        let text;
+        if (t.mode !== "interactive") {
+            text = companion.waking ? "Waking up..." : "Asleep. Press Wake the companion.";
+        } else if (t.seeing.last_gesture && t.seeing.last_gesture_at && now - t.seeing.last_gesture_at < 2.5) {
+            const act = cueAction("gesture", t.seeing.last_gesture);
+            text = `Gesture recognised: ${t.seeing.last_gesture} (${Math.round(t.seeing.last_gesture_confidence * 100)}%)`
+                + (act ? ` -> ${act}` : "");
+        } else if (t.hearing.last_sound && t.hearing.last_sound_at && now - t.hearing.last_sound_at < 2.5) {
+            const act = cueAction("sound", t.hearing.last_sound);
+            text = `Sound recognised: ${t.hearing.last_sound} (${Math.round(t.hearing.last_sound_confidence * 100)}%)`
+                + (act ? ` -> ${act}` : "");
+        } else if (t.animation) {
+            text = `Reacting: ${t.animation.replace("_", " ")}`;
+        } else if (t.attention && t.attention.tracking) {
+            text = "I am watching you (motion tracking active)";
+        } else if (companion.mic && companion.mic.active) {
+            text = "Listening to the room...";
+        } else if (state.isStreaming) {
+            text = "Watching, but I hear nothing: start the microphone.";
+        } else {
+            text = "Interactive, but my eyes are closed: start the camera.";
+        }
+        companionBubble(text, t.mode === "interactive");
+
+        const ret = document.getElementById("companion-reticle");
+        if (ret) {
+            const on = t.mode === "interactive" && t.attention && t.attention.tracking && state.isStreaming;
+            ret.style.display = on ? "block" : "none";
+            if (on) {
+                ret.style.left = `${((t.attention.x + 1) / 2) * 100}%`;
+                ret.style.top = `${((1 - t.attention.y) / 2) * 100}%`;
+            }
+        }
+        // Remember whether a taught sound just fired, for the ear scope colour.
+        companion.soundHot = !!(t.hearing.last_sound && t.hearing.last_sound_at && now - t.hearing.last_sound_at < 1.5);
     }
 
     function companionUpdateBanner() {
@@ -4287,7 +4333,7 @@
         if (!state.activeModel) missing.push("a vision model (Gestures tab, DINOv2-small recommended)");
         if (!state.audioModel) missing.push("an audio model (Models tab, AudioMAE)");
         if (missing.length) {
-            text.textContent = `To watch and listen the companion needs ${missing.join(" and ")}. Without a model the head still follows motion.`;
+            text.textContent = `Press "Wake the companion" and it loads what is missing: ${missing.join(" and ")}.`;
             banner.style.display = "flex";
         } else {
             banner.style.display = "none";
@@ -4353,7 +4399,19 @@
             const res = await apiFetch("/api/mic/waveform?points=120");
             if (res.ok) {
                 const data = await res.json();
-                drawWaveform(canvas, data.active ? data.points : [], data.level > 0.02 ? "#4ade80" : "#6b7280");
+                const colour = companion.soundHot ? "#facc15" : (data.level > 0.02 ? "#4ade80" : "#6b7280");
+                drawWaveform(canvas, data.active ? data.points : [], colour);
+                // Trigger threshold: above this the room is loud enough to be examined.
+                const ctx = canvas.getContext("2d");
+                const h = canvas.height;
+                const y = h / 2 - 0.35 * (h - 6) / 2;
+                ctx.strokeStyle = companion.soundHot ? "rgba(250,204,21,.9)" : "rgba(255,255,255,.22)";
+                ctx.setLineDash([4, 4]);
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(canvas.width, y);
+                ctx.stroke();
+                ctx.setLineDash([]);
             }
         } catch (e) {
             console.warn("companion waveform failed", e);
@@ -4438,6 +4496,140 @@
         return payload;
     }
 
+    // ---- Action A: one click wakes the companion ------------------------------
+    const COMPANION_VISION_MODEL = "facebook/dinov2-small";
+    const COMPANION_AUDIO_MODEL = "gaunernst/vit_base_patch16_1024_128.audiomae_as2m";
+
+    function companionBubble(text, awake) {
+        const el = document.getElementById("companion-bubble");
+        if (!el) return;
+        if (el.textContent !== text) el.textContent = text;
+        if (awake !== undefined) el.classList.toggle("awake", !!awake);
+    }
+
+    async function companionLoadModel(name) {
+        const res = await apiFetch("/api/models/load", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model_name: name })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            throw new Error(data.error && data.error.includes("not downloaded")
+                ? `${name} is not downloaded yet. Pull it in the Models tab first.`
+                : (data.error || `${name}: ${res.status}`));
+        }
+    }
+
+    async function companionWake() {
+        if (companion.waking) return;
+        companion.waking = true;
+        const label = document.getElementById("companion-wake-text");
+        if (label) label.textContent = "Waking...";
+        try {
+            companionBubble("Loading the vision model...", false);
+            if (!state.activeModel) await companionLoadModel(COMPANION_VISION_MODEL);
+            companionBubble("Loading the audio model...", false);
+            if (!state.audioModel) await companionLoadModel(COMPANION_AUDIO_MODEL);
+            await pollStatus();
+
+            companionBubble("Opening my eyes and ears...", false);
+            await robotEnsureCamera();
+            if (!(companion.mic && companion.mic.active)) await companionPost("/api/mic/start", {});
+            await companionRefreshMic();
+
+            // A baseline reflex that needs no demonstration: learn the room's silence as
+            // a neutral sound so quiet never fires a cue. Startling on a loud unknown
+            // sound is built in and needs nothing at all.
+            if (companion.mic && companion.mic.active) {
+                companionBubble("Listening to the room for a moment...", false);
+                await new Promise((r) => setTimeout(r, 1200));
+                await companionPost("/api/sounds", { name: "quiet room", is_neutral: true, seconds: 1.5 });
+            }
+
+            await companionPost("/api/companion/mode", { mode: "interactive" });
+            await companionPost("/api/companion/behaviour", { behaviour: "acknowledge" });
+            companionBubble("I am awake. Move in front of me, or teach me a trick.", true);
+            notify("Companion awake: watching and listening.", "success", 4000);
+        } catch (e) {
+            companionBubble(`I could not wake up: ${e.message}`, false);
+            notify(`Wake: ${e.message}`, "error", 8000);
+        } finally {
+            companion.waking = false;
+            if (label) label.textContent = "Wake the companion";
+        }
+    }
+
+    // ---- Action B: guided one-click tricks -------------------------------------
+    async function companionCountdown(text, seconds) {
+        for (let n = seconds; n >= 1; n--) {
+            companionBubble(`${text} (${n})`, true);
+            await new Promise((r) => setTimeout(r, 1000));
+        }
+    }
+
+    async function companionTeachCue(payload, successText) {
+        const r = await companionPost("/api/companion/teach", payload);
+        if (r) {
+            companionShowLesson(payload.kind, payload, r);
+            companionBubble(successText, true);
+            notify(successText, (payload.kind === "sound" && (r.level || 0) < 0.02) ? "warning" : "success", 4000);
+        }
+        return r;
+    }
+
+    async function companionTrick(kind, fn) {
+        if (companion.trickRunning) return;
+        if (kind === "sound" && !state.audioModel) { notify("Wake the companion first: it needs the audio model.", "warning", 5000); return; }
+        if (kind === "gesture" && !state.activeModel) { notify("Wake the companion first: it needs the vision model.", "warning", 5000); return; }
+        companion.trickRunning = true;
+        document.querySelectorAll(".trick-card").forEach((b) => { b.disabled = true; });
+        try {
+            await fn();
+        } catch (e) {
+            notify(`Training: ${e.message}`, "error");
+        } finally {
+            companion.trickRunning = false;
+            document.querySelectorAll(".trick-card").forEach((b) => { b.disabled = false; });
+        }
+    }
+
+    function companionTrickClap() {
+        return companionTrick("sound", async () => {
+            if (!(companion.mic && companion.mic.active)) { await companionPost("/api/mic/start", {}); await companionRefreshMic(); }
+            await companionCountdown("Clap your hands when I reach zero", 3);
+            companionBubble("Clap now, I am listening...", true);
+            await new Promise((r) => setTimeout(r, 1500));
+            await companionTeachCue({ kind: "sound", name: "clap", behaviour: "dance", seconds: 2 },
+                "Learned the clap: clap again and I dance.");
+        });
+    }
+
+    function companionTrickWave() {
+        return companionTrick("gesture", async () => {
+            if (!(await robotEnsureCamera())) return;
+            await companionCountdown("Wave at the camera and hold it", 3);
+            await companionTeachCue({ kind: "gesture", name: "wave", behaviour: "wave_right" },
+                "Learned your wave: wave again and I wave back.");
+        });
+    }
+
+    function companionTrickMirror() {
+        return companionTrick("gesture", async () => {
+            if (!(await robotEnsureCamera())) return;
+            const poses = [
+                { name: "arms up", hint: "Raise both arms", pose: { head_pan: 0, head_tilt: 0.2, left_arm: 1, right_arm: 1, lean: 0, mood: 0.8 } },
+                { name: "arms down", hint: "Let both arms hang", pose: { head_pan: 0, head_tilt: 0, left_arm: -0.8, right_arm: -0.8, lean: 0, mood: 0.3 } }
+            ];
+            for (const p of poses) {
+                await companionCountdown(`${p.hint} and hold still`, 3);
+                await companionTeachCue({ kind: "gesture", name: p.name, behaviour: "pose", pose: p.pose },
+                    `Learned "${p.name}".`);
+            }
+            companionBubble("Body mirror ready: raise and lower your arms slowly.", true);
+            notify("Body mirror ready: I blend between the two poses as you move.", "success", 5000);
+        });
+    }
+
     function setupCompanion() {
         const canvas = document.getElementById("companion-canvas");
         if (!canvas) return;
@@ -4496,6 +4688,10 @@
             }
             await companionRefreshMic();
         });
+        bind("btn-companion-wake", companionWake);
+        bind("btn-trick-clap", companionTrickClap);
+        bind("btn-trick-wave", companionTrickWave);
+        bind("btn-trick-mirror", companionTrickMirror);
         bind("btn-companion-teach-pose", async () => {
             const payload = companionTeachPayload("gesture");
             if (!payload) return;

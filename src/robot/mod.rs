@@ -184,6 +184,8 @@ pub struct RobotCore {
     pub freeze_background: bool,
     /// The frozen frame (taken when a learning mode starts or a goal is captured).
     pub background: Option<image::RgbImage>,
+    /// JPEG of the view captured as the latent goal, shown beside the live view.
+    pub goal_image: Option<std::sync::Arc<Vec<u8>>>,
 }
 
 impl RobotCore {
@@ -207,6 +209,7 @@ impl RobotCore {
             hardware,
             freeze_background: true,
             background: None,
+            goal_image: None,
         }
     }
 

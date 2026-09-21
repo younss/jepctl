@@ -233,6 +233,18 @@ cargo run --release --features "metal serial"     # plus the physical arm over U
 | `SafetyGuard` | Joint limits in radians (J1 base ±2.6, J2 shoulder ±1.8, J3 elbow ±2.0, J4 wrist pitch ±1.8, J5 wrist roll ±2.6, J6 wrist rotate ±3.1, gripper 0 to 1), velocity ramp of 1.5 rad/s per joint at 30 Hz (no direct jumps), emergency stop that locks every command until an admin resets it. |
 | Controller | 30 Hz loop that ramps toward targets, drives the backend and publishes telemetry on a `watch` channel. |
 
+**What it is for.** The tab opens on three use-case cards rather than jargon:
+**Mirror mode** (human teleoperation: the arm copies your posture through the webcam,
+no sensor on you and no skeleton tracking, because JEPA compares the whole posture in
+latent space), **Visual mission** (goal reaching: show a target image and the arm plans
+its own moves to minimise the latent distance to it, no trajectory and no reward), and
+**Manual workshop** (sliders and hardware). A banner under the twin says in plain
+language what the robot is doing right now, and **Run mirror demo (3 poses)** teaches
+three preset poses with a guided countdown so teleoperation works after one click
+instead of a dozen manual steps. In Visual mission the target image, the live view and
+the latent energy dial sit side by side, so you watch the distance fall as the arm
+searches. The modes below are still available under *Advanced modes*.
+
 **Modes**
 
 - **Manual**: sliders (or the API) set targets.
@@ -259,6 +271,7 @@ Typical run in the simulator: 45 s of Learn, capture the goal at a pose, scrambl
 | POST | `/api/robot/observe` | feed one observation (`image_base64` for replays / external cameras); the server camera does this automatically |
 | GET / DELETE | `/api/robot/world-model` | learned transitions summary / forget everything learned (admin) |
 | GET | `/api/robot/view` | JPEG of what the agent observes (camera, ROI, twin overlay when virtual) |
+| GET | `/api/robot/goal-image` | JPEG of the view captured as the goal, for the target-vs-current panel |
 | POST | `/api/robot/background` | refresh the frozen background from the live camera (drops learned transitions, they were observed over the old one) |
 | POST | `/api/robot/e-stop` | engage the emergency stop |
 | POST | `/api/robot/reset-safety` (admin) | release it after inspection |

@@ -3222,6 +3222,53 @@
         robotDrawBox(viewProj, m4translate(tip[0], 0.004, tip[2]), [0.02, 0.004, 0.02], [0.3, 0.9, 0.5], 1);
     }
 
+    // Action C: the latent distance to the target, as a dial beside the two views.
+    function robotUpdateEnergyDial(t) {
+        const dial = document.getElementById("robot-energy-dial");
+        const text = document.getElementById("robot-energy-dial-text");
+        if (!dial || !text) return;
+        const g = t.goal || {};
+        if (!g.has_goal || g.current_energy === null || g.current_energy === undefined) {
+            text.textContent = "--";
+            dial.classList.remove("warm", "hot");
+            return;
+        }
+        // Distance remaining, as a share of where it started.
+        const pct = Math.round(Math.max(0, Math.min(1, 1 - (g.convergence || 0))) * 100);
+        text.textContent = `${pct}%`;
+        dial.classList.toggle("hot", pct >= 40);
+        dial.classList.toggle("warm", pct >= 10 && pct < 40);
+    }
+
+    async function robotRefreshGoalView() {
+        const img = document.getElementById("robot-goal-view");
+        const ph = document.getElementById("robot-goal-view-placeholder");
+        if (!img) return;
+        const hasGoal = robot.telemetry && robot.telemetry.goal && robot.telemetry.goal.has_goal;
+        if (!hasGoal) {
+            if (ph) { ph.style.display = "flex"; ph.textContent = "No goal captured"; }
+            img.removeAttribute("src");
+            robot.goalViewFor = null;
+            return;
+        }
+        // The goal image only changes when a new goal is captured.
+        if (robot.goalViewFor === robot.telemetry.goal.goal_dimension && img.getAttribute("src")) return;
+        try {
+            const res = await apiFetch("/api/robot/goal-image");
+            if (res.ok) {
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                img.src = url;
+                if (robot.goalViewUrl) URL.revokeObjectURL(robot.goalViewUrl);
+                robot.goalViewUrl = url;
+                robot.goalViewFor = robot.telemetry.goal.goal_dimension;
+                if (ph) ph.style.display = "none";
+            }
+        } catch (e) {
+            console.warn("goal view failed", e);
+        }
+    }
+
     // Preview of the composited observation, refreshed at ~4 Hz while the camera runs.
     async function robotRefreshAgentView() {
         const img = document.getElementById("robot-agent-view");
@@ -3446,11 +3493,14 @@
         const frozen = t.backend === "virtual" && t.freeze_background;
         if (badge) badge.style.display = frozen && t.has_background ? "inline-block" : "none";
         if (caption) {
-            caption.textContent = t.backend === "physical"
+            // Short label in the compact goal panel; the full explanation is the tooltip.
+            const long = t.backend === "physical"
                 ? "What the agent observes: the live camera (ROI applied)."
                 : frozen
                     ? "What the agent observes: the virtual arm drawn over a snapshot of the camera taken when learning started. The background is intentionally still so only the arm changes between observations; use Refresh background to take a new snapshot, or untick Freeze background for the live feed."
                     : "What the agent observes: the virtual arm drawn over the live camera feed. Anything moving in the background counts as noise for the model.";
+            caption.textContent = t.backend === "physical" ? "Live camera" : frozen ? "Twin over a frozen frame" : "Twin over the live feed";
+            caption.title = long;
         }
         const stepDone = (id, on) => { const n = document.getElementById(id); if (n) n.classList.toggle("done", !!on); };
         stepDone("robot-step-camera", state.isStreaming);
@@ -3458,6 +3508,12 @@
         stepDone("robot-step-scramble", goal.has_goal && (goal.steps || 0) > 0);
         stepDone("robot-step-watch", goal.world && goal.world.ready);
         renderMirrorWeights("robot-mirror-weights", t.mode === "mirror" ? t.mirror : null, t.mode === "mirror");
+        robotExplain(t);
+        robotUpdateEnergyDial(t);
+        document.querySelectorAll(".usecase-card").forEach((c) => {
+            const on = c.dataset.mode === t.mode || (c.dataset.mode === "goal_seeking" && t.mode === "exploring");
+            c.classList.toggle("active", on);
+        });
         if (!robot.raf && state.activeSection === "robot") robot.raf = requestAnimationFrame(robotAnimate);
     }
 
@@ -3559,6 +3615,111 @@
         }
     }
 
+    // Action B: a one-click guided mirror demo. The arm poses are preset; the user
+    // only strikes each posture when asked, so teleoperation works after three
+    // captures instead of a dozen manual steps.
+    const ROBOT_DEMO_POSES = [
+        { name: "Arm raised", hint: "Raise one arm above your shoulder and hold still.", joints: [0, 1.0, -0.6, 0.3, 0, 0], gripper: 0.5 },
+        { name: "Reaching out", hint: "Lean and reach to one side, hand open.", joints: [0.7, 0.35, -1.0, 0.5, 0, 0], gripper: 1.0 },
+        { name: "Rest", hint: "Stand relaxed, arms down: this is the neutral pose.", joints: [0, 0, 0, 0, 0, 0], gripper: 0.3 }
+    ];
+
+    function robotDemoOverlay(show, title, count, hint) {
+        const el = document.getElementById("robot-demo-overlay");
+        if (!el) return;
+        el.style.display = show ? "flex" : "none";
+        const t = document.getElementById("robot-demo-title");
+        const c = document.getElementById("robot-demo-count");
+        const h = document.getElementById("robot-demo-hint");
+        if (t && title !== undefined) t.textContent = title;
+        if (c && count !== undefined) c.textContent = count;
+        if (h && hint !== undefined) h.textContent = hint;
+    }
+
+    async function robotMirrorDemo() {
+        if (robot.demoRunning) return;
+        if (!state.activeModel) { notify("Load a vision model first (Gestures tab).", "warning", 5000); return; }
+        if (!(await robotEnsureCamera())) return;
+        robot.demoRunning = true;
+        try {
+            const map = await (await apiFetch("/api/robot/gesture-map")).json().catch(() => ({})) || {};
+            for (let i = 0; i < ROBOT_DEMO_POSES.length; i++) {
+                const pose = ROBOT_DEMO_POSES[i];
+                // Show the arm pose being taught so the user sees the target.
+                robotSendCommand(pose.joints, pose.gripper, false);
+                for (let n = 3; n >= 1; n--) {
+                    robotDemoOverlay(true, `Pose ${i + 1} of 3: ${pose.name}`, String(n), pose.hint);
+                    await new Promise((r) => setTimeout(r, 1000));
+                }
+                robotDemoOverlay(true, `Pose ${i + 1} of 3: ${pose.name}`, "...", "Capturing what the camera sees.");
+                const res = await apiFetch("/api/gestures", {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name: pose.name, from_camera: true })
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.error || `${res.status}`);
+                map[pose.name] = { action: "pose", joints: pose.joints.map((v) => +v.toFixed(4)), gripper: pose.gripper };
+            }
+            const put = await apiFetch("/api/robot/gesture-map", {
+                method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(map)
+            });
+            if (!put.ok) throw new Error(`gesture map ${put.status}`);
+            const ta = document.getElementById("robot-gesture-map");
+            if (ta) ta.value = JSON.stringify(map, null, 2);
+            robotDemoOverlay(false);
+            await robotSetUsecase("mirror");
+            notify("Mirror demo ready: move in front of the camera and the arm follows you.", "success", 5000);
+        } catch (e) {
+            robotDemoOverlay(false);
+            notify(`Mirror demo: ${e.message}`, "error");
+        } finally {
+            robot.demoRunning = false;
+        }
+    }
+
+    // Action A: use-case cards drive the mode, and keep the advanced select in sync.
+    async function robotSetUsecase(mode) {
+        if ((mode === "mirror" || mode === "goal_seeking" || mode === "exploring") && !(await robotEnsureCamera())) return;
+        const sel = document.getElementById("select-robot-mode");
+        if (sel) sel.value = mode;
+        document.querySelectorAll(".usecase-card").forEach((c) => {
+            const on = c.dataset.mode === mode
+                || (c.dataset.mode === "goal_seeking" && mode === "exploring");
+            c.classList.toggle("active", on);
+        });
+        const gate = document.getElementById("toggle-robot-gate");
+        await robotPost("/api/robot/mode", { mode, safety_gate: gate ? gate.checked : false });
+    }
+
+    // Action D: say, in plain language, what the robot is doing right now.
+    function robotExplain(t) {
+        const el = document.getElementById("robot-explain");
+        if (!el || !t) return;
+        const g = t.goal || {};
+        let text;
+        if (t.estop) {
+            text = "Emergency stop engaged: every command is locked until safety is reset.";
+        } else if (t.mode === "mirror") {
+            const top = (t.mirror || [])[0];
+            text = top && top.weight > 0.01
+                ? `Your posture matches "${top.name}" (latent similarity ${Math.round(top.score * 100)}%). The arm blends the taught poses by score and interpolates its joints, with no skeleton tracking.`
+                : "Mirror mode: JEPA compares your whole posture to the taught poses in latent space. Strike one of them, or run the mirror demo to teach three.";
+        } else if (t.mode === "goal_seeking") {
+            if (!g.has_goal) text = "Visual mission: capture a target image, then the arm plans on its own to make what it sees match it.";
+            else if (g.phase === "converged") text = "Target reached: the latent distance is below the camera noise floor. The arm keeps checking once a second.";
+            else if (g.phase === "plateau") text = "Plateau: no improvement for 60 steps. A single camera cannot tell some poses apart; this is as close as this view allows.";
+            else text = `The predictive model evaluates 96 candidate actions in latent space and executes the one that shrinks the distance to the target the most (policy: ${g.policy || "random"}, ${g.steps || 0} steps).`;
+        } else if (t.mode === "exploring") {
+            text = `Learning: the arm babbles and records (z, action, next z) transitions from the camera. ${(g.world && g.world.transitions) || 0} collected, ${(g.world && g.world.ready) ? "model ready" : "12 needed before it can plan"}.`;
+        } else if (t.mode === "shadowing") {
+            text = `Gesture shadowing: each recognised gesture fires one mapped action${t.last_gesture ? ` (last: ${t.last_gesture})` : ""}.`;
+        } else {
+            text = "Manual workshop: the sliders drive the joints directly. Pick Mirror or Visual mission above to let JEPA drive.";
+        }
+        if (t.pending) text += " A command is waiting for your approval before it reaches the hardware.";
+        if (el.textContent !== text) el.textContent = text;
+    }
+
     function setupRobotTwin() {
         const canvas = document.getElementById("robot-canvas");
         if (!canvas) return;
@@ -3647,7 +3808,7 @@
         });
         bind("btn-robot-goal-clear", async () => {
             const res = await apiFetch("/api/robot/goal", { method: "DELETE" });
-            if (res.ok) robotApplyTelemetry(await res.json());
+            if (res.ok) { robot.goalViewFor = null; robotApplyTelemetry(await res.json()); }
         });
         bind("btn-api-robot", () => {
             const t = robot.telemetry;
@@ -3665,6 +3826,10 @@
         }
         const gate = document.getElementById("toggle-robot-gate");
         if (gate) gate.addEventListener("change", () => robotPost("/api/robot/mode", { mode: modeSel ? modeSel.value : "manual", safety_gate: gate.checked }));
+        document.querySelectorAll(".usecase-card").forEach((c) => {
+            c.addEventListener("click", () => robotSetUsecase(c.dataset.mode));
+        });
+        bind("btn-robot-mirror-demo", robotMirrorDemo);
         bind("btn-robot-teach-pose", async () => {
             const input = document.getElementById("input-robot-teach-name");
             const name = (input ? input.value : "").trim();
@@ -3711,7 +3876,7 @@
 
     async function robotEnterSection() {
         robotConnectWs();
-        if (!robot.viewTimer) robot.viewTimer = setInterval(robotRefreshAgentView, 250);
+        if (!robot.viewTimer) robot.viewTimer = setInterval(() => { robotRefreshAgentView(); robotRefreshGoalView(); }, 250);
         try {
             const res = await apiFetch("/api/robot/gesture-map");
             if (res.ok) {

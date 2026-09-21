@@ -662,18 +662,21 @@
                         <span class="status-chip" id="robot-conn-chip"><span class="chip-dot" id="robot-conn-dot"></span><span id="robot-conn-text">disconnected</span></span>
                     </div>
                     <div class="robot-topbar-group">
-                        <label class="fact-label" for="select-robot-mode">Mode</label>
-                        <select id="select-robot-mode" class="select-input select-compact">
-                            <option value="manual">Manual</option>
-                            <option value="shadowing">Mode A: gesture shadowing</option>
-                            <option value="mirror">Mirror: follow taught poses</option>
-                            <option value="exploring">Learn: explore and watch</option>
-                            <option value="goal_seeking">Mode C: reach a visual goal</option>
-                        </select>
                         <label class="toggle-label compact" for="toggle-robot-gate">
                             <input type="checkbox" id="toggle-robot-gate" class="checkbox-input">
-                            <span>Mode B: safety gate</span>
+                            <span>Approve before hardware moves</span>
                         </label>
+                        <details class="robot-advanced-modes">
+                            <summary class="roi-summary-hint">Advanced modes</summary>
+                            <label class="visually-hidden" for="select-robot-mode">Mode</label>
+                            <select id="select-robot-mode" class="select-input select-compact">
+                                <option value="manual">Manual</option>
+                                <option value="shadowing">Gesture shadowing (discrete actions)</option>
+                                <option value="mirror">Mirror (continuous teleoperation)</option>
+                                <option value="exploring">Explore and learn (no goal)</option>
+                                <option value="goal_seeking">Visual goal reaching</option>
+                            </select>
+                        </details>
                     </div>
                     <div class="robot-topbar-group robot-topbar-right">
                         <button class="btn btn-sm btn-outline" id="btn-robot-camera">
@@ -683,6 +686,24 @@
                         <button class="btn btn-estop" id="btn-robot-estop" aria-label="Emergency stop">EMERGENCY STOP</button>
                         <button class="btn btn-sm btn-outline" id="btn-robot-reset" style="display: none;">Reset safety</button>
                     </div>
+                </div>
+
+                <div class="robot-usecases" role="group" aria-label="What the robot should do">
+                    <button class="usecase-card" id="usecase-mirror" data-mode="mirror">
+                        <span class="usecase-title">Mirror mode</span>
+                        <span class="usecase-sub">Human teleoperation</span>
+                        <span class="usecase-desc">The arm copies your posture live through the webcam, with no sensor on you and no skeleton tracking: JEPA compares your whole posture in latent space.</span>
+                    </button>
+                    <button class="usecase-card" id="usecase-goal" data-mode="goal_seeking">
+                        <span class="usecase-title">Visual mission</span>
+                        <span class="usecase-sub">Goal reaching</span>
+                        <span class="usecase-desc">Show the arm a target image. It plans its own moves to minimise the latent distance to it. No trajectory programmed, no reward.</span>
+                    </button>
+                    <button class="usecase-card active" id="usecase-manual" data-mode="manual">
+                        <span class="usecase-title">Manual workshop</span>
+                        <span class="usecase-sub">Direct control</span>
+                        <span class="usecase-desc">Drive the joints with the sliders, switch backend, calibrate the hardware.</span>
+                    </button>
                 </div>
 
                 <div class="robot-banner robot-banner-estop" id="robot-estop-banner" role="alert" style="display: none;">
@@ -705,8 +726,16 @@
                             </div>
                             <button class="btn btn-sm btn-api" id="btn-api-robot" title="Show the API request">{ } API</button>
                         </div>
-                        <canvas id="robot-canvas" width="720" height="440" role="img" aria-label="3D view of the robot arm"></canvas>
+                        <div class="robot-canvas-wrap">
+                            <canvas id="robot-canvas" width="720" height="440" role="img" aria-label="3D view of the robot arm"></canvas>
+                            <div class="robot-demo-overlay" id="robot-demo-overlay" role="status" style="display: none;">
+                                <div class="robot-demo-title" id="robot-demo-title">Strike the pose</div>
+                                <div class="robot-demo-count" id="robot-demo-count">3</div>
+                                <div class="robot-demo-hint" id="robot-demo-hint"></div>
+                            </div>
+                        </div>
                         <div class="robot-readout" id="robot-readout">J1 0.00  J2 0.00  J3 0.00  J4 0.00  J5 0.00  J6 0.00  gripper 50%</div>
+                        <div class="robot-explain" id="robot-explain">Pick what the robot should do above. Mirror mode copies your posture; Visual mission makes it reach a target image on its own.</div>
                     </div>
 
                     <div class="robot-side-col" tabindex="0" role="region" aria-label="Robot inspector">
@@ -729,13 +758,29 @@
                         <div class="card" id="robot-goal-card">
                             <h3>Learning from the camera</h3>
                             <p class="card-subtitle">In <em>Learn</em> the arm babbles and records <code>(z, action, z next)</code> transitions; in <em>Mode C</em> it plans inside the learned model to reach the captured goal view. Energy is the <code>/api/energy</code> metric.</p>
-                            <div class="agent-view-row">
-                                <div class="agent-view-box">
-                                    <img id="robot-agent-view" alt="What the agent observes" width="224" height="224">
-                                    <span class="agent-view-badge" id="robot-agent-view-badge" style="display: none;">FROZEN SNAPSHOT</span>
-                                    <div class="model-view-placeholder" id="robot-agent-view-placeholder">Camera stopped</div>
+                            <div class="goal-compare">
+                                <div class="goal-compare-side">
+                                    <span class="fact-label">Target image</span>
+                                    <div class="agent-view-box">
+                                        <img id="robot-goal-view" alt="The view captured as the goal">
+                                        <div class="model-view-placeholder" id="robot-goal-view-placeholder">No goal captured</div>
+                                    </div>
+                                    <span class="card-subtitle-inline">What the robot must see</span>
                                 </div>
-                                <p class="card-subtitle" id="robot-agent-view-caption">What the agent observes.</p>
+                                <div class="goal-compare-mid">
+                                    <span class="fact-label">Latent distance</span>
+                                    <div class="goal-energy-dial" id="robot-energy-dial"><span id="robot-energy-dial-text">--</span></div>
+                                    <span class="card-subtitle-inline">JEPA energy E</span>
+                                </div>
+                                <div class="goal-compare-side">
+                                    <span class="fact-label">Current vision</span>
+                                    <div class="agent-view-box">
+                                        <img id="robot-agent-view" alt="What the agent observes">
+                                        <span class="agent-view-badge" id="robot-agent-view-badge" style="display: none;">FROZEN SNAPSHOT</span>
+                                        <div class="model-view-placeholder" id="robot-agent-view-placeholder">Camera stopped</div>
+                                    </div>
+                                    <span class="card-subtitle-inline" id="robot-agent-view-caption">What the camera observes</span>
+                                </div>
                             </div>
                             <ol class="slots-tips robot-steps" id="robot-steps">
                                 <li id="robot-step-camera">Start the camera and point it at the arm.</li>
@@ -779,10 +824,17 @@
                             <h3>Teach by showing</h3>
                             <p class="card-subtitle">Set the arm with the sliders, strike the matching pose in front of the camera, then teach it. In Mirror mode the arm blends every taught pose by how much you look like each one, so it follows you between them. Teach a rest pose too.</p>
                             <div class="robot-side-actions">
-                                <label class="visually-hidden" for="input-robot-teach-name">Pose name</label>
-                                <input type="text" id="input-robot-teach-name" class="input-text" placeholder="Pose name (for example arm up)" maxlength="64">
-                                <button class="btn btn-sm btn-primary" id="btn-robot-teach-pose">Teach this pose</button>
+                                <button class="btn btn-sm btn-primary" id="btn-robot-mirror-demo">Run mirror demo (3 poses)</button>
+                                <span class="card-subtitle-inline">Guided: strike each pose when asked, the arm poses are preset.</span>
                             </div>
+                            <details class="robot-manual-teach">
+                                <summary class="roi-summary-hint">Teach a pose manually</summary>
+                                <div class="robot-side-actions">
+                                    <label class="visually-hidden" for="input-robot-teach-name">Pose name</label>
+                                    <input type="text" id="input-robot-teach-name" class="input-text" placeholder="Pose name (for example arm up)" maxlength="64">
+                                    <button class="btn btn-sm btn-primary" id="btn-robot-teach-pose">Teach this pose</button>
+                                </div>
+                            </details>
                             <div class="mirror-weights" id="robot-mirror-weights" aria-live="polite"></div>
                         </div>
 

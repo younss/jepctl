@@ -231,7 +231,13 @@ pub async fn handle_robot_goal(
     let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
     let from_image = body.as_ref().and_then(|b| b.0.image_base64.clone());
     // The frozen background is kept: goal, memory and future observations must share it.
-    let z = embed_observation(&state, from_image.clone()).await?;
+    let (z, goal_jpeg) = match &from_image {
+        Some(_) => (embed_observation(&state, from_image.clone()).await?, None),
+        None => {
+            let obs = observe_scene(&state).await?;
+            (obs.embedding, Some(std::sync::Arc::new(obs.jpeg)))
+        }
+    };
     // Noise floor: a second observation of the same scene a moment later.
     let noise_floor = if from_image.is_none() {
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
@@ -241,9 +247,29 @@ pub async fn handle_robot_goal(
     };
     let mut core = state.robot.core.lock().await;
     let dims = z.len();
+    if goal_jpeg.is_some() {
+        core.goal_image = goal_jpeg;
+    }
     core.agent.set_goal(z, noise_floor);
     tracing::info!("Latent goal captured from the camera ({} dims, noise floor {:?})", dims, noise_floor);
     Ok(Json(core.telemetry()))
+}
+
+/// GET /api/robot/goal-image - JPEG of the view captured as the goal.
+pub async fn handle_robot_goal_image(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl axum::response::IntoResponse, ApiError> {
+    let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
+    let image = state.robot.core.lock().await.goal_image.clone();
+    let bytes = image.ok_or_else(|| api_error(StatusCode::NOT_FOUND, "No goal captured yet"))?;
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, "image/jpeg".to_string()),
+            (axum::http::header::CACHE_CONTROL, "no-store".to_string()),
+        ],
+        bytes.as_ref().clone(),
+    ))
 }
 
 /// DELETE /api/robot/goal - Forget the goal (the learned world model is kept).
@@ -254,6 +280,7 @@ pub async fn handle_robot_clear_goal(
     let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
     let mut core = state.robot.core.lock().await;
     core.agent.clear_goal();
+    core.goal_image = None;
     Ok(Json(core.telemetry()))
 }
 

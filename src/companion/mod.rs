@@ -106,6 +106,8 @@ pub enum Behaviour {
     Mood {
         value: f32,
     },
+    /// Short "got it" reaction played when something was taught.
+    Acknowledge,
 }
 
 impl Behaviour {
@@ -119,6 +121,7 @@ impl Behaviour {
             Behaviour::Dance => Some(CONTROL_HZ * 4),
             Behaviour::Startle => Some(CONTROL_HZ * 3 / 2),
             Behaviour::Sleep => Some(CONTROL_HZ * 6),
+            Behaviour::Acknowledge => Some(CONTROL_HZ * 6 / 5),
         }
     }
 
@@ -134,6 +137,7 @@ impl Behaviour {
             Behaviour::Startle => "startle".into(),
             Behaviour::Sleep => "sleep".into(),
             Behaviour::Mood { .. } => "mood".into(),
+            Behaviour::Acknowledge => "acknowledge".into(),
         }
     }
 }
@@ -521,6 +525,13 @@ impl CompanionCore {
                         target.right_arm = -1.0;
                         target.mood = 0.05;
                         max_step = 0.02;
+                    }
+                    Behaviour::Acknowledge => {
+                        // Two quick nods, arms up a little, light flash.
+                        target.head_tilt = (w * 16.0).sin() * 0.5 * env;
+                        target.left_arm += 0.5 * env;
+                        target.right_arm += 0.5 * env;
+                        target.mood = 0.95;
                     }
                     Behaviour::Pose { .. } | Behaviour::Mood { .. } => {}
                 }

@@ -832,12 +832,17 @@
                         <div class="robot-readout" id="companion-readout">pan 0.00  tilt 0.00  left 0.00  right 0.00  lean 0.00  mood 30%</div>
                         <div class="companion-senses">
                             <div class="companion-sense">
-                                <span class="fact-label">Seeing</span>
+                                <span class="fact-label">Eyes: what the model sees</span>
+                                <div class="agent-view-box companion-eye-box">
+                                    <img id="companion-eye-view" alt="What the companion sees" width="224" height="224">
+                                    <div class="model-view-placeholder" id="companion-eye-placeholder">Camera stopped</div>
+                                </div>
                                 <strong id="companion-seeing">nothing yet</strong>
                                 <span class="card-subtitle-inline" id="companion-attention">attention: none</span>
                             </div>
                             <div class="companion-sense">
-                                <span class="fact-label">Hearing</span>
+                                <span class="fact-label">Ears: last 1.5 s of audio</span>
+                                <canvas id="companion-ear-canvas" class="companion-ear-canvas" width="320" height="96" role="img" aria-label="Microphone waveform"></canvas>
                                 <strong id="companion-hearing">nothing yet</strong>
                                 <div class="slot-live-track"><div class="slot-live-fill" id="companion-level-bar"></div></div>
                             </div>
@@ -875,6 +880,16 @@
                                 <button class="btn btn-sm btn-outline" id="btn-companion-try">Try behaviour</button>
                             </div>
                             <div class="mirror-weights" id="companion-mirror-weights" aria-live="polite"></div>
+                            <div class="lesson-card" id="companion-lesson" aria-live="polite" style="display: none;">
+                                <div class="lesson-evidence">
+                                    <img id="companion-lesson-image" alt="Frame captured for the lesson" width="112" height="112" style="display: none;">
+                                    <canvas id="companion-lesson-wave" width="224" height="64" style="display: none;" role="img" aria-label="Sound captured for the lesson"></canvas>
+                                </div>
+                                <div class="lesson-text">
+                                    <strong id="companion-lesson-title">Learned</strong>
+                                    <span id="companion-lesson-detail"></span>
+                                </div>
+                            </div>
                         </div>
 
                         <div class="card">

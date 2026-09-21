@@ -149,6 +149,19 @@ impl MicSupervisor {
         Some(resample(&clip, TARGET_RATE))
     }
 
+    /// Peak-normalised envelope of the last `seconds`, `points` values in `[0, 1]`
+    /// (max absolute sample per bucket). Empty when nothing was captured.
+    pub fn waveform(&self, seconds: f32, points: usize) -> Vec<f32> {
+        let ring = self.ring.lock().unwrap_or_else(|e| e.into_inner());
+        if ring.samples.is_empty() || points == 0 {
+            return Vec::new();
+        }
+        let want = ((seconds.max(0.1)) * ring.rate as f32) as usize;
+        let start = ring.samples.len().saturating_sub(want);
+        let tail: Vec<f32> = ring.samples.iter().skip(start).copied().collect();
+        envelope(&tail, points)
+    }
+
     /// Feed samples directly (tests and headless use).
     #[doc(hidden)]
     pub fn push_samples(&self, samples: &[f32], rate: u32) {
@@ -272,6 +285,22 @@ impl MicSupervisor {
     }
 }
 
+/// Max absolute value per bucket, scaled so the loudest bucket is 1 (all zeros when silent).
+pub fn envelope(samples: &[f32], points: usize) -> Vec<f32> {
+    if samples.is_empty() || points == 0 {
+        return Vec::new();
+    }
+    let bucket = samples.len().div_ceil(points).max(1);
+    let mut out: Vec<f32> = samples.chunks(bucket).map(|c| c.iter().fold(0.0f32, |m, s| m.max(s.abs()))).collect();
+    let peak = out.iter().cloned().fold(0.0f32, f32::max);
+    if peak > 1e-4 {
+        for v in out.iter_mut() {
+            *v /= peak;
+        }
+    }
+    out
+}
+
 /// Input devices known to the audio host.
 pub fn list_mic_devices() -> Vec<MicDeviceInfo> {
     let host = cpal::default_host();
@@ -306,6 +335,9 @@ mod tests {
         assert!((clip.samples.len() as i64 - 8_000).abs() <= 2, "{}", clip.samples.len());
         let h = mic.health();
         assert!((h.buffered_seconds - 1.0).abs() < 0.01);
+        let wf = mic.waveform(0.5, 50);
+        assert_eq!(wf.len(), 50);
+        assert!(wf.iter().cloned().fold(0.0f32, f32::max) > 0.99);
         assert!(h.level > 0.2 && h.level < 0.6, "{}", h.level);
         // Capacity bounds the ring.
         for _ in 0..20 {

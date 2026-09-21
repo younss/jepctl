@@ -146,6 +146,7 @@ An audio model (AudioMAE) loads into its own slot next to the vision model, so t
 | POST | `/api/mic/start` | inference | `{ "device"?: index }` (system default otherwise) |
 | POST | `/api/mic/stop` | inference | |
 | GET | `/api/mic/status` | inference | active, source, buffered seconds, level (RMS 0 to 1), device name |
+| GET | `/api/mic/waveform?seconds=1.5&points=120` | inference | peak envelope of the last seconds (what the Companion tab draws) |
 | POST | `/api/sounds` | inference | `{ "name", "is_neutral"?, "seconds"?: 1.5, "embedding"? }` register (or add a sample to) a sound from the microphone |
 | GET / DELETE | `/api/sounds[?model=&all=]` | inference | list / clear |
 | DELETE | `/api/sounds/{name}` | inference | |
@@ -274,6 +275,7 @@ The Companion tab is a second WebGL character (head that pans and tilts, two arm
 - **Attention** is not learned: the head follows where the picture moves (motion centroid between consecutive frames), so it visibly watches you as soon as the camera runs in Interactive mode.
 - **Teach from camera**: strike a pose, name it, choose what the companion does. "Hold this pose" maps it to the pose set with the sliders and is **mirrored**: taught poses are blended by similarity, so raising your arm slowly raises its arm through the poses you showed. Any other behaviour (nod, shake, wave left/right, cheer, dance, startle, sleep) is triggered when the pose is recognised, with a 2 s cooldown.
 - **Teach from microphone**: make a sound (clap, whistle, a word), name it, choose a behaviour. Teach the quiet room first as a neutral sound so silence never triggers anything; a loud unknown sound startles it.
+- Every lesson is visible: the tab shows the exact frame or the waveform of the clip that was embedded, the companion nods to acknowledge, and the Eyes and Ears panels show what the model sees and hears live. A sound lesson with a near-zero peak means the microphone is muted or not permitted.
 - Cues persist in `~/.jepctl/companion.json`; the samples live in the gesture and sound registries, bound to the models that embedded them.
 
 | Method | Path | Description |
@@ -282,7 +284,7 @@ The Companion tab is a second WebGL character (head that pans and tilts, two arm
 | POST | `/api/companion/mode` | `{ "mode": "manual" \| "interactive" }` |
 | POST | `/api/companion/pose` | `{ head_pan, head_tilt, left_arm, right_arm, lean, mood }` (all -1 to 1, mood 0 to 1) |
 | POST | `/api/companion/behaviour` | `{ "behaviour": "nod" }` or `{ "behaviour": "pose", "pose": {...} }` or `{ "behaviour": "mood", "value": 0.8 }` |
-| POST | `/api/companion/teach` | `{ "kind": "gesture" \| "sound", "name", "behaviour"?, "pose"?, "seconds"? }`: registers what the camera or microphone captures now and maps it (default: hold the current pose) |
+| POST | `/api/companion/teach` | `{ "kind": "gesture" \| "sound", "name", "behaviour"?, "pose"?, "seconds"? }`: registers what the camera or microphone captures now and maps it (default: hold the current pose). Returns the evidence: `thumbnail` (the exact frame) or `waveform` and `level` (the exact clip); the companion plays an acknowledge reaction |
 | GET / PUT | `/api/companion/cues` | list / map an already registered gesture or sound (`{ kind, name, behaviour, ... }`) |
 | DELETE | `/api/companion/cues/{kind}/{name}` | forget a cue |
 | GET | `/api/companion/ws[?token=]` | WebSocket telemetry at 30 Hz, accepts a pose back |

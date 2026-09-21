@@ -602,6 +602,13 @@ async fn sounds_and_companion_learn_from_the_microphone() {
     assert_eq!(status, StatusCode::CREATED, "{body}");
     assert_eq!(body["cue"]["behaviour"], "nod");
     assert_eq!(body["sample_count"], 2);
+    assert_eq!(body["waveform"].as_array().unwrap().len(), 120);
+    assert!(body["level"].as_f64().unwrap() > 0.3);
+    let (status, wf) = call(r, "GET", "/api/mic/waveform?points=40", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(wf["points"].as_array().unwrap().len(), 40);
+    let (_, c) = call(r, "GET", "/api/companion/status", None).await;
+    assert_eq!(c["animation"], "acknowledge");
     let (status, body) = call(
         r,
         "POST",
@@ -622,6 +629,7 @@ async fn sounds_and_companion_learn_from_the_microphone() {
     assert_eq!(status, StatusCode::CREATED, "{body}");
     assert_eq!(body["cue"]["behaviour"], "pose");
     assert_eq!(body["cue"]["pose"]["left_arm"], 1.0);
+    assert!(body["thumbnail"].as_str().unwrap().starts_with("data:image/jpeg;base64,"));
     let (status, cues) = call(r, "GET", "/api/companion/cues", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(cues.as_array().unwrap().len(), 2);

@@ -7,7 +7,7 @@ use crate::server::companion_handlers::{
     handle_clear_sounds, handle_companion_behaviour, handle_companion_cues, handle_companion_delete_cue,
     handle_companion_mode, handle_companion_pose, handle_companion_set_cue, handle_companion_status,
     handle_companion_teach, handle_companion_ws, handle_create_sound, handle_delete_sound, handle_list_sounds,
-    handle_match_sound, handle_mic_start, handle_mic_status, handle_mic_stop, handle_mics,
+    handle_match_sound, handle_mic_start, handle_mic_status, handle_mic_stop, handle_mic_waveform, handle_mics,
 };
 use crate::server::gesture_handlers::{
     handle_camera_frame, handle_clear_gestures, handle_clear_roi, handle_create_gesture, handle_delete_gesture,
@@ -91,6 +91,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/mic/start", post(handle_mic_start))
         .route("/api/mic/stop", post(handle_mic_stop))
         .route("/api/mic/status", get(handle_mic_status))
+        .route("/api/mic/waveform", get(handle_mic_waveform))
         .route("/api/sounds", post(handle_create_sound).get(handle_list_sounds).delete(handle_clear_sounds))
         .route("/api/sounds/match", post(handle_match_sound))
         .route("/api/sounds/{name}", delete(handle_delete_sound))

@@ -2810,3 +2810,73 @@ body.dark-theme { font-size: 13px; }
         grid-template-columns: 1fr;
     }
 }
+
+.companion-eye-box {
+    width: 100%;
+    max-width: 224px;
+    aspect-ratio: 1 / 1;
+    height: auto;
+}
+
+.companion-eye-box img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+}
+
+.companion-ear-canvas {
+    width: 100%;
+    max-width: 320px;
+    height: 96px;
+    display: block;
+    background-color: #000;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+}
+
+.lesson-card {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-top: 12px;
+    padding: 10px;
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+}
+
+.lesson-evidence img,
+.lesson-evidence canvas {
+    display: block;
+    border-radius: 6px;
+    background-color: #000;
+}
+
+.lesson-evidence img {
+    width: 112px;
+    height: 112px;
+    object-fit: contain;
+}
+
+.lesson-evidence canvas {
+    width: 224px;
+    height: 64px;
+}
+
+.lesson-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    min-width: 0;
+}
+
+.lesson-text span {
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+}
+
+.companion-sense .fact-label {
+    width: auto;
+    white-space: nowrap;
+}

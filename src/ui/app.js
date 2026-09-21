@@ -3819,9 +3819,11 @@
         for (const side of [-1, 1]) {
             const elev = side < 0 ? p.left_arm : p.right_arm;
             const angle = (elev + 1) * 0.5 * Math.PI; // -1 hanging (0), 1 straight up (pi)
-            const shoulder = m4multiply(torso, m4translate(side * 0.13, 0.29, 0));
+            const shoulder = m4multiply(torso, m4translate(side * 0.135, 0.29, 0));
             gfx.drawBox(viewProj, shoulder, [0.05, 0.05, 0.05], dark);
-            const arm = m4multiply(shoulder, m4rotateZ(-side * angle));
+            // Rotate about the shoulder so the arm swings out to the side (never
+            // through the torso): positive Z rotation lifts the right arm outward.
+            const arm = m4multiply(shoulder, m4rotateZ(side * angle));
             gfx.drawBox(viewProj, m4multiply(arm, m4translate(0, -0.11, 0)), [0.045, 0.22, 0.045], body);
             gfx.drawBox(viewProj, m4multiply(arm, m4translate(0, -0.23, 0)), [0.06, 0.04, 0.06], light);
         }
@@ -4105,6 +4107,99 @@
         }
     }
 
+    async function companionRefreshEye() {
+        const img = document.getElementById("companion-eye-view");
+        const ph = document.getElementById("companion-eye-placeholder");
+        if (!img) return;
+        if (!state.isStreaming) {
+            if (ph) { ph.style.display = "flex"; ph.textContent = "Camera stopped"; }
+            return;
+        }
+        if (companion.eyeBusy) return;
+        companion.eyeBusy = true;
+        try {
+            const res = await apiFetch("/api/camera/frame");
+            if (res.ok) {
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                img.src = url;
+                if (companion.eyeUrl) URL.revokeObjectURL(companion.eyeUrl);
+                companion.eyeUrl = url;
+                if (ph) ph.style.display = "none";
+            } else if (ph) {
+                ph.style.display = "flex";
+                ph.textContent = res.status === 404 ? "Waiting for the first frame..." : `Camera view failed (${res.status})`;
+            }
+        } catch (e) {
+            console.warn("companion eye view failed", e);
+        } finally {
+            companion.eyeBusy = false;
+        }
+    }
+
+    function drawWaveform(canvas, points, color) {
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        const w = canvas.width, h = canvas.height;
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, w, h);
+        ctx.strokeStyle = "rgba(255,255,255,0.12)";
+        ctx.beginPath();
+        ctx.moveTo(0, h / 2);
+        ctx.lineTo(w, h / 2);
+        ctx.stroke();
+        if (!points || !points.length) return;
+        ctx.fillStyle = color || "#4ade80";
+        const bw = w / points.length;
+        points.forEach((v, i) => {
+            const bh = Math.max(1, v * (h - 6));
+            ctx.fillRect(i * bw, (h - bh) / 2, Math.max(1, bw - 1), bh);
+        });
+    }
+
+    async function companionRefreshEar() {
+        const canvas = document.getElementById("companion-ear-canvas");
+        if (!canvas || companion.earBusy) return;
+        companion.earBusy = true;
+        try {
+            const res = await apiFetch("/api/mic/waveform?points=120");
+            if (res.ok) {
+                const data = await res.json();
+                drawWaveform(canvas, data.active ? data.points : [], data.level > 0.02 ? "#4ade80" : "#6b7280");
+            }
+        } catch (e) {
+            console.warn("companion waveform failed", e);
+        } finally {
+            companion.earBusy = false;
+        }
+    }
+
+    function companionShowLesson(kind, payload, r) {
+        const card = document.getElementById("companion-lesson");
+        const img = document.getElementById("companion-lesson-image");
+        const wave = document.getElementById("companion-lesson-wave");
+        const title = document.getElementById("companion-lesson-title");
+        const detail = document.getElementById("companion-lesson-detail");
+        if (!card) return;
+        card.style.display = "flex";
+        const what = payload.behaviour === "pose" ? "mirrors this pose" : payload.behaviour.replace("_", " ");
+        if (kind === "gesture") {
+            if (img && r.thumbnail) { img.src = r.thumbnail; img.style.display = "block"; }
+            if (wave) wave.style.display = "none";
+            if (title) title.textContent = `Learned to see "${payload.name}" (sample ${r.sample_count})`;
+            if (detail) detail.textContent = `This is the frame it embedded with ${r.model}. Reaction: ${what}. Show the pose again from a slightly different angle and teach it once more.`;
+        } else {
+            if (img) img.style.display = "none";
+            if (wave) { wave.style.display = "block"; drawWaveform(wave, r.waveform, "#f59e0b"); }
+            if (title) title.textContent = `Learned to hear "${payload.name}" (sample ${r.sample_count})`;
+            const quiet = (r.level || 0) < 0.02;
+            if (detail) detail.textContent = quiet
+                ? `The microphone heard almost nothing (peak ${((r.level || 0) * 100).toFixed(1)}%). Check the microphone permission for the app, then teach the sound again.`
+                : `This is the 1.5 s clip it embedded with ${r.model} (peak ${Math.round((r.level || 0) * 100)}%). Reaction: ${what}. Repeat the sound to add a sample.`;
+        }
+    }
+
     async function companionRefreshMic() {
         try {
             const res = await apiFetch("/api/mic/status");
@@ -4220,9 +4315,8 @@
             if (!(await robotEnsureCamera())) return;
             const r = await companionPost("/api/companion/teach", payload);
             if (r) {
-                notify(`Learned to see "${payload.name}" (${r.sample_count} sample${r.sample_count > 1 ? "s" : ""}): ${payload.behaviour === "pose" ? "mirrors this pose" : payload.behaviour.replace("_", " ")}`, "success", 4000);
-                const input = document.getElementById("input-companion-teach-name");
-                if (input && r.sample_count >= 3) input.value = "";
+                companionShowLesson("gesture", payload, r);
+                notify(`Learned to see "${payload.name}" (${r.sample_count} sample${r.sample_count > 1 ? "s" : ""})`, "success", 3000);
             }
         });
         bind("btn-companion-teach-sound", async () => {
@@ -4235,7 +4329,10 @@
             notify(`Make the sound now: capturing 1.5 s`, "info", 1600);
             await new Promise((r) => setTimeout(r, 1500));
             const r = await companionPost("/api/companion/teach", payload);
-            if (r) notify(`Learned to hear "${payload.name}" (${r.sample_count} sample${r.sample_count > 1 ? "s" : ""}): ${payload.behaviour.replace("_", " ")}. Repeat it a couple of times.`, "success", 4000);
+            if (r) {
+                companionShowLesson("sound", payload, r);
+                notify(`Learned to hear "${payload.name}" (${r.sample_count} sample${r.sample_count > 1 ? "s" : ""})`, (r.level || 0) < 0.02 ? "warning" : "success", 3000);
+            }
         });
         bind("btn-companion-teach-ambient", async () => {
             if (!(companion.mic && companion.mic.active)) {
@@ -4264,6 +4361,7 @@
         companionUpdateCameraButton();
         await companionRefreshMic();
         if (!companion.statusTimer) companion.statusTimer = setInterval(() => { companionRefreshMic(); companionUpdateCameraButton(); }, 1000);
+        if (!companion.senseTimer) companion.senseTimer = setInterval(() => { companionRefreshEye(); companionRefreshEar(); }, 250);
         if (!companion.raf) companion.raf = requestAnimationFrame(companionAnimate);
     }
 
@@ -4272,6 +4370,10 @@
         if (companion.statusTimer) {
             clearInterval(companion.statusTimer);
             companion.statusTimer = null;
+        }
+        if (companion.senseTimer) {
+            clearInterval(companion.senseTimer);
+            companion.senseTimer = null;
         }
         if (companion.raf) {
             cancelAnimationFrame(companion.raf);

@@ -10,6 +10,7 @@ All notable changes to this project are documented here. The format follows
 - **Companion**: a second virtual WebGL robot that learns from the person in front of it. Head follows motion, taught poses are mirrored by similarity, taught sounds and poses trigger behaviours (nod, shake, wave, cheer, dance, startle, sleep). `src/companion/`, `/api/companion/*`, persisted cues in `~/.jepctl/companion.json`.
 - **Microphone capture** (`cpal`) with a 12 s ring, `/api/mic/*`, and **sounds**: few-shot audio prototypes (`/api/sounds`, `~/.jepctl/sounds.json`) matched like gestures.
 - **Audio slot**: an audio model loads next to the vision model instead of replacing it; `/api/status` reports `audio_model` and `audio_weights`; `POST /api/models/unload` takes an optional `model_name`.
+- Companion feedback: live Eyes (model view) and Ears (waveform, `GET /api/mic/waveform`) panels, a lesson card with the captured frame or clip, and an acknowledge reaction on every lesson.
 - **Mirror mode** for the arm: "Teach this pose" registers the camera view and maps it to the current joints; in Mirror mode every taught pose is blended by match score so the arm follows between them. Telemetry carries `mirror` weights.
 
 ### Fixed

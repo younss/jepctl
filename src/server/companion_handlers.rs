@@ -77,6 +77,27 @@ pub async fn handle_mic_status(State(state): State<AppState>, headers: HeaderMap
     Ok(Json(state.mic.health()))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct WaveformQuery {
+    pub seconds: Option<f32>,
+    pub points: Option<usize>,
+}
+
+/// GET /api/mic/waveform - Envelope of the last seconds of audio for the UI meter.
+pub async fn handle_mic_waveform(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<WaveformQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
+    let seconds = q.seconds.unwrap_or(SOUND_WINDOW_SECONDS).clamp(0.1, 10.0);
+    let points = q.points.unwrap_or(120).clamp(8, 1000);
+    let h = state.mic.health();
+    Ok(Json(
+        json!({ "active": h.active, "level": h.level, "seconds": seconds, "points": state.mic.waveform(seconds, points) }),
+    ))
+}
+
 /// Embedding of the last `seconds` of microphone audio with the audio model.
 pub struct CurrentAudioEmbedding {
     pub model: String,
@@ -84,6 +105,8 @@ pub struct CurrentAudioEmbedding {
     pub patches: Option<Vec<Vec<f32>>>,
     pub level: f32,
     pub latency_ms: f64,
+    /// Envelope of the embedded clip (120 points) for display.
+    pub waveform: Vec<f32>,
 }
 
 pub async fn embed_current_audio(state: &AppState, seconds: f32) -> Result<CurrentAudioEmbedding, ApiError> {
@@ -97,9 +120,10 @@ pub async fn embed_current_audio(state: &AppState, seconds: f32) -> Result<Curre
         return Err(api_error(StatusCode::CONFLICT, "Microphone has not captured audio yet"));
     };
     let level = state.mic.health().level;
+    let waveform = crate::media::mic::envelope(&clip.samples, 120);
     let (model, _dim, embedding, patches, latency_ms) = state.engine.embed_audio(&clip).await.map_err(engine_error)?;
     state.embeddings_total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    Ok(CurrentAudioEmbedding { model, embedding, patches, level, latency_ms })
+    Ok(CurrentAudioEmbedding { model, embedding, patches, level, latency_ms, waveform })
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +339,15 @@ pub struct TeachResponse {
     pub cue: Cue,
     pub sample_count: usize,
     pub model: String,
+    /// Gesture cues: JPEG data URI of exactly what the model saw.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thumbnail: Option<String>,
+    /// Sound cues: envelope of the clip that was embedded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waveform: Option<Vec<f32>>,
+    /// Peak level of that clip (0 to 1); near zero means the microphone heard nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level: Option<f32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -446,6 +479,9 @@ pub async fn handle_companion_teach(
         return Err(api_error(StatusCode::BAD_REQUEST, "'name' must be 1-64 characters"));
     }
     let now = now_secs();
+    let mut thumbnail = None;
+    let mut waveform = None;
+    let mut level = None;
     let (model, sample_count) = match p.kind {
         CueKind::Gesture => {
             let view = embed_current_view(&state).await?;
@@ -456,7 +492,8 @@ pub async fn handle_companion_teach(
             let mut store = state.gestures.write().await;
             let g = store.get_mut_or_insert(&name, &view.model, false, now);
             g.add_sample(&view.embedding, view.patches.as_deref(), now).map_err(engine_error)?;
-            g.thumbnail = Some(thumb);
+            g.thumbnail = Some(thumb.clone());
+            thumbnail = Some(thumb);
             let n = g.samples.len();
             if let Err(e) = store.save() {
                 tracing::warn!("Could not persist gesture registry: {}", e);
@@ -466,6 +503,9 @@ pub async fn handle_companion_teach(
         CueKind::Sound => {
             let seconds = p.seconds.unwrap_or(SOUND_WINDOW_SECONDS).clamp(0.3, 10.0);
             let a = embed_current_audio(&state, seconds).await?;
+            let peak = state.mic.latest_clip(seconds).map(|c| c.samples.iter().fold(0.0f32, |m, s| m.max(s.abs())));
+            level = peak;
+            waveform = Some(a.waveform.clone());
             let mut store = state.sounds.write().await;
             let g = store.get_mut_or_insert(&name, &a.model, false, now);
             g.add_sample(&a.embedding, a.patches.as_deref(), now).map_err(engine_error)?;
@@ -481,8 +521,10 @@ pub async fn handle_companion_teach(
     let cue = Cue { kind: p.kind, name, behaviour };
     core.set_cue(cue.clone());
     persist_memory(&state, &mut core);
+    // Visible "got it": the companion reacts to every lesson.
+    core.perform(Behaviour::Acknowledge);
     tracing::info!("Companion learned {:?} cue '{}' -> {}", cue.kind, cue.name, cue.behaviour.label());
-    Ok((StatusCode::CREATED, Json(TeachResponse { cue, sample_count, model })))
+    Ok((StatusCode::CREATED, Json(TeachResponse { cue, sample_count, model, thumbnail, waveform, level })))
 }
 
 /// GET /api/companion/ws - Telemetry at the control rate.

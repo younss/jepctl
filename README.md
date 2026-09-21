@@ -270,13 +270,32 @@ Serial settings (port, baud, servo IDs, tick calibration, direction) live under 
 
 ## Companion (a virtual robot that watches and listens)
 
-The Companion tab is a second WebGL character (head that pans and tilts, two arms, lean, a mood light) meant to be taught by a person rather than by moving hardware. It does not need an arm: it learns from **you**, through the camera and the microphone.
+The Companion tab is a second WebGL character (head that pans and tilts, two arms, lean, a mood light) meant to be taught by a person rather than by moving hardware. It does not need an arm: it learns from **you**, through the camera and the microphone. Nothing is trained; every lesson is one embedding added to a few-shot prototype, exactly like the gesture sandbox, in two modalities.
 
-- **Attention** is not learned: the head follows where the picture moves (motion centroid between consecutive frames), so it visibly watches you as soon as the camera runs in Interactive mode.
-- **Teach from camera**: strike a pose, name it, choose what the companion does. "Hold this pose" maps it to the pose set with the sliders and is **mirrored**: taught poses are blended by similarity, so raising your arm slowly raises its arm through the poses you showed. Any other behaviour (nod, shake, wave left/right, cheer, dance, startle, sleep) is triggered when the pose is recognised, with a 2 s cooldown.
-- **Teach from microphone**: make a sound (clap, whistle, a word), name it, choose a behaviour. Teach the quiet room first as a neutral sound so silence never triggers anything; a loud unknown sound startles it.
-- Every lesson is visible: the tab shows the exact frame or the waveform of the clip that was embedded, the companion nods to acknowledge, and the Eyes and Ears panels show what the model sees and hears live. A sound lesson with a near-zero peak means the microphone is muted or not permitted.
-- Cues persist in `~/.jepctl/companion.json`; the samples live in the gesture and sound registries, bound to the models that embedded them.
+### Step by step
+
+1. **Load two models.** In *Gestures* load a vision model (`facebook/dinov2-small` recommended); in *Models* load `gaunernst/vit_base_patch16_1024_128.audiomae_as2m`. The audio model has its own slot, so both stay loaded; the header shows the vision model and `/api/status` shows both.
+2. **Open the Companion tab and switch Mode to Interactive.** The camera and the microphone start (macOS asks for permission the first time). The head starts following where the picture moves: that part is not learned. The *Eyes* panel shows the exact frame the model receives; the *Ears* panel draws the last 1.5 s of audio.
+3. **Teach the quiet room.** Stay silent and press *Teach quiet room*. This registers the ambient noise as a neutral sound, so silence never triggers a cue. Do this before any other sound.
+4. **Teach a pose to mirror.** Set the companion's body with the *Body* sliders (for example left arm up), type a name, leave the behaviour on *Hold this pose (mirror)*, strike the same pose in front of the camera and press *Teach from camera*. Repeat two or three times from slightly different angles: each press adds a sample. Teach a *rest* pose too. Five to ten clearly different poses work best.
+5. **Teach a pose that triggers a behaviour.** Type a name, pick *Nod*, *Wave right arm*, *Dance*... strike the pose, *Teach from camera*.
+6. **Teach a sound.** Type a name, pick a behaviour (a sound cannot be mirrored), press *Teach from microphone* and make the sound during the 1.5 s capture (clap, whistle, a word). Repeat it two or three times.
+7. **Check every lesson.** The lesson card shows what was embedded: the frame, or the waveform with its peak level. A peak near 0% means the microphone is muted or not permitted: fix that and teach again. The companion nods to acknowledge each lesson. *Try behaviour* plays the selected behaviour without teaching anything.
+8. **Use it.** In Interactive mode: your taught poses are blended by similarity (*mirror weights* show who wins), other pose cues and sound cues fire their behaviour with a 2 s cooldown, a loud unknown sound startles it. *What it learned* lists every cue with a *Forget* button. Cues persist in `~/.jepctl/companion.json`, samples in the gesture and sound registries.
+
+### How it works
+
+- **Eyes**: the camera frame is embedded by the vision model (same centre crop, ROI and normalisation as the Gestures tab) and scored against every taught pose with the gesture matcher (contrastive scoring, threshold, margin), about 3 times a second.
+- **Ears**: the last 1.5 s of microphone audio are resampled to 16 kHz, turned into a log-mel spectrogram, zero padded to the model window and embedded by AudioMAE, then scored against the taught sounds, about 1.4 times a second. A registered neutral sound absorbs silence.
+- **Attention**: a 32x24 grayscale thumbnail of each frame is diffed with the previous one (10 Hz); the centroid of the changed pixels drives the head's pan and tilt.
+- **Mirror**: every pose lesson gets a softmax weight from its match score (temperature 0.06; more than 0.2 below the best gets nothing; under a score of 0.35 nothing moves). The body goes to the weighted average, so between "arm down" and "arm up" it passes through the middle as you raise yours. It interpolates between what you taught; it does not extrapolate.
+- **Body**: a 30 Hz loop moves the pose toward its target under a speed limit, runs animations as time envelopes (nod, shake, wave left/right, cheer, dance, startle, sleep, acknowledge), adds idle breathing and blinks, and publishes telemetry on `/api/companion/ws`; the WebGL view draws it.
+
+### When it feels wrong
+
+- One camera cannot tell depth from elevation: leaning toward it and raising an arm can look alike. Teach poses that differ clearly in the picture.
+- One sound and no neutral: everything matches it (a single prototype is scored by plain cosine). Teach the quiet room first, then several samples per sound.
+- People walking behind you count as motion: the head will look at them. Use the ROI in the Gestures tab to restrict what the model sees.
 
 | Method | Path | Description |
 |---|---|---|

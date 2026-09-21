@@ -28,11 +28,14 @@
 \newcommand{\jepctl}{\texttt{jepctl}}
 \newcommand{\code}[1]{\texttt{#1}}
 
-\title{\jepctl{}: A Local Runtime for Joint-Embedding Predictive\\ Architectures, with Few-Shot Perception, an Online\\ Latent World Model, and Robot Control}
+\title{\jepctl{}: Putting Joint-Embedding Predictive Architectures\\ in Practitioners' Hands\\[2mm]
+\large An engineering report on a local runtime for JEPA encoders}
 
-% TODO(author): replace with your full name and affiliation.
+% TODO(author): replace with your full name and how you want to be described.
+% "Independent developer" matches the genre of this report; use your employer or
+% "Independent engineer" if you prefer.
 \author{Younss\\
-  Independent researcher\\
+  Independent developer\\
   \texttt{younssiga@gmail.com}}
 
 \date{\today}
@@ -42,45 +45,46 @@
 
 \begin{abstract}
 \sloppy
-Joint-Embedding Predictive Architectures (JEPAs) learn by predicting representations
-rather than pixels, and a growing body of work shows that the resulting latent spaces
-support recognition, anomaly detection, and control. That capability is largely
-confined to research code: running a JEPA encoder on a laptop, against a live camera or
-microphone, and wiring it to an application still requires assembling a Python stack by
-hand. We present \jepctl{}, a single-binary local runtime that makes JEPA-style
-encoders operational the way \code{ollama} made local language models operational. It
-loads published checkpoints with strict, auditable weight coverage; exposes embeddings
-over a REST and SSE API and a command line; and ships four worked applications that use
-only latent-space operations: (i) few-shot visual and audio recognition from a handful
-of captures, with a per-patch divergence map that localises the deviation; (ii) an
-online latent world model over the live camera that predicts the next embedding and
-reports its prediction error as a surprise signal, following the design of LeWorldModel
-\cite{lewm2026}; (iii) a robot arm driven either by continuous posture mirroring or by
-minimising a latent energy toward a goal image, with no trajectory programming and no
-reward; and (iv) a multimodal companion that fuses vision and audio locally at
-\mbox{30\,Hz}. Everything runs on device: no cloud, no transcription model, and no
-object detector. We report single-machine measurements on an Apple M5 Pro, including
-full checkpoint coverage for six published encoders, per-frame latencies of 12--46\,ms
-for a DINOv2-S front end, and a peak resident set of 1.98\,GB for a V-JEPA~2 clip
-forward after removing an autograd-graph retention bug. We also state plainly what this
-class of model does not provide: it is not generative and it does not produce metric
-depth. \jepctl{} is Apache-2.0 licensed and available at
+This is an engineering report, not a research contribution. Joint-Embedding Predictive
+Architectures (JEPAs) are an active research programme
+\cite{lecun2022path,ijepa2023,vjepa2_2025,lewm2026,jepaanything2026}, and the
+checkpoints and results they produce are published openly. Turning them into something a
+practitioner can actually run --- against their own camera, on their own laptop, wired
+into their own application --- is a separate, unglamorous amount of work that nobody had
+done. \jepctl{} is that work: a single-binary local runtime, written in Rust with no
+Python dependency, that pulls published JEPA-style checkpoints, reports exactly how much
+of each one loaded, and serves embeddings over a REST and SSE API, a command line, and a
+desktop testbench. On top of it I packaged four worked demonstrations, each built only
+from operations the research already justifies: few-shot visual and audio recognition
+with a per-patch divergence map; an online latent world model over the live camera that
+predicts the next embedding and surfaces its prediction error as a surprise signal,
+following the loop described in LeWorldModel \cite{lewm2026}; a robot arm driven by
+posture mirroring or by minimising a latent distance to a goal image; and a multimodal
+companion that fuses vision and audio locally. I trained nothing, invented no method, and
+ran no comparative evaluation. What I report instead is what an integrator needs to know:
+the checkpoint coverage obtained for six published encoders, the latencies and memory
+footprints measured on one machine, one memory-retention defect that cost a factor of
+seven in resident memory until it was found, and an explicit account of what this class
+of model does not do. \jepctl{} is Apache-2.0 licensed and available at
 \url{https://github.com/younss/jepctl}.
 \end{abstract}
 
 \section{Introduction}
 
 A predictive model of the world is useful only if something can run it. The JEPA line of
-work \cite{lecun2022path,ijepa2023,vjepa2_2025} argues that an agent should learn by
-predicting \emph{representations} of what it has not yet seen, rather than reconstructing
-pixels, and recent results extend that principle to end-to-end training from raw pixels
-\cite{lewm2026} and to domains far from vision \cite{jepaanything2026}. What has not kept
-pace is the path from a published checkpoint to a working local system. Language models
-crossed that gap when single-binary runtimes made ``pull a model, run it, call an API''
-a one-line operation \cite{ollama}. Representation learning has no equivalent: a
-practitioner who wants to use I-JEPA or V-JEPA~2 against their own webcam assembles a
-Python environment, writes their own preprocessing, and discovers only at inference time
-whether the checkpoint layout they downloaded matches the architecture they built.
+work \cite{lecun2022path,ijepa2023,vjepa2_2025} argues that a system should learn by
+predicting \emph{representations} of what it has not yet seen rather than reconstructing
+pixels; recent work trains such a model stably end to end from raw pixels
+\cite{lewm2026} and argues the principle carries far beyond vision
+\cite{jepaanything2026}. The science is being done, and done in the open: the papers are
+public, the checkpoints are downloadable.
+
+What is missing is the last mile. A practitioner who wants to point I-JEPA or V-JEPA~2 at
+their own webcam assembles a Python environment, writes their own preprocessing, guesses
+at the checkpoint's tensor naming, and discovers only at inference time whether any of it
+was right. Language models crossed that gap when single-binary runtimes turned ``pull a
+model, run it, call an API'' into one line \cite{ollama}. Representation learning has had
+no equivalent.
 
 \begin{figure}[t]
 \centering
@@ -126,75 +130,94 @@ integration surface and the security defaults. Figure by the author.}
 \label{fig:overview}
 \end{figure}
 
-\jepctl{} is that missing runtime. It is a single Rust binary with no Python dependency
-that (a) downloads and loads JEPA-style checkpoints with an explicit, auditable report of
-how many tensors were covered, (b) serves embeddings over HTTP, a live SSE stream, and a
-command line, and (c) ships a desktop testbench in which four applications are built
-entirely out of latent-space operations.
+\jepctl{} is an attempt to build one. It is a single Rust binary with no Python
+dependency that downloads and loads JEPA-style checkpoints with an explicit report of how
+many tensors were covered, serves embeddings over HTTP, a live SSE stream, and a command
+line, and ships a desktop testbench with four worked demonstrations.
 
-The contribution of this paper is not a new architecture or a new training objective. It
-is a system, and three claims about it:
+\subsection{Scope: what this paper is, and what it is not}
+\label{sec:scope}
 
-\begin{enumerate}
-  \item \textbf{Operational honesty is a feature, not an implementation detail.} Loading
-  a checkpoint partially yields a model that still returns vectors of the right shape and
-  is therefore indistinguishable from a working one at the API level. \jepctl{} refuses
-  to serve such a model and reports coverage explicitly (Section~\ref{sec:weights}).
-  \item \textbf{A frozen encoder plus a small online predictor is enough to demonstrate
-  the world-model loop on a laptop.} We follow the structure of LeWorldModel
-  \cite{lewm2026} --- predict the next embedding, read the prediction error as surprise
-  --- but freeze the encoder and fit the predictor online on the live stream, which makes
-  the loop observable in seconds without a training run (Section~\ref{sec:world}).
-  \item \textbf{Several economically interesting behaviours need no training at all.}
-  Few-shot industrial inspection, skeleton-free teleoperation, and reward-free visual goal
-  reaching are all nearest-prototype or energy-minimisation queries in a pretrained latent
-  space (Sections~\ref{sec:fewshot}--\ref{sec:robot}).
-\end{enumerate}
+I want to be precise about the genre, because it determines how the rest of this document
+should be read.
 
-\section{Background and related work}
+\textbf{This paper is an engineering report.} Its subject is a tool: its design, the
+decisions behind it, the defects found while building it, and measurements taken on one
+machine. It is offered to practitioners and integrators who want to use JEPA encoders in
+an application, and to researchers who would like their published checkpoints to be
+easier for other people to run.
 
-\paragraph{Joint-embedding predictive architectures.}
-A JEPA encodes an observation $o$ into a latent $z = f_\theta(o)$ and trains a predictor
-to map a context latent to the latent of a target that was masked or displaced in time,
-minimising a distance in embedding space rather than in pixel space
-\cite{lecun2022path}. I-JEPA applies this to masked image regions \cite{ijepa2023};
-V-JEPA~2 extends it to video with spatio-temporal tubelets and demonstrates planning
-\cite{vjepa2_2025}. DINOv2, while trained with a different self-distillation objective,
-produces patch-level features with the same practical property we rely on here: semantic
-structure that is stable under nuisance variation \cite{dinov2_2023}.
+\textbf{It is not a research contribution.} I did not train a model, propose a method,
+prove anything, or run a comparative evaluation against baselines. Every representation
+used here comes from a checkpoint someone else published and trained. Where this report
+describes a loop or a formula, it is describing \emph{what the software computes and
+which published work it is taken from}, not a new result. In particular:
 
-\paragraph{LeWorldModel.}
-Maes et al.\ \cite{lewm2026} address the central fragility of JEPA training --- collapse
-to a constant representation --- with a two-term objective: a mean-squared next-embedding
-prediction loss, and SIGReg, a regulariser that projects embeddings onto random
-directions and applies a normality test to each one-dimensional projection, pushing the
-latent distribution toward an isotropic Gaussian. The result trains stably end to end from
-pixels without stop-gradients, exponential moving averages, or a pretrained encoder,
-with 15M parameters on a single GPU. Two of their findings are directly load-bearing for
-this work. First, the predictor is autoregressive in latent space: $z_{t+1}$ is predicted
-from $z_t$ and the action $a_t$. Second, the resulting prediction error is a usable
-\emph{surprise} signal: the model reliably flags physically implausible events. Our World
-module (Section~\ref{sec:world}) implements that loop with a frozen encoder, and our robot
-goal-reaching module (Section~\ref{sec:robot}) plans by rolling out a learned latent
-transition model, in the spirit of their cross-entropy-method planner \cite{cem2004}.
+\begin{itemize}
+  \item The predict-then-measure-surprise loop of Section~\ref{sec:world} is the one
+  described by Maes et al.\ \cite{lewm2026}; my implementation deliberately weakens it
+  (frozen encoder, small online predictor) so that it runs on a laptop and can be watched
+  in seconds. That substitution makes it a demonstration, not a reproduction, and
+  certainly not an improvement.
+  \item The goal-reaching controller of Section~\ref{sec:robot} minimises a latent
+  distance and plans by rolling out a fitted transition model, which is the structure used
+  in \cite{lewm2026}. The fitting is deliberately simple; no claim is made about control
+  performance.
+  \item The design constraint that nothing above the encoder should assume a modality is
+  taken from the argument in \cite{jepaanything2026}. I do not implement their method.
+\end{itemize}
 
-\paragraph{JEPA-Anything.}
-Cui et al.\ \cite{jepaanything2026} argue the complementary point: that the JEPA principle
-is domain-agnostic. Their orthogonal predictive factorization decomposes latent targets
-into complementary factors learned through dedicated pathways and recombined in a shared
-predictive design, validated across vision, biology, clinical trajectories, control,
-molecular dynamics, physical fields, and weather. Their result motivates a runtime whose
-abstractions are modality-agnostic: \jepctl{} treats an image, a video clip, and an audio
-spectrogram as the same object --- an input that becomes an embedding --- and its
-few-shot matcher, its world model, and its control loops are written against embeddings,
-not against pixels. We do not implement OPF; we take from that work the design constraint
-that nothing in the runtime above the encoder should assume a modality.
+\textbf{The contribution, such as it is, is availability.} Published research becomes
+useful to a business when someone can run it in an afternoon, see what it does, and call
+it from their own code. The numbers in Section~\ref{sec:measure} are engineering figures
+--- latency, resident memory, checkpoint coverage --- reported so an integrator can plan,
+not so a method can be ranked.
 
-\paragraph{What this is not.}
-JEPA encoders are not generative. They do not decode a latent back to pixels, and they do
-not estimate metric depth. Throughout this paper, and in the software's own interface, we
-are explicit about that boundary; Section~\ref{sec:limits} states it as a limitation
-rather than hiding it behind a visualisation.
+\section{What this tool builds on}
+
+This section records which published results \jepctl{} depends on and what it takes from
+each. It is not a survey, and it does not attempt to explain the theory better than the
+original papers do; a reader who wants the science should read them.
+
+\paragraph{The encoders I package.}
+\jepctl{} runs checkpoints, and does not train them. The catalogued encoders are I-JEPA
+\cite{ijepa2023}, V-JEPA~2 \cite{vjepa2_2025}, DINOv2 \cite{dinov2_2023}, plain ViT
+\cite{vit2021}, and AudioMAE \cite{audiomae2022}. The practical property all of them
+provide, and that every demonstration in this report relies on, is a patch-level
+representation in which semantically similar content lands close together and nuisance
+variation matters less than it does in pixel space. That property is theirs, not mine.
+
+\paragraph{LeWorldModel \cite{lewm2026}: where the World loop comes from.}
+Maes et al.\ train an encoder and a predictor end to end from pixels with two loss terms:
+a mean-squared next-embedding prediction loss, and SIGReg, a regulariser that projects
+embeddings onto random directions and applies a normality test to each one-dimensional
+projection so the latent distribution is pushed toward an isotropic Gaussian, which is
+what keeps the training from collapsing. Two things in that paper are the reason
+Section~\ref{sec:world} exists: the predictor is autoregressive in latent space, and the
+resulting prediction error is a usable \emph{surprise} signal that flags implausible
+events. I reuse the shape of that loop. I do not reuse the training: my encoder is frozen
+and my predictor is a small online fit, which means none of their stability contribution
+is being tested or reproduced here.
+
+\paragraph{JEPA-Anything \cite{jepaanything2026}: a design constraint.}
+Cui et al.\ argue the JEPA principle is domain-agnostic and validate a factorised
+predictive design across seven domains. I implement none of it. What I took is an
+architectural rule for the runtime: nothing above the encoder should assume a modality.
+In \jepctl{} an image, a video clip, and an audio spectrogram are the same object --- an
+input that becomes an embedding --- and the matcher, the world model, and the control
+loops are written against embeddings rather than pixels.
+
+\paragraph{Tooling precedent.}
+The shape of the product is borrowed from local language-model runtimes \cite{ollama}:
+one binary, a model catalogue, pull and serve, an HTTP API. Weights are read via
+\code{safetensors} \cite{safetensors}; inference uses \code{candle} \cite{candle}.
+
+\paragraph{What this class of model does not do.}
+JEPA encoders are not generative: they do not decode a latent back to pixels. They do not
+estimate metric depth. These are not limitations of my implementation but properties of
+the models, and both the software's interface and Section~\ref{sec:limits} say so
+explicitly, because a visualisation that implies otherwise would mislead a user who is
+deciding whether the approach fits their problem.
 
 \section{System design}
 
@@ -263,7 +286,7 @@ checkpoint resolution differs from the configured one.
 
 Weights are read from \code{safetensors} \cite{safetensors}, which is parsed and
 memory-mapped but never executed; this removes the arbitrary-code-execution surface of
-pickle-based checkpoints. Table~\ref{tab:weights} lists the coverage we obtain for the
+pickle-based checkpoints. Table~\ref{tab:weights} lists the coverage obtained for the
 catalogued encoders.
 
 \begin{table}[t]
@@ -308,7 +331,7 @@ a web page open in the user's browser cannot read camera frames or embeddings. D
 are bounded (8192\,px per side, 256\,MB of decoder allocation, 512 frames or 256 million
 pixels per animation) so that a decompression bomb is refused before it is allocated.
 
-\section{Few-shot perception in latent space}
+\section{Demonstration 1: few-shot inspection and recognition}
 \label{sec:fewshot}
 
 The first application registers a small number of reference embeddings per class and
@@ -319,7 +342,11 @@ the lighting, the operator's torso. \jepctl{} therefore also computes a contrast
 in the centroid-removed subspace: with $\bar p = \frac{1}{C}\sum_c p_c$, it scores
 $\cos(z - \bar p,\; p_c - \bar p)$, and reports a blend
 $s_c = 0.35\,\cos(z,p_c) + 0.65\,\cos(z-\bar p, p_c - \bar p)$, gated by a threshold and a
-minimum lead over the runner-up. A dedicated \emph{neutral} class absorbs frames in which
+minimum lead over the runner-up. Removing the shared component before comparing prototypes is
+standard practice in few-shot classification rather than anything devised here; what the
+tool adds is that the blend, the threshold, and the margin are exposed in the interface
+and in the exported bundle, so an integrator can see and reproduce the decision. A
+dedicated \emph{neutral} class absorbs frames in which
 nothing intentional is present, which is what prevents an empty scene from being forced
 into the nearest class.
 
@@ -334,23 +361,24 @@ of patch-level semantics. This is the property that makes the approach economica
 interesting: the classical alternative requires a labelled dataset and a training run per
 defect class.
 
-\paragraph{Why latent space rather than pixel differencing.}
+\paragraph{Why this is worth a practitioner{\rq}s attention.}
 Glass and plastic produce specular highlights that move with the operator and the ambient
 light. Pixel differencing responds strongly to those high-frequency luminance changes; the
-patch embeddings we use are comparatively stable under them, because the pretraining
-objective rewards representations that are predictable across nuisance variation. We report
-this as an observed qualitative behaviour of the shipped scenario, not as a quantitative
-robustness claim.
+the patch embeddings are comparatively stable under them, because the pretraining
+objective rewards representations that survive nuisance variation. This is reported as an
+observed behaviour of the shipped scenario on one desk, under one set of lights. It is
+not a robustness result: establishing that would take a dataset, a protocol, and a
+baseline, none of which are part of this work.
 
-\section{An online latent world model over the live camera}
+\section{Demonstration 2: an online latent world model over the camera}
 \label{sec:world}
 
 The World module implements the LeWorldModel loop \cite{lewm2026} with one deliberate
 substitution: the encoder is frozen (any catalogued JEPA encoder) and only the predictor
-is fit, online, on the live stream. This trades the representation-learning contribution
-of \cite{lewm2026} --- which their SIGReg term exists to protect --- for something a user
-can watch converge in seconds on a laptop, with no training run and no checkpoint to
-distribute. Figure~\ref{fig:loop} shows the loop.
+is fit, online, on the live stream. That substitution throws away the representation-learning part of \cite{lewm2026} ---
+precisely the part their SIGReg term exists to protect --- in exchange for something a
+user can watch behave in seconds on a laptop, with no training run and no checkpoint to
+distribute. It is a demonstration of the idea, not an implementation of their method. Figure~\ref{fig:loop} shows the loop.
 
 \begin{figure}[t]
 \centering
@@ -384,7 +412,7 @@ is the surprise signal used for anomaly detection, following \cite{lewm2026}.}
 \paragraph{Predictor.}
 The pooled embedding is projected onto a fixed random basis of dimension $K=48$; by the
 Johnson--Lindenstrauss lemma \cite{jl1984} this preserves distances well enough for the
-error statistic we need while keeping the online fit cheap and stable. In that space a
+error statistic while keeping the online fit cheap and stable. In that space a
 per-dimension first-order autoregression $x_{t+1} = a \odot x_t + c$ is fit by decayed
 least squares (decay $0.97$), falling back to persistence until enough transitions have
 accumulated.
@@ -407,16 +435,16 @@ current view is familiar. Users may additionally save named reference states (``
 desk'', ``full shelf''), after which the module reports which one it sees or flags the view
 as unknown.
 
-\paragraph{Rendering the perception, honestly.}
+\paragraph{Rendering it without overclaiming.}
 The reconstruction shown to the user maps the live frame onto a surface whose relief is
 derived from the semantic distance of each patch to a background prototype (the mean of
 the patches whose distance to the frame centroid is below the median). A smoothstep
 transfer keeps the background flat and extrudes only the foreground, and the patch grid is
-upsampled bicubically so silhouettes are smooth. We label this in the interface as what it
+upsampled bicubically so silhouettes are smooth. The interface labels this as what it
 is: the real frame given shape by what the encoder perceives. It is neither a generated
 image nor a metric depth map.
 
-\section{Control without trajectories or rewards}
+\section{Demonstration 3: an arm driven from latent space}
 \label{sec:robot}
 
 The robot module drives a 6-DoF arm with a gripper through a hardware abstraction trait
@@ -456,10 +484,10 @@ plateau detector reports when a single viewpoint cannot disambiguate further.
 Because the virtual arm is invisible to a real camera, the observation used in simulation
 is the camera frame with the twin's kinematics rendered into it over a frozen background,
 so that the only thing changing between observations is the arm itself. This is a
-simulation convenience and we flag it as such; with the physical backend the observation is
+simulation convenience, and the interface says so; with the physical backend the observation is
 the raw camera frame.
 
-\section{Multimodal companion}
+\section{Demonstration 4: local multimodal interaction}
 \label{sec:companion}
 
 The companion is a virtual character that fuses two frozen encoders locally. Motion
@@ -473,13 +501,18 @@ result. The point of this module is the absence of the usual machinery: there is
 transcription model, no keyword spotter, and no object detector --- a clap and a wave are
 both nearest-prototype lookups over local embeddings.
 
-\section{Measurements}
+\section{Engineering measurements}
 \label{sec:measure}
 
-The numbers below were obtained on a single machine (Apple M5 Pro, 15 logical cores,
-24\,GB unified memory, macOS, Metal backend) during interactive use. They characterise
-this implementation on this hardware; they are not benchmarks and no baseline comparison
-is claimed.
+The numbers below are the ones an integrator asks for before committing to a technology:
+does it fit in memory, how fast does a frame come back, and did the weights actually
+load. They were taken on a single machine (Apple M5 Pro, 15 logical cores, 24\,GB unified
+memory, macOS, Metal backend) during interactive use of the shipped application.
+
+They are \emph{not} an evaluation. There is no baseline, no dataset, no protocol, and no
+statistical treatment; a second run on a different machine would produce different
+figures. Nothing here should be read as a claim about the models themselves, whose
+accuracy was established by the papers that trained them.
 
 \begin{table}[t]
 \centering
@@ -510,23 +543,28 @@ roughly 0.5\,GB per transformer layer, reaching 13.5\,GB after 24 layers for a s
 V-JEPA~2 clip; with concurrent requests the process reached 36\,GB and was killed.
 Rebuilding each model on detached tensors after loading --- storage is shared, so nothing
 is copied --- reduced the peak resident set for one clip forward to 1.98\,GB, of which
-1.2\,GB is the weights themselves. We report this because the failure mode is invisible in
+1.2\,GB is the weights themselves. It is recorded here because the failure mode is invisible in
 a framework that assumes training: nothing is wrong except that inference is paying for a
 gradient nobody will ever use.
 
-\paragraph{Correctness practices.}
+\paragraph{What was checked, and what was not.}
 The repository contains 76 Rust unit and integration tests, including in-memory HTTP tests
 of every API surface, and 4 UI tests. What has \emph{not} been done is a numerical
 comparison against the reference PyTorch implementations, because the project has no
 Python dependency. Implementations follow the reference code structure, including
 V-JEPA~2's tiled sine/cosine rotary tables with interleaved rotation and the Kaldi Povey
 window for the audio front end, and determinism and discriminativeness are checked, but a
-bit-level equivalence claim would be unsupported and we do not make one.
+bit-level equivalence claim would be unsupported, so none is made.
 
 \section{Limitations}
 \label{sec:limits}
 
 \begin{itemize}
+  \item \textbf{Nothing here is validated as science.} The demonstrations show that the
+  operations run and behave sensibly on one desk; they do not establish accuracy,
+  robustness, or generality. Anyone deciding whether this family of models suits their
+  problem should read the papers that trained them and run their own trial on their own
+  data.
   \item \textbf{Not generative, no metric depth.} JEPA encoders do not decode latents to
   pixels and do not estimate distance. The 3D reconstruction in the World module is the
   real camera image given relief by semantic foreground separation; calling it depth would
@@ -551,15 +589,24 @@ bit-level equivalence claim would be unsupported and we do not make one.
 
 \section{Conclusion}
 
-The JEPA literature has moved quickly from a training principle \cite{lecun2022path} to
-stable end-to-end world models \cite{lewm2026} and to a claim of domain generality
-\cite{jepaanything2026}. \jepctl{} is an attempt to close the distance between that
-literature and a practitioner with a laptop and a camera: pull a checkpoint, be told
-exactly how much of it loaded, and then reach for recognition, anomaly detection, or
-control as operations on embeddings. The applications it ships are deliberately ordinary
---- inspect a bottle, mirror a posture, reach a pictured goal, react to a clap --- because
-the interesting claim is not that any of them is novel, but that each of them costs a
-handful of captures instead of a dataset, and runs entirely on the machine in front of you.
+The JEPA literature has moved quickly, from a training principle \cite{lecun2022path} to
+stable end-to-end world models \cite{lewm2026} and a claim of domain generality
+\cite{jepaanything2026}. That work is not mine and this report does not extend it.
+
+What I found missing was smaller and more mundane: between a published checkpoint and a
+practitioner with a laptop and a camera sits a day of environment wrangling, an
+undocumented tensor-naming convention, and no way to tell whether the model that just
+loaded is the one the authors trained. \jepctl{} removes that day. Pull a checkpoint, be
+told exactly how much of it loaded, and then reach for recognition, anomaly detection, or
+control as operations on embeddings, from a command line or an HTTP call.
+
+The demonstrations it ships are deliberately ordinary --- inspect a bottle, mirror a
+posture, reach a pictured goal, react to a clap --- and none of them is novel. That is the
+point. Each one costs a handful of captures rather than a labelled dataset, runs entirely
+on the machine in front of you, and can therefore be shown to someone who has to decide
+whether this family of models is worth their time. Making research legible and runnable
+is not a scientific result, but it is the step at which published work starts being used,
+and somebody has to do it.
 
 \section*{Availability}
 

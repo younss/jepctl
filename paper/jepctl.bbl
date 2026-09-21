@@ -84,10 +84,4 @@ Maxime Oquab, Timoth{\'e}e Darcet, Th{\'e}o Moutakanni, Huy~V. Vo, Marc
 \newblock {DINOv2}: Learning robust visual features without supervision.
 \newblock {\em arXiv preprint arXiv:2304.07193}, 2023.
 
-\bibitem{cem2004}
-Reuven~Y. Rubinstein and Dirk~P. Kroese.
-\newblock {\em The Cross-Entropy Method: A Unified Approach to Combinatorial
-  Optimization, Monte-Carlo Simulation and Machine Learning}.
-\newblock Springer, 2004.
-
 \end{thebibliography}

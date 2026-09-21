@@ -8,7 +8,7 @@ Source for the paper describing `jepctl`. Written against the arXiv
 
 | File | Purpose |
 |---|---|
-| `jepctl.tex` | The paper. Standard `article` class, no exotic packages. |
+| `jepctl.tex` | The paper, written as an engineering report: it documents a tool and states explicitly, in Section 1.1, that it makes no research claim. Standard `article` class, no exotic packages. |
 | `refs.bib` | BibTeX database. arXiv accepts `.bib` **or** `.bbl`; see below. |
 
 ## Build
@@ -36,9 +36,12 @@ which compiles both and lets you download the `.bbl`.
 2. **Ship the `.bbl`.** The safest upload is `jepctl.tex` plus `jepctl.bbl` plus
    `figures/jepa-overview.jpg`; both are already in this directory, so the build is
    deterministic on arXiv's side. (`refs.bib` is kept here for future edits.)
-3. **Pick the subject class.** `cs.LG` (Machine Learning) fits this paper best, with
-   `cs.CV` and `cs.RO` as cross-lists. The two cited works sit in `cs.LG`
-   (arXiv:2603.19312) and `cs.CL` (arXiv:2609.20800).
+3. **Pick the subject class.** This is a tools/engineering report, so **`cs.SE`
+   (Software Engineering)** is the honest primary category, with `cs.LG` and `cs.CV` as
+   cross-lists (`cs.RO` too if you want the robot audience). Submitting a tool paper to
+   `cs.LG` as primary invites reviewers to judge it as a research contribution, which it
+   does not claim to be. The two cited works sit in `cs.LG` (arXiv:2603.19312) and
+   `cs.CL` (arXiv:2609.20800).
 4. **Pick a licence.** arXiv requires an irrevocable distribution licence and the choice
    **cannot be changed after submission**. CC BY 4.0 is the usual choice for a software
    paper whose code is already Apache-2.0; check any target venue's preprint policy first.

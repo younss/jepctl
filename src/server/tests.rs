@@ -131,6 +131,7 @@ async fn app_with(with_model: bool, no_auth: bool) -> TestApp {
         sounds: Arc::new(tokio::sync::RwLock::new(GestureStore::load(&config.sounds_path))),
         mic: Arc::new(crate::media::mic::MicSupervisor::new()),
         companion: crate::companion::CompanionHandle::new(),
+        scene: std::sync::Arc::new(tokio::sync::Mutex::new(crate::engine::scene_predictor::WorldScenePredictor::new())),
         camera_roi: Arc::new(tokio::sync::RwLock::new(None)),
         robot: {
             let r = crate::robot::RobotHandle::new(Default::default());

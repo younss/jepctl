@@ -309,27 +309,48 @@ The Companion tab is a second WebGL character (head that pans and tilts, two arm
 | DELETE | `/api/companion/cues/{kind}/{name}` | forget a cue |
 | GET | `/api/companion/ws[?token=]` | WebSocket telemetry at 30 Hz, accepts a pose back |
 
-## World (live scene reconstruction)
+## World (live scene reconstruction and prediction)
 
-The World tab drapes the **live camera frame** over a **3D surface whose relief comes
-from JEPA**. The active vision model embeds each frame into one vector per patch;
-`GET /api/world/frame` separates foreground from background in that embedding space
-(each patch's distance from the frame's background prototype) and returns a smoothed
-relief field plus the aligned frame as a texture. It uses the **full camera frame**
-(the whole field of view at its native aspect ratio, not a square centre crop), so the
-mesh is as wide as the sensor. The UI builds a textured mesh and displaces it by the
-field, so a person or object in front of the camera stands out in 3D, in the real
-colours of the scene, live as you move.
+The World tab is a small **online world model** over the camera. The active vision
+model (a JEPA encoder: DINOv2, I-JEPA, V-JEPA 2) embeds each frame; on top of those
+embeddings jepctl fits a predictor **live** that learns the scene's dynamics and
+**forecasts the next frame in latent space**, then reports its **surprise** (how wrong
+its last prediction was) and whether it **recognises** the current view. This follows
+**LeWorldModel** (Maes, Le Lidec, Scieur, LeCun, Balestriero, arXiv:2603.19312): a
+JEPA world model trained with a next-embedding prediction loss whose latent prediction
+error is a reliable "surprise" signal for implausible events. The difference, stated
+plainly: LeWM trains the encoder and predictor end to end from pixels with the SIGReg
+anti-collapse regulariser; here the encoder is the frozen catalogue model and only the
+predictor is fit, online, on your live stream (no training run, no checkpoint).
 
-Be clear about what it is and is not: JEPA encoders are **not generative** and do not
-predict pixels or metric depth. This is the real camera image given **shape** by what
-the model perceives (its foreground/background structure), not a synthesised image and
-not a laser-accurate depth scan. `facebook/dinov2-small` gives the cleanest relief.
-Controls: surface shading, relief height scale, refresh rate.
+What you see and can do:
+
+- **Reconstruction in full field of view**: the live frame is draped over a 3D surface
+  whose relief comes from JEPA separating foreground from background in embedding space
+  (native aspect ratio). Not generative, not metric depth: the real scene given shape
+  by what the model perceives. Opens on a 3/4 isometric view with **Isometric / Profile
+  / Face** presets so the volume is visible without touching the mouse.
+- **Four render modes** (tabs above the canvas): **Realistic hologram** (camera texture
+  on the shaded relief), **JEPA depth map** (false colour, blue background to red
+  foreground: the object is isolated with no depth sensor), **Anomaly map** (the scene
+  darkens and only the divergent zones glow red), **Latent prediction** (the geometry
+  the model expects for the next frame).
+- **World model panel**: live **Recognition** and **Surprise** meters with a surprise
+  sparkline, the current **state** (`learning`, `recognized`, `surprised`) and the
+  number of distinct states learned. "Forget and relearn" resets the dynamics.
+- **Sentinel** (anomaly watch): an alarm threshold slider; when surprise crosses it the
+  scene flashes, snaps to the anomaly map, and an **incident log** records a timestamped,
+  spatially localised entry ("bottom-centre zone (surprise 74%)"). JEPA anomaly
+  detection with no retraining: it just notices what does not fit the scene it learned.
+- **Named states**: save reference states (e.g. "empty desk", "full shelf"); the model
+  then reports which one it recognises, or flags the view as unknown.
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/world/frame` | inference: embeds the **full** camera frame (whole field of view, not a centre crop; image models) and returns per patch `heights` (JEPA foreground relief, smoothed), `colors` (latent projection), `pixels` (camera), the aligned `image` (JPEG data URI used as the texture), `aspect` (width/height) and `grid_w`/`grid_h` |
+| GET | `/api/world/frame` | inference: embeds the **full** camera frame; returns per patch `heights` (relief), `colors`, `pixels`, plus the world-model fields `surprise`, `recognition`, `known_states`, `state`, `surprise_map`, `predicted_heights`, `steps`, `recognized_label`/`recognized_conf`, `snapshots`, and the aligned `image`/`aspect` |
+| POST | `/api/world/reset` | inference: forget the learned dynamics (keeps named states) |
+| POST | `/api/world/snapshot` | inference: `{ "name" }` save the current view as a named state |
+| DELETE | `/api/world/snapshot/{name}` | inference: delete a named state |
 
 ## Jepafile (custom models)
 

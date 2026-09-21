@@ -281,6 +281,18 @@ displaces its vertices by the bilinearly upsampled relief and re-uploads `image`
 the texture, so the real scene appears in 3D. It is neither generative nor a metric
 depth model: the real frame given shape by what the encoder perceives.
 
+On top of the encoder, `engine::scene_predictor::WorldScenePredictor` is an online
+world model held in `AppState` (after LeWorldModel, arXiv:2603.19312). Each frame it
+pools the patch tokens, projects to a low dimension (fixed random projection, JL), and
+fits a per-dimension decayed-least-squares AR(1) that predicts the next projected
+embedding; the normalised error of last tick's prediction is the **surprise** (baseline
+near zero, spikes on the unexpected). A per-patch constant-velocity predictor gives the
+`surprise_map` and the `predicted_heights` (expected next relief). A small memory of
+unit pooled embeddings gives **recognition** (nearest-neighbour cosine; novel states are
+remembered). The encoder is frozen (the catalogue model), only the predictor is fit
+online; there is no training run and nothing is persisted. `POST /api/world/reset`
+clears it.
+
 ## 4. HTTP layer
 
 - `handlers.rs` holds the shared helpers: `ensure_model_loaded` (auto-loads the first

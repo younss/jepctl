@@ -2894,3 +2894,35 @@ body.dark-theme { font-size: 13px; }
 
 .world-eye-box { width: 100%; max-width: 320px; aspect-ratio: 16 / 9; height: auto; }
 .world-eye-box img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.wm-metric { margin-top: 10px; }
+.wm-metric .slot-live-track { margin-top: 4px; }
+.wm-surprise-fill { background: linear-gradient(90deg, #f59e0b, #ef4444); }
+.wm-spark { width: 100%; max-width: 320px; height: 48px; display: block; margin-top: 10px; background: #000; border: 1px solid var(--border-color); border-radius: 6px; }
+#world-state-chip.surprised .chip-dot { background: #ef4444; }
+#world-state-chip.recognized .chip-dot { background: #4ade80; }
+#world-state-chip.learning .chip-dot { background: #f59e0b; }
+
+/* World: render-mode tabs, anomaly flash, incident log */
+.world-mode-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.world-mode-tab {
+    flex: 1 1 auto; min-width: 120px; padding: 8px 10px; font-size: 12px; font-weight: 600;
+    background: var(--surface-2, #1a1f22); color: var(--text-muted); border: 1px solid var(--border-color);
+    border-radius: 8px; cursor: pointer; transition: background .15s, color .15s, border-color .15s;
+}
+.world-mode-tab:hover { color: var(--text, #e8ece9); }
+.world-mode-tab.active { background: var(--accent, #4ade80); color: #06231a; border-color: var(--accent, #4ade80); }
+.world-canvas-wrap { position: relative; }
+.world-canvas-wrap canvas { display: block; width: 100%; }
+.world-canvas-wrap.alarm { outline: 3px solid #ef4444; outline-offset: -3px; animation: world-flash 0.8s ease-in-out infinite; border-radius: 8px; }
+@keyframes world-flash { 0%,100% { outline-color: rgba(239,68,68,0.35); } 50% { outline-color: rgba(239,68,68,1); } }
+.world-anomaly-badge {
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+    background: #ef4444; color: #fff; font-weight: 700; font-size: 13px; letter-spacing: .03em;
+    padding: 6px 14px; border-radius: 6px; box-shadow: 0 2px 12px rgba(0,0,0,.5);
+}
+.world-incident-card { margin-top: 12px; }
+.world-incident-log { list-style: none; padding: 0; margin: 8px 0 0; max-height: 150px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+.world-incident-log li { font-size: 12px; font-family: var(--mono, monospace); padding: 5px 8px; border: 1px solid var(--border-color); border-radius: 6px; border-inline-start: 3px solid #ef4444; overflow-wrap: anywhere; }
+.world-incident-log:empty::after { content: "No incident yet. The scene is as expected."; font-size: 12px; color: var(--text-muted); font-family: inherit; }
+#world-recognized-chip.known .chip-dot, #world-recognized-chip.known { }

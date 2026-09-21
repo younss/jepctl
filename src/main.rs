@@ -358,6 +358,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         sounds: Arc::new(tokio::sync::RwLock::new(crate::gestures::GestureStore::load(&config.sounds_path))),
         mic: Arc::new(crate::media::mic::MicSupervisor::new()),
         companion: companion.clone(),
+        scene: Arc::new(tokio::sync::Mutex::new(crate::engine::scene_predictor::WorldScenePredictor::new())),
         camera_roi: Arc::new(tokio::sync::RwLock::new(settings.camera_roi)),
         robot: robot.clone(),
         start_time: Instant::now(),

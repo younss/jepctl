@@ -46,6 +46,8 @@ pub struct AppState {
     pub mic: Arc<crate::media::mic::MicSupervisor>,
     /// Companion robot (watches and listens).
     pub companion: crate::companion::CompanionHandle,
+    /// Online latent world model for the World tab (predict-next and surprise).
+    pub scene: std::sync::Arc<tokio::sync::Mutex<crate::engine::scene_predictor::WorldScenePredictor>>,
     /// Region of interest applied to camera frames (see `types::Roi`).
     pub camera_roi: Arc<tokio::sync::RwLock<Option<Roi>>>,
     /// Robot arm control and digital twin.

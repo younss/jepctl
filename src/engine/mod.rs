@@ -3,6 +3,7 @@
 pub mod audio;
 pub mod device;
 pub mod ijepa;
+pub mod scene_predictor;
 pub mod vit;
 pub mod vjepa2;
 

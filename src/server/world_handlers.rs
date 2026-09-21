@@ -65,6 +65,25 @@ pub struct WorldFrame {
     /// Texture aspect ratio (width / height) so the UI mesh matches the real field of
     /// view instead of forcing a square.
     pub aspect: f32,
+    // --- Online world model (predict-next + surprise), see engine::scene_predictor ---
+    /// Prediction error of the frame the model expected last tick, 0 to 1.
+    pub surprise: f32,
+    /// How well the current scene matches something already seen, 0 to 1.
+    pub recognition: f32,
+    /// Distinct states the model has learned so far.
+    pub known_states: usize,
+    /// `learning`, `recognized` or `surprised`.
+    pub state: String,
+    /// Per-patch prediction error (surprise map), row major, 0 to 1.
+    pub surprise_map: Vec<f32>,
+    /// Predicted next per-patch relief (what the model expects next), 0 to 1.
+    pub predicted_heights: Vec<f32>,
+    pub steps: u64,
+    /// Nearest saved named state for the current view, if close enough.
+    pub recognized_label: Option<String>,
+    pub recognized_conf: f32,
+    /// Names of the saved states.
+    pub snapshots: Vec<String>,
     pub latency_ms: f64,
 }
 
@@ -171,11 +190,47 @@ pub async fn handle_world_frame(
     let _ = &mut cdist;
     // Smooth the relief so the draped surface is continuous, not stepped.
     let heights = smooth_grid(&raw, grid_w, grid_h);
+    // Online world model: pooled embedding is the mean patch; the predictor learns to
+    // forecast the next embedding and reports its surprise and recognition.
+    let mut pooled = vec![0.0f32; dim];
+    for p in &patches {
+        for (c, v) in pooled.iter_mut().zip(p.iter()) {
+            *c += v;
+        }
+    }
+    for c in pooled.iter_mut() {
+        *c /= n as f32;
+    }
+    let report = {
+        let mut scene = state.scene.lock().await;
+        scene.step(&pooled, &patches, grid_w, grid_h)
+    };
+
     let latency_ms = started.elapsed().as_secs_f64() * 1000.0;
     let pixels = average_patch_colors(&full_jpeg, grid_w, grid_h);
     let image = format!("data:image/jpeg;base64,{}", BASE64_STANDARD.encode(&full_jpeg));
 
-    Ok(Json(WorldFrame { model, grid_w, grid_h, colors, pixels, heights, image, aspect, latency_ms }))
+    Ok(Json(WorldFrame {
+        model,
+        grid_w,
+        grid_h,
+        colors,
+        pixels,
+        heights,
+        image,
+        aspect,
+        surprise: report.surprise,
+        recognition: report.recognition,
+        known_states: report.known_states,
+        state: report.state.to_string(),
+        surprise_map: report.surprise_map,
+        predicted_heights: report.predicted_heights,
+        steps: report.steps,
+        recognized_label: report.recognized_label,
+        recognized_conf: report.recognized_conf,
+        snapshots: report.snapshots,
+        latency_ms,
+    }))
 }
 
 /// 3x3 box blur over a `w x h` grid (edges clamp).
@@ -219,6 +274,53 @@ fn average_patch_colors(jpeg: &[u8], grid_w: usize, grid_h: usize) -> Vec<f32> {
         out.push(p[2] as f32 / 255.0);
     }
     if out.len() == grid_w * grid_h * 3 { out } else { fallback }
+}
+
+/// POST /api/world/snapshot - save the current view under a name (learning snapshot).
+#[derive(serde::Deserialize)]
+pub struct SnapshotPayload {
+    pub name: String,
+}
+
+pub async fn handle_world_snapshot(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(p): Json<SnapshotPayload>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
+    let name = p.name.trim().to_string();
+    if name.is_empty() || name.len() > 48 {
+        return Err(api_error(axum::http::StatusCode::BAD_REQUEST, "'name' must be 1-48 characters"));
+    }
+    let mut scene = state.scene.lock().await;
+    if !scene.save_snapshot(&name) {
+        return Err(api_error(axum::http::StatusCode::CONFLICT, "No frame observed yet; start the camera first"));
+    }
+    Ok(Json(serde_json::json!({ "status": "saved", "name": name, "snapshots": scene.snapshot_names() })))
+}
+
+/// DELETE /api/world/snapshot/{name}
+pub async fn handle_world_snapshot_delete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
+    let mut scene = state.scene.lock().await;
+    let removed = scene.delete_snapshot(&name);
+    Ok(Json(
+        serde_json::json!({ "status": if removed { "deleted" } else { "not_found" }, "snapshots": scene.snapshot_names() }),
+    ))
+}
+
+/// POST /api/world/reset - forget the learned dynamics and recognition memory.
+pub async fn handle_world_reset(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
+    state.scene.lock().await.reset();
+    Ok(Json(serde_json::json!({ "status": "reset" })))
 }
 
 #[cfg(test)]

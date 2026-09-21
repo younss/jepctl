@@ -4422,44 +4422,73 @@
         tex: null,
         texReady: false,
         pendingImg: null,
-        orbit: { yaw: 0, pitch: 0.15, dist: 2.4, dragging: false, lastX: 0, lastY: 0 },
+        orbit: { yaw: 0.45, pitch: 0.30, dist: 2.4, dragging: false, lastX: 0, lastY: 0 },
         raf: null,
         field: null,
-        heightScale: 1,
+        heightScale: 1.5,
         aspect: 1,
         rateHz: 6,
         shade: true,
+        mode: "shaded",
         spin: false,
+        spark: [],
         pollTimer: null,
-        busy: false
+        busy: false,
+        threshold: 0.35,
+        sentinel: true,
+        incidents: [],
+        lastAlarmAt: 0,
+        alarming: false
     };
 
     const WORLD_VS = `
         attribute vec3 a_pos;
         attribute vec2 a_uv;
         attribute vec3 a_normal;
+        attribute float a_height;
         uniform mat4 u_mvp;
         uniform mat4 u_model;
         varying vec2 v_uv;
         varying vec3 v_normal;
+        varying float v_height;
         void main() {
             v_uv = a_uv;
             v_normal = mat3(u_model) * a_normal;
+            v_height = a_height;
             gl_Position = u_mvp * vec4(a_pos, 1.0);
         }`;
 
     const WORLD_FS = `
         precision mediump float;
         uniform sampler2D u_tex;
+        uniform sampler2D u_surprise;
         uniform float u_shade;
+        uniform float u_mode;   // 0 hologram, 1 depth, 2 anomaly
         varying vec2 v_uv;
         varying vec3 v_normal;
+        varying float v_height;
+        vec3 depthColor(float t) {
+            t = clamp(t, 0.0, 1.0);
+            float r = smoothstep(0.45, 0.95, t);
+            float g = smoothstep(0.0, 0.45, t) - smoothstep(0.85, 1.0, t) * 0.4;
+            float b = 1.0 - smoothstep(0.15, 0.6, t);
+            return vec3(r, g, b);
+        }
         void main() {
             vec3 base = texture2D(u_tex, v_uv).rgb;
             vec3 n = normalize(v_normal);
             float d = max(dot(n, normalize(vec3(0.3, 0.5, 0.8))), 0.0);
             float sh = mix(1.0, 0.45 + 0.65 * d, u_shade);
-            gl_FragColor = vec4(base * sh, 1.0);
+            vec3 col;
+            if (u_mode < 0.5) {
+                col = base * sh;                                   // realistic hologram / prediction
+            } else if (u_mode < 1.5) {
+                col = depthColor(v_height) * (0.6 + 0.4 * d);      // JEPA depth false colour
+            } else {
+                float su = texture2D(u_surprise, v_uv).r;         // anomaly: dark, red where divergent
+                col = mix(base * 0.22, vec3(1.0, 0.13, 0.08), clamp(su, 0.0, 1.0));
+            }
+            gl_FragColor = vec4(col, 1.0);
         }`;
 
     function worldInitGl(canvas) {
@@ -4480,8 +4509,11 @@
             normal: gl.getAttribLocation(program, "a_normal"),
             mvp: gl.getUniformLocation(program, "u_mvp"),
             model: gl.getUniformLocation(program, "u_model"),
+            height: gl.getAttribLocation(program, "a_height"),
             tex: gl.getUniformLocation(program, "u_tex"),
-            shade: gl.getUniformLocation(program, "u_shade")
+            surprise: gl.getUniformLocation(program, "u_surprise"),
+            shade: gl.getUniformLocation(program, "u_shade"),
+            mode: gl.getUniformLocation(program, "u_mode")
         };
         world.aspect = 1;
         world.mesh = worldBuildMesh(gl, WORLD_RES, world.aspect);
@@ -4493,7 +4525,24 @@
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        // A small luminance texture holding the per-patch surprise map.
+        world.surpriseTex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, world.surpriseTex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, 1, 1, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, new Uint8Array([0]));
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
         return gl;
+    }
+
+    function worldUploadSurprise(f) {
+        const gl = world.gl;
+        if (!gl || !f.surprise_map || f.surprise_map.length !== f.grid_w * f.grid_h) return;
+        const px = new Uint8Array(f.surprise_map.map((v) => Math.max(0, Math.min(255, Math.round(v * 255)))));
+        gl.bindTexture(gl.TEXTURE_2D, world.surpriseTex);
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, f.grid_w, f.grid_h, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, px);
     }
 
     function worldBuildMesh(gl, res, aspect) {
@@ -4523,15 +4572,17 @@
                 idx.push(a, c, b, b, c, d);
             }
         }
+        const heights = new Float32Array(verts); // raw relief 0..1, updated per frame
         const posBuf = gl.createBuffer();
         const normBuf = gl.createBuffer();
+        const heightBuf = gl.createBuffer();
         const uvBuf = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf);
         gl.bufferData(gl.ARRAY_BUFFER, uvs, gl.STATIC_DRAW);
         const idxBuf = gl.createBuffer();
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(idx), gl.STATIC_DRAW);
-        return { n, verts, positions, normals, uvs, posBuf, normBuf, uvBuf, idxBuf, count: idx.length, spanW, spanH };
+        return { n, verts, positions, normals, heights, uvs, posBuf, normBuf, heightBuf, uvBuf, idxBuf, count: idx.length, spanW, spanH };
     }
 
     // Bilinear sample of the JEPA field (grid_w x grid_h) at normalized (u, v).
@@ -4547,15 +4598,36 @@
         return (h00 * (1 - tx) + h10 * tx) * (1 - ty) + (h01 * (1 - tx) + h11 * tx) * ty;
     }
 
+    // Which per-patch field feeds the relief: the observed relief, or the model's
+    // predicted-next relief when the user asks to see what it expects.
+    function worldReliefField(f) {
+        if (world.mode === "predict" && f.predicted_heights && f.predicted_heights.length === f.heights.length) {
+            return f.predicted_heights;
+        }
+        return f.heights;
+    }
+
+    function worldSampleArray(arr, gw, gh, u, v) {
+        const fx = u * (gw - 1), fy = v * (gh - 1);
+        const x0 = Math.floor(fx), y0 = Math.floor(fy);
+        const x1 = Math.min(x0 + 1, gw - 1), y1 = Math.min(y0 + 1, gh - 1);
+        const tx = fx - x0, ty = fy - y0;
+        const a = arr[y0 * gw + x0], b = arr[y0 * gw + x1], c = arr[y1 * gw + x0], d = arr[y1 * gw + x1];
+        return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
+    }
+
     function worldUpdateMesh() {
         const f = world.field, m = world.mesh;
         if (!f || !m) return;
-        const n = m.n, pos = m.positions;
+        const relief = worldReliefField(f);
+        const n = m.n, pos = m.positions, hattr = m.heights;
         for (let y = 0; y < n; y++) {
             for (let x = 0; x < n; x++) {
                 const i = y * n + x;
                 const u = x / (n - 1), v = y / (n - 1);
-                pos[i * 3 + 2] = worldSampleField(f, u, v) * world.heightScale * 0.7;
+                const h = worldSampleArray(relief, f.grid_w, f.grid_h, u, v);
+                hattr[i] = h;
+                pos[i * 3 + 2] = h * world.heightScale * 0.7;
             }
         }
         // Normals from neighbouring heights (finite differences).
@@ -4581,6 +4653,8 @@
         gl.bufferData(gl.ARRAY_BUFFER, pos, gl.DYNAMIC_DRAW);
         gl.bindBuffer(gl.ARRAY_BUFFER, m.normBuf);
         gl.bufferData(gl.ARRAY_BUFFER, m.normals, gl.DYNAMIC_DRAW);
+        gl.bindBuffer(gl.ARRAY_BUFFER, m.heightBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, m.heights, gl.DYNAMIC_DRAW);
     }
 
     function worldUploadTexture() {
@@ -4620,9 +4694,14 @@
         gl.uniformMatrix4fv(world.loc.mvp, false, mvp);
         gl.uniformMatrix4fv(world.loc.model, false, model);
         gl.uniform1f(world.loc.shade, world.shade ? 1 : 0);
+        const modeVal = world.mode === "depth" ? 1 : (world.mode === "surprise" ? 2 : 0);
+        gl.uniform1f(world.loc.mode, modeVal);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, world.tex);
         gl.uniform1i(world.loc.tex, 0);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, world.surpriseTex);
+        gl.uniform1i(world.loc.surprise, 1);
         gl.bindBuffer(gl.ARRAY_BUFFER, m.posBuf);
         gl.enableVertexAttribArray(world.loc.pos);
         gl.vertexAttribPointer(world.loc.pos, 3, gl.FLOAT, false, 0, 0);
@@ -4632,6 +4711,9 @@
         gl.bindBuffer(gl.ARRAY_BUFFER, m.uvBuf);
         gl.enableVertexAttribArray(world.loc.uv);
         gl.vertexAttribPointer(world.loc.uv, 2, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, m.heightBuf);
+        gl.enableVertexAttribArray(world.loc.height);
+        gl.vertexAttribPointer(world.loc.height, 1, gl.FLOAT, false, 0, 0);
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, m.idxBuf);
         gl.drawElements(gl.TRIANGLES, m.count, gl.UNSIGNED_SHORT, 0);
     }
@@ -4662,6 +4744,8 @@
                     img.onload = () => { world.pendingImg = img; };
                     img.src = f.image;
                 }
+                worldUploadSurprise(f);
+                worldUpdateMetrics(f);
                 const chip = document.getElementById("world-chip");
                 const ct = document.getElementById("world-chip-text");
                 if (chip) chip.classList.add("on");
@@ -4682,6 +4766,139 @@
         } finally {
             world.busy = false;
         }
+    }
+
+    function worldUpdateMetrics(f) {
+        const set = (id, txt) => { const n = document.getElementById(id); if (n) n.textContent = txt; };
+        const bar = (id, frac) => { const n = document.getElementById(id); if (n) n.style.width = `${Math.round(Math.max(0, Math.min(1, frac)) * 100)}%`; };
+        set("world-recognition", `${Math.round((f.recognition || 0) * 100)}%`);
+        bar("world-recognition-bar", f.recognition || 0);
+        set("world-surprise", `${Math.round((f.surprise || 0) * 100)}%`);
+        bar("world-surprise-bar", f.surprise || 0);
+        set("world-state-meta", f.state || "idle");
+        set("world-known", String(f.known_states || 0));
+        set("world-steps", String(f.steps || 0));
+        const chip = document.getElementById("world-state-chip");
+        const ct = document.getElementById("world-state-text");
+        if (chip) { chip.classList.remove("learning", "recognized", "surprised"); if (f.state) chip.classList.add(f.state); }
+        if (ct) ct.textContent = f.state || "idle";
+        world.spark.push(f.surprise || 0);
+        if (world.spark.length > 160) world.spark.shift();
+        worldDrawSpark();
+
+        // Named-state recognition.
+        const recChip = document.getElementById("world-recognized-chip");
+        const recLbl = document.getElementById("world-recognized-label");
+        if (recLbl) {
+            if ((f.snapshots || []).length === 0) recLbl.textContent = "no saved states";
+            else if (f.recognized_label) recLbl.textContent = `${f.recognized_label} (${Math.round((f.recognized_conf || 0) * 100)}%)`;
+            else recLbl.textContent = "unknown / anomaly";
+        }
+        if (recChip) recChip.classList.toggle("known", !!f.recognized_label);
+        worldRenderSnapshots(f.snapshots || []);
+
+        // Sentinel: alarm when surprise crosses the threshold.
+        worldSentinel(f);
+    }
+
+    function worldLocateSurprise(f) {
+        const map = f.surprise_map;
+        if (!map || map.length !== f.grid_w * f.grid_h) return "the scene";
+        let bi = 0, bv = -1;
+        for (let i = 0; i < map.length; i++) if (map[i] > bv) { bv = map[i]; bi = i; }
+        const gx = bi % f.grid_w, gy = Math.floor(bi / f.grid_w);
+        const hx = gx < f.grid_w / 3 ? "left" : gx > (2 * f.grid_w) / 3 ? "right" : "centre";
+        const hy = gy < f.grid_h / 3 ? "top" : gy > (2 * f.grid_h) / 3 ? "bottom" : "middle";
+        return `${hy}-${hx}`;
+    }
+
+    function worldSentinel(f) {
+        const wrap = document.getElementById("world-canvas-wrap");
+        const badge = document.getElementById("world-anomaly-badge");
+        const over = world.sentinel && (f.steps || 0) > 3 && (f.surprise || 0) >= world.threshold;
+        if (over && !world.alarming) {
+            world.alarming = true;
+            if (wrap) wrap.classList.add("alarm");
+            if (badge) badge.style.display = "block";
+            // Snap to the anomaly map so the divergent zone glows.
+            worldSetMode("surprise");
+            const now = Date.now();
+            if (now - world.lastAlarmAt > 1500) {
+                world.lastAlarmAt = now;
+                const t = new Date().toLocaleTimeString();
+                const zone = worldLocateSurprise(f);
+                worldAddIncident(`${t} - Unexpected event in the ${zone} zone (surprise ${Math.round(f.surprise * 100)}%)`);
+            }
+        } else if (!over && world.alarming && (f.surprise || 0) < world.threshold * 0.7) {
+            world.alarming = false;
+            if (wrap) wrap.classList.remove("alarm");
+            if (badge) badge.style.display = "none";
+        }
+    }
+
+    function worldAddIncident(text) {
+        world.incidents.unshift(text);
+        if (world.incidents.length > 50) world.incidents.pop();
+        const log = document.getElementById("world-incident-log");
+        if (!log) return;
+        log.innerHTML = world.incidents.map((t) => `<li>${escapeHtml(t)}</li>`).join("");
+    }
+
+    function worldRenderSnapshots(names) {
+        const host = document.getElementById("world-snapshots");
+        if (!host) return;
+        const key = names.join("|");
+        if (host.dataset.key === key) return;
+        host.dataset.key = key;
+        host.innerHTML = names.map((n) => `
+            <li>
+                <span class="cue-name">${escapeHtml(n)}</span>
+                <button class="btn btn-sm btn-outline" data-snap="${escapeHtml(n)}" aria-label="Delete ${escapeHtml(n)}">Delete</button>
+            </li>`).join("");
+        host.querySelectorAll("button[data-snap]").forEach((btn) => {
+            btn.addEventListener("click", async () => {
+                await apiFetch(`/api/world/snapshot/${encodeURIComponent(btn.dataset.snap)}`, { method: "DELETE" });
+                host.dataset.key = "";
+            });
+        });
+    }
+
+    function worldSetMode(mode) {
+        world.mode = mode;
+        world.shade = mode === "shaded" || mode === "predict";
+        document.querySelectorAll(".world-mode-tab").forEach((b) => {
+            const on = b.dataset.mode === mode;
+            b.classList.toggle("active", on);
+            b.setAttribute("aria-selected", on ? "true" : "false");
+        });
+        if (world.field) worldUpdateMesh();
+    }
+
+    function worldSetView(name) {
+        if (name === "iso") { world.orbit.yaw = 0.45; world.orbit.pitch = 0.30; world.orbit.dist = 2.4; }
+        else if (name === "profile") { world.orbit.yaw = 1.45; world.orbit.pitch = 0.05; world.orbit.dist = 2.6; }
+        else if (name === "face") { world.orbit.yaw = 0.0; world.orbit.pitch = 0.02; world.orbit.dist = 2.2; }
+        document.querySelectorAll("#btn-world-view-iso,#btn-world-view-profile,#btn-world-view-face").forEach((b) => b.classList.remove("active"));
+        const active = document.getElementById(`btn-world-view-${name}`);
+        if (active) active.classList.add("active");
+    }
+
+    function worldDrawSpark() {
+        const canvas = document.getElementById("world-surprise-spark");
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        const w = canvas.width, h = canvas.height;
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = "#000"; ctx.fillRect(0, 0, w, h);
+        const s = world.spark;
+        if (s.length < 2) return;
+        ctx.strokeStyle = "#f59e0b"; ctx.lineWidth = 1.5; ctx.beginPath();
+        s.forEach((v, i) => {
+            const x = (i / (s.length - 1)) * w;
+            const y = h - Math.max(0, Math.min(1, v)) * (h - 4) - 2;
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
     }
 
     function worldUpdateCameraButton() {
@@ -4755,8 +4972,40 @@
             else await robotEnsureCamera();
             worldUpdateCameraButton();
         });
-        const shadeSel = document.getElementById("select-world-color");
-        if (shadeSel) shadeSel.addEventListener("change", () => { world.shade = shadeSel.value !== "flat"; });
+        document.querySelectorAll(".world-mode-tab").forEach((b) => {
+            b.addEventListener("click", () => worldSetMode(b.dataset.mode));
+        });
+        bind("btn-world-view-iso", () => worldSetView("iso"));
+        bind("btn-world-view-profile", () => worldSetView("profile"));
+        bind("btn-world-view-face", () => worldSetView("face"));
+        bind("btn-world-reset", async () => {
+            try { await apiFetch("/api/world/reset", { method: "POST" }); world.spark = []; notify("World model reset: relearning the scene.", "info", 2500); }
+            catch (e) { notify(`Reset failed: ${e.message}`, "error"); }
+        });
+        const sentinel = document.getElementById("toggle-world-sentinel");
+        if (sentinel) { world.sentinel = sentinel.checked; sentinel.addEventListener("change", () => {
+            world.sentinel = sentinel.checked;
+            if (!world.sentinel) { world.alarming = false; const wrap = document.getElementById("world-canvas-wrap"); const badge = document.getElementById("world-anomaly-badge"); if (wrap) wrap.classList.remove("alarm"); if (badge) badge.style.display = "none"; }
+        }); }
+        const thr = document.getElementById("slider-world-threshold");
+        if (thr) thr.addEventListener("input", () => {
+            world.threshold = parseInt(thr.value, 10) / 100;
+            const v = document.getElementById("val-world-threshold"); if (v) v.textContent = `${thr.value}%`;
+        });
+        bind("btn-world-clear-log", () => { world.incidents = []; const log = document.getElementById("world-incident-log"); if (log) log.innerHTML = ""; });
+        const snapInput = document.getElementById("input-world-snapshot");
+        bind("btn-world-snapshot", async () => {
+            const name = (snapInput ? snapInput.value : "").trim();
+            if (!name) { notify("Name the state first.", "warning"); if (snapInput) snapInput.focus(); return; }
+            try {
+                const res = await apiFetch("/api/world/snapshot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.error || res.status);
+                if (snapInput) snapInput.value = "";
+                const host = document.getElementById("world-snapshots"); if (host) host.dataset.key = "";
+                notify(`Saved state "${name}".`, "success", 2500);
+            } catch (e) { notify(`Save state: ${e.message}`, "error"); }
+        });
         const spin = document.getElementById("toggle-world-spin");
         if (spin) { world.spin = spin.checked; spin.addEventListener("change", () => { world.spin = spin.checked; }); }
         const hs = document.getElementById("slider-world-height");

@@ -927,7 +927,7 @@
             <section class="content-section" id="section-world" tabindex="0" role="tabpanel" aria-labelledby="tab-world">
                 <div class="section-title">
                     <h2>World</h2>
-                    <p>The model observes the camera and rebuilds the scene live in 3D from what it perceives, one column per patch.</p>
+                    <p>A live world model: it reconstructs the scene in 3D, predicts what comes next, and raises the alarm on the unexpected.</p>
                 </div>
 
                 <div class="robot-topbar card">
@@ -938,11 +938,12 @@
                         <span class="status-chip" id="world-chip"><span class="chip-dot" id="world-dot"></span><span id="world-chip-text">idle</span></span>
                     </div>
                     <div class="robot-topbar-group">
-                        <label class="fact-label" for="select-world-color">Surface</label>
-                        <select id="select-world-color" class="select-input select-compact">
-                            <option value="shaded">Textured + relief shading</option>
-                            <option value="flat">Textured (flat)</option>
-                        </select>
+                        <span class="fact-label">View</span>
+                        <div class="segmented" role="group" aria-label="Camera view">
+                            <button class="seg-btn active" id="btn-world-view-iso">Isometric</button>
+                            <button class="seg-btn" id="btn-world-view-profile">Profile</button>
+                            <button class="seg-btn" id="btn-world-view-face">Face</button>
+                        </div>
                         <label class="toggle-label compact" for="toggle-world-spin">
                             <input type="checkbox" id="toggle-world-spin" class="checkbox-input">
                             <span>Auto-rotate</span>
@@ -960,25 +961,92 @@
 
                 <div class="robot-layout">
                     <div class="card robot-scene-card">
-                        <div class="gesture-card-header">
-                            <div>
-                                <h3>Reconstructed scene</h3>
-                                <p class="card-subtitle">Drag to orbit, wheel to zoom. Move toward the camera and watch your shape push out of the surface. The relief comes from JEPA, the texture from the live frame.</p>
-                            </div>
+                        <div class="world-mode-tabs" role="tablist" aria-label="Render mode">
+                            <button class="world-mode-tab active" id="btn-world-mode-hologram" data-mode="shaded" role="tab" aria-selected="true">Realistic hologram</button>
+                            <button class="world-mode-tab" id="btn-world-mode-depth" data-mode="depth" role="tab" aria-selected="false">JEPA depth map</button>
+                            <button class="world-mode-tab" id="btn-world-mode-anomaly" data-mode="surprise" role="tab" aria-selected="false">Anomaly map</button>
+                            <button class="world-mode-tab" id="btn-world-mode-predict" data-mode="predict" role="tab" aria-selected="false">Latent prediction</button>
                         </div>
-                        <canvas id="world-canvas" width="720" height="440" role="img" aria-label="Live 3D reconstruction of the camera scene"></canvas>
+                        <div class="world-canvas-wrap" id="world-canvas-wrap">
+                            <canvas id="world-canvas" width="720" height="440" role="img" aria-label="Live 3D reconstruction of the camera scene"></canvas>
+                            <div class="world-anomaly-badge" id="world-anomaly-badge" role="alert" style="display: none;">ANOMALY DETECTED &middot; unexpected event</div>
+                        </div>
                         <div class="robot-readout" id="world-readout">Start the camera to begin.</div>
+                        <div class="world-incident-card">
+                            <div class="gesture-card-header">
+                                <h3>Incident log</h3>
+                                <button class="btn btn-sm btn-outline" id="btn-world-clear-log">Clear</button>
+                            </div>
+                            <ul class="world-incident-log" id="world-incident-log" aria-live="polite"></ul>
+                        </div>
                     </div>
 
                     <div class="robot-side-col" tabindex="0" role="region" aria-label="World controls">
                         <div class="card">
+                            <div class="gesture-card-header">
+                                <h3>World model</h3>
+                                <span class="status-chip" id="world-state-chip"><span class="chip-dot" id="world-state-dot"></span><span id="world-state-text">idle</span></span>
+                            </div>
+                            <p class="card-subtitle">The model learns the scene's dynamics live and predicts the next frame in JEPA latent space (inspired by LeWorldModel, arXiv:2603.19312). Recognition is how familiar the view is; surprise is how wrong its last prediction was: it spikes on the unexpected.</p>
+                            <div class="wm-metric">
+                                <div class="sensitivity-label-row"><span>Recognition</span><strong class="mono" id="world-recognition">--</strong></div>
+                                <div class="slot-live-track"><div class="slot-live-fill" id="world-recognition-bar"></div></div>
+                            </div>
+                            <div class="wm-metric">
+                                <div class="sensitivity-label-row"><span>Surprise</span><strong class="mono" id="world-surprise">--</strong></div>
+                                <div class="slot-live-track"><div class="slot-live-fill wm-surprise-fill" id="world-surprise-bar"></div></div>
+                            </div>
+                            <canvas id="world-surprise-spark" class="wm-spark" width="320" height="48" role="img" aria-label="Surprise over time"></canvas>
+                            <div class="reasoning-meta">
+                                <span>State <strong id="world-state-meta">idle</strong></span>
+                                <span>Known states <strong id="world-known">0</strong></span>
+                                <span>Steps <strong id="world-steps">0</strong></span>
+                            </div>
+                            <div class="robot-side-actions">
+                                <button class="btn btn-sm btn-outline" id="btn-world-reset">Forget and relearn</button>
+                            </div>
+                        </div>
+
+                        <div class="card">
+                            <div class="gesture-card-header">
+                                <h3>Sentinel</h3>
+                                <label class="toggle-label compact" for="toggle-world-sentinel">
+                                    <input type="checkbox" id="toggle-world-sentinel" class="checkbox-input" checked>
+                                    <span>Armed</span>
+                                </label>
+                            </div>
+                            <p class="card-subtitle">When surprise crosses the alarm threshold, the scene flashes, switches to the anomaly map, and the event is logged. This is JEPA anomaly detection: no retraining, it just notices what does not fit the scene it learned.</p>
+                            <div class="sensitivity-row">
+                                <div class="sensitivity-label-row">
+                                    <label for="slider-world-threshold">Alarm threshold</label>
+                                    <span class="threshold-badge" id="val-world-threshold">35%</span>
+                                </div>
+                                <input type="range" id="slider-world-threshold" min="10" max="80" step="1" value="35" class="range-slider">
+                            </div>
+                        </div>
+
+                        <div class="card">
+                            <div class="gesture-card-header">
+                                <h3>Named states</h3>
+                                <span class="status-chip" id="world-recognized-chip"><span id="world-recognized-label">learning</span></span>
+                            </div>
+                            <p class="card-subtitle">Save reference states, for example an empty desk or a full shelf. The model then reports which one it sees, or flags the view as unknown.</p>
+                            <div class="companion-teach-row">
+                                <label class="visually-hidden" for="input-world-snapshot">State name</label>
+                                <input type="text" id="input-world-snapshot" class="input-text" placeholder="State name (e.g. Normal scene)" maxlength="48">
+                                <button class="btn btn-sm btn-primary" id="btn-world-snapshot">Save state</button>
+                            </div>
+                            <ul class="cue-list" id="world-snapshots"></ul>
+                        </div>
+
+                        <div class="card">
                             <h3>Perception</h3>
                             <div class="sensitivity-row">
                                 <div class="sensitivity-label-row">
-                                    <label for="slider-world-height">Height scale</label>
-                                    <span class="threshold-badge" id="val-world-height">1.0x</span>
+                                    <label for="slider-world-height">Relief height</label>
+                                    <span class="threshold-badge" id="val-world-height">1.5x</span>
                                 </div>
-                                <input type="range" id="slider-world-height" min="0.2" max="3" step="0.1" value="1" class="range-slider">
+                                <input type="range" id="slider-world-height" min="0.2" max="3" step="0.1" value="1.5" class="range-slider">
                             </div>
                             <div class="sensitivity-row">
                                 <div class="sensitivity-label-row">
@@ -987,11 +1055,8 @@
                                 </div>
                                 <input type="range" id="slider-world-rate" min="1" max="12" step="1" value="6" class="range-slider">
                             </div>
-                            <p class="card-subtitle">The live camera frame is draped over a 3D surface whose relief comes from JEPA: the model separates the foreground from the background in embedding space, so a person or object in front of the camera stands out in 3D. It is the real scene given shape by what the model perceives, not a generated image or a metric depth scan.</p>
-                        </div>
-                        <div class="card">
-                            <div class="gesture-card-header">
-                                <h3>Camera (full frame)</h3>
+                            <div class="gesture-card-header" style="margin-top:8px;">
+                                <span class="card-subtitle-inline">Camera (full frame)</span>
                                 <span class="card-subtitle-inline" id="world-grid-text">--</span>
                             </div>
                             <div class="agent-view-box world-eye-box">

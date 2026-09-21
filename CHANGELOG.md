@@ -6,8 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- World tab reworked into a usable sentinel/inspection tool (per design review): opens on a 3/4 isometric view with Isometric/Profile/Face presets and 1.5x relief; four render-mode tabs (Realistic hologram, JEPA depth false-colour map, Anomaly map, Latent prediction); a **Sentinel** with an alarm threshold that flashes the scene, snaps to the anomaly map and writes a timestamped, spatially localised **incident log**; and **named states** (save/recognise/delete a reference view) via `POST /api/world/snapshot`, `DELETE /api/world/snapshot/{name}`, exposed as `recognized_label`/`snapshots` on `/api/world/frame`.
+
 ### Added
-- **World tab**: a near-real live 3D reconstruction of the camera scene. The live frame is textured onto a WebGL mesh whose relief comes from JEPA's foreground/background separation in embedding space (`GET /api/world/frame`, `src/server/world_handlers.rs`). Not generative and not metric depth: the real scene given shape by what the model perceives.
+- **World tab**: an online world model over the camera. Beyond the textured 3D reconstruction (full field of view, relief from JEPA foreground/background separation), it now **learns the scene's dynamics live and predicts the next frame in latent space**, reporting **surprise** (latent prediction error) and **recognition**, after LeWorldModel (arXiv:2603.19312). New: `src/engine/scene_predictor.rs`, `POST /api/world/reset`, surprise/prediction surface modes, recognition/surprise meters with a sparkline. The encoder is the frozen catalogue model; only the predictor is fit online (no training, no checkpoint).
 - Settings: **Allow access from other machines** toggle (off by default). Off binds `127.0.0.1`, on binds `0.0.0.0` on the next restart; authentication stays mandatory for network access and an explicit `--host` still overrides it.
 
 ### Fixed

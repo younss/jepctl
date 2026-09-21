@@ -1184,6 +1184,19 @@
                     <p class="gesture-model-hint">Gestures are bound to the model that encoded them; switching models shows that model's gestures. DINOv2-small is the recommended default.</p>
                 </div>
 
+                <div class="scenario-picker" role="group" aria-label="Scenario">
+                    <button class="scenario-card active" id="scenario-qc" data-scenario="qc">
+                        <span class="scenario-title">Industrial quality control</span>
+                        <span class="scenario-sub">Bottle: capped or not</span>
+                        <span class="scenario-desc">Two five-second captures replace the thousands of annotated photos a detector would need. The latent space ignores the changing glare on glass and keeps the geometry of the neck and cap.</span>
+                    </button>
+                    <button class="scenario-card" id="scenario-sandbox" data-scenario="sandbox">
+                        <span class="scenario-title">Gesture sandbox</span>
+                        <span class="scenario-sub">Hand poses and teleoperation</span>
+                        <span class="scenario-desc">Open hand, fist, victory: the same engine, used to drive the Robot Twin or the Companion.</span>
+                    </button>
+                </div>
+
                 <ol class="flow-guide" aria-label="Gesture setup"><li><span>1</span> Load a model</li><li><span>2</span> Start the camera</li><li><span>3</span> Capture neutral, then gestures</li><li><span>4</span> Tune &amp; export</li></ol>
                 <div class="gesture-sandbox-layout">
                     <div class="gesture-main-col" tabindex="0" role="region" aria-label="Gesture preview and analysis">
@@ -1224,6 +1237,20 @@
                                         </div>
                                     </div>
                                 </div>
+                            </div>
+
+                            <div class="qc-console" id="qc-console">
+                                <div class="qc-status" id="qc-status">
+                                    <span class="qc-status-label" id="qc-status-label">Waiting for a capture</span>
+                                    <span class="qc-status-score" id="qc-status-score"></span>
+                                </div>
+                                <div class="qc-meta">
+                                    <span>Bottles packaged <strong id="qc-counter">0</strong></span>
+                                    <span>Non-conformities <strong id="qc-defects">0</strong></span>
+                                    <span>Alarm after <strong>3 s</strong> open</span>
+                                    <button class="btn btn-sm btn-outline" id="btn-qc-reset">Reset counters</button>
+                                </div>
+                                <ul class="world-incident-log" id="qc-log" aria-live="polite"></ul>
                             </div>
 
                             <div class="gesture-sensitivity-panel">

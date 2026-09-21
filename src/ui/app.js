@@ -15,6 +15,14 @@
         hardwareInfo: null,
         activeModel: null,
         audioModel: null,
+        gestureScenario: "qc",
+        qcPacked: 0,
+        qcDefects: 0,
+        qcOpenSince: 0,
+        qcAlarmed: false,
+        qcLastRole: null,
+        qcDefectActive: false,
+        qcIncidents: [],
         totalEmbeddings: 0,
         lastLatencyMs: 0,
         streamFps: 10,
@@ -2036,6 +2044,16 @@
     // ------------------------------------------------------------------
 
     function setupGestureSandbox() {
+        // Scenario picker: industrial inspection (default) or the gesture sandbox.
+        let saved = "qc";
+        try { saved = localStorage.getItem("jepctl_gesture_scenario") || "qc"; } catch (_) {}
+        document.querySelectorAll(".scenario-card").forEach((c) => {
+            c.addEventListener("click", () => applyGestureScenario(c.dataset.scenario, true));
+        });
+        applyGestureScenario(saved, true);
+        const qcResetBtn = document.getElementById("btn-qc-reset");
+        if (qcResetBtn) qcResetBtn.addEventListener("click", () => qcReset(true));
+
         if (el.btnGestureCameraToggle) {
             el.btnGestureCameraToggle.addEventListener("click", () => {
                 if (state.isStreaming) {
@@ -2269,6 +2287,131 @@
     }
 
     // Per-patch dissimilarity to the best prototype, drawn as a grid overlay.
+    // ---- Gestures: scenarios and the quality-control console ------------------
+    // The same few-shot engine is either an industrial inspection station (two
+    // captures replace a labelled dataset) or the gesture sandbox. Slot 4 is the
+    // neutral slot in both.
+    const GESTURE_SCENARIOS = {
+        qc: {
+            names: ["Bottle closed", "Bottle open", "Cap askew", "Empty zone"],
+            // Slot roles: 1 conforming, 2 and 3 non-conforming, 4 neutral.
+            conforming: [1],
+            defective: [2, 3]
+        },
+        sandbox: { names: ["Open Hand", "Fist", "Victory", "Rest"], conforming: [], defective: [] }
+    };
+
+    function gestureScenario() {
+        return GESTURE_SCENARIOS[state.gestureScenario] || GESTURE_SCENARIOS.sandbox;
+    }
+
+    function applyGestureScenario(key, rename) {
+        state.gestureScenario = key in GESTURE_SCENARIOS ? key : "sandbox";
+        try { localStorage.setItem("jepctl_gesture_scenario", state.gestureScenario); } catch (_) {}
+        document.querySelectorAll(".scenario-card").forEach((c) => {
+            c.classList.toggle("active", c.dataset.scenario === state.gestureScenario);
+        });
+        const console_ = document.getElementById("qc-console");
+        if (console_) console_.style.display = state.gestureScenario === "qc" ? "flex" : "none";
+        if (rename) {
+            gestureScenario().names.forEach((name, i) => {
+                const input = document.getElementById(`gesture-name-${i + 1}`);
+                // Never rename a slot that already holds a captured prototype.
+                if (input && !gestureForSlot(i + 1)) input.value = name;
+            });
+        }
+        qcReset(false);
+    }
+
+    function qcLog(text) {
+        state.qcIncidents.unshift(text);
+        if (state.qcIncidents.length > 40) state.qcIncidents.pop();
+        const log = document.getElementById("qc-log");
+        if (log) log.innerHTML = state.qcIncidents.map((t) => `<li>${escapeHtml(t)}</li>`).join("");
+    }
+
+    function qcReset(clearLog) {
+        state.qcPacked = 0;
+        state.qcDefects = 0;
+        state.qcOpenSince = 0;
+        state.qcAlarmed = false;
+        state.qcLastRole = null;
+        if (clearLog) {
+            state.qcIncidents = [];
+            const log = document.getElementById("qc-log");
+            if (log) log.innerHTML = "";
+        }
+        qcRender("empty", "Waiting for a capture", "");
+        const c = document.getElementById("qc-counter");
+        const d = document.getElementById("qc-defects");
+        if (c) c.textContent = "0";
+        if (d) d.textContent = "0";
+    }
+
+    function qcRender(cls, label, score) {
+        const box = document.getElementById("qc-status");
+        const lab = document.getElementById("qc-status-label");
+        const sc = document.getElementById("qc-status-score");
+        if (box) box.className = `qc-status ${cls}`;
+        if (lab && lab.textContent !== label) lab.textContent = label;
+        if (sc) sc.textContent = score || "";
+    }
+
+    // Which slot a recognised name belongs to (1..4), or 0.
+    function qcSlotOf(name) {
+        for (let i = 1; i <= GESTURE_SLOT_COUNT; i++) {
+            const g = gestureForSlot(i);
+            if (g && g.name === name) return i;
+        }
+        return 0;
+    }
+
+    function qcUpdate(recognized, score) {
+        if (state.gestureScenario !== "qc") { state.qcDefectActive = false; return; }
+        const sc = gestureScenario();
+        const slot = recognized ? qcSlotOf(recognized) : 0;
+        const pct = `${Math.round((score || 0) * 100)}%`;
+        const now = Date.now();
+        let role = "empty";
+        if (slot && sc.conforming.includes(slot)) role = "ok";
+        else if (slot && sc.defective.includes(slot)) role = "defect";
+
+        if (role === "defect") {
+            if (!state.qcOpenSince) state.qcOpenSince = now;
+            const held = now - state.qcOpenSince;
+            if (held >= 3000) {
+                if (!state.qcAlarmed) {
+                    state.qcAlarmed = true;
+                    state.qcDefects += 1;
+                    const d = document.getElementById("qc-defects");
+                    if (d) d.textContent = String(state.qcDefects);
+                    qcLog(`${new Date().toLocaleTimeString()} - Unit #${state.qcPacked + state.qcDefects} non conforming: ${recognized} held ${(held / 1000).toFixed(0)} s`);
+                    if (state.gestureAudio !== false) playAlertTone();
+                }
+                qcRender("alarm", `ALARM: ${recognized.toUpperCase()} on the line`, pct);
+            } else {
+                qcRender("warn", `STATUS: ${recognized.toUpperCase()}`, `${pct} · ${(held / 1000).toFixed(1)} s`);
+            }
+        } else if (role === "ok") {
+            // A unit that goes from non conforming to conforming has just been capped.
+            if (state.qcLastRole === "defect") {
+                state.qcPacked += 1;
+                const c = document.getElementById("qc-counter");
+                if (c) c.textContent = String(state.qcPacked);
+            }
+            state.qcOpenSince = 0;
+            state.qcAlarmed = false;
+            qcRender("ok", `STATUS: ${recognized.toUpperCase()}`, pct);
+        } else {
+            state.qcOpenSince = 0;
+            state.qcAlarmed = false;
+            qcRender("empty", recognized ? `STATUS: ${recognized.toUpperCase()}` : "STATUS: EMPTY ZONE", recognized ? pct : "");
+        }
+        if (role !== "empty" || recognized) state.qcLastRole = role;
+        // Action C: box the diverging patches while a defect is on the line.
+        state.qcDefectActive = role === "defect";
+    }
+
     function drawHeatmap(patchDiff, gridSize) {
         if (!el.gestureHeatmap || !state.gestureHeatmap) return;
         if (!Array.isArray(patchDiff) || !gridSize || patchDiff.length !== gridSize * gridSize) {
@@ -2290,6 +2433,26 @@
             const g = Math.round(180 * Math.max(0, 1 - Math.abs(v - 0.5) * 2));
             ctx.fillStyle = `rgba(${r}, ${g}, 40, ${(0.15 + 0.7 * v).toFixed(2)})`;
             ctx.fillRect(x, y, cell, cell);
+        }
+        // Where the model says the scene diverges most: the bounding box of the
+        // strongest patches. With the bottle this lands on the neck, which is the
+        // point: nothing was ever trained to look for a cap.
+        if (state.qcDefectActive) {
+            const hot = 0.62 * max;
+            let x0 = gridSize, y0 = gridSize, x1 = -1, y1 = -1;
+            for (let i = 0; i < patchDiff.length; i++) {
+                if (patchDiff[i] < hot) continue;
+                const cx = i % gridSize, cy = Math.floor(i / gridSize);
+                if (cx < x0) x0 = cx;
+                if (cy < y0) y0 = cy;
+                if (cx > x1) x1 = cx;
+                if (cy > y1) y1 = cy;
+            }
+            if (x1 >= x0 && y1 >= y0) {
+                ctx.strokeStyle = "#ef4444";
+                ctx.lineWidth = 2;
+                ctx.strokeRect(x0 * cell + 1, y0 * cell + 1, (x1 - x0 + 1) * cell - 2, (y1 - y0 + 1) * cell - 2);
+            }
         }
     }
 
@@ -2706,6 +2869,7 @@
         }
 
         renderReasoning(match, event, { recognized, margin, waitReason });
+        qcUpdate(recognized, displayScore);
         drawHeatmap(match.patch_diff, match.grid_size);
         handleGestureActions(recognized, displayScore);
     }

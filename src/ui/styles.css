@@ -3008,3 +3008,30 @@ body.dark-theme { font-size: 13px; }
 }
 .companion-reticle::before { left: 50%; top: -7px; width: 1px; height: 46px; margin-left: -0.5px; opacity: .8; }
 .companion-reticle::after { top: 50%; left: -7px; height: 1px; width: 46px; margin-top: -0.5px; opacity: .8; }
+
+/* Gestures: scenario picker and the quality-control console */
+.scenario-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 12px 0; }
+.scenario-card {
+    text-align: start; padding: 12px; border-radius: 10px; cursor: pointer; color: inherit;
+    background: var(--surface-2, #1a1f22); border: 1px solid var(--border-color);
+    display: flex; flex-direction: column; gap: 3px; transition: border-color .15s, background .15s;
+}
+.scenario-card:hover { border-color: var(--accent, #4ade80); }
+.scenario-card.active { border-color: var(--accent, #4ade80); background: rgba(74, 222, 128, 0.09); }
+.scenario-title { font-weight: 700; font-size: 14px; }
+.scenario-sub { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--accent, #4ade80); }
+.scenario-desc { font-size: 12px; color: var(--text-muted); line-height: 1.45; }
+
+.qc-console { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.qc-status {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 12px 14px; border-radius: 9px; font-weight: 700; font-size: 15px;
+    border: 2px solid var(--border-color); background: var(--surface-2, #1a1f22);
+}
+.qc-status.ok { border-color: #4ade80; color: #4ade80; }
+.qc-status.warn { border-color: #f59e0b; color: #f59e0b; }
+.qc-status.alarm { border-color: #ef4444; color: #ef4444; animation: world-flash 0.7s ease-in-out infinite; }
+.qc-status.empty { border-color: var(--border-color); color: var(--text-muted); }
+.qc-status-score { font-family: var(--mono, monospace); font-size: 13px; }
+.qc-meta { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--text-muted); }
+#qc-log { max-height: 110px; }

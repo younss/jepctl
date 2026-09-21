@@ -214,6 +214,19 @@ The header is the single source of truth: **model · checkpoint coverage · came
 
 Every action button has a **`{ } API`** control that shows the exact request the app sends: with the threshold and margin you just tuned: in curl, JavaScript or Python, ready to paste into your application.
 
+**Two scenarios, one engine.** The tab opens on **Industrial quality control**: a
+bottle, capped or not. Two five-second captures replace the thousands of annotated
+photos a detector like YOLO would need, and the latent space ignores the changing
+glare on glass to keep the geometry of the neck and the cap. The four slots become
+*Bottle closed* (conforming), *Bottle open* and *Cap askew* (non-conforming) and
+*Empty zone* (neutral, so an empty conveyor raises no alert). A quality console shows
+the live status colour coded, counts the units packaged and the non-conformities,
+raises a flashing alarm with a beep and an incident-log line when a bottle stays
+uncapped for more than three seconds, and the difference map boxes the diverging
+patches in red: on the neck, without anything ever being trained to look for a cap.
+The second scenario, **Gesture sandbox**, keeps the hand poses that drive the Robot
+Twin and the Companion.
+
 Tips for good detections: register the neutral pose first, take 3-5 samples per gesture while moving slightly, keep the hand large in the frame, and prefer `facebook/dinov2-small`.
 
 ---

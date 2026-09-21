@@ -21,7 +21,7 @@
 \usepackage{xcolor}
 \definecolor{jepctlpanel}{HTML}{F0F7FE}
 \usepackage{tikz}
-\usetikzlibrary{positioning,arrows.meta,fit,backgrounds}
+\usetikzlibrary{positioning,arrows.meta,fit,backgrounds,calc}
 \usepackage[hidelinks]{hyperref}
 \usepackage{url}
 
@@ -242,52 +242,61 @@ module's responsibility.
 \resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[
   font=\small\sffamily,
-  mod/.style={draw, rounded corners=2pt, align=center, minimum height=9mm, minimum width=26mm, inner sep=3pt},
-  lay/.style={draw, dashed, rounded corners=3pt, inner sep=5mm},
-  dep/.style={-{Stealth[length=2mm]}, thick, gray!70!black}
+  mod/.style={draw, rounded corners=2pt, align=center, minimum height=11mm, minimum width=27mm, inner sep=3pt},
+  dep/.style={-{Stealth[length=2mm]}, semithick, gray!55!black, rounded corners=2pt},
+  lay/.style={font=\scriptsize\itshape, anchor=west, gray!50!black}
 ]
-% layer 4: transport
-\node[mod, fill=blue!8] (server) at (0,0) {\code{server}\\[-1pt]\scriptsize routes, handlers, auth guard, WS/SSE};
-% layer 3: applications
-\node[mod, fill=green!8] (gest)  at (-5.4,-2.2) {\code{gestures}\\[-1pt]\scriptsize prototypes, scoring};
-\node[mod, fill=green!8] (robot) at (-1.8,-2.2) {\code{robot}\\[-1pt]\scriptsize HAL, safety, control};
-\node[mod, fill=green!8] (comp)  at ( 1.8,-2.2) {\code{companion}\\[-1pt]\scriptsize behaviours, cues};
-\node[mod, fill=green!8] (hub)   at ( 5.4,-2.2) {\code{hub}\\[-1pt]\scriptsize catalogue, pull};
-% layer 2: capability
-\node[mod, fill=orange!10] (engine) at (-2.7,-4.4) {\code{engine}\\[-1pt]\scriptsize ViT backbones, loading,\\[-2pt]\scriptsize scene predictor};
-\node[mod, fill=orange!10] (media)  at ( 2.7,-4.4) {\code{media}\\[-1pt]\scriptsize camera, mic, ring buffer,\\[-2pt]\scriptsize image/video/audio};
-% layer 1: foundation
-\node[mod, fill=black!5] (types)  at (-3.6,-6.4) {\code{types}};
-\node[mod, fill=black!5] (config) at ( 0,-6.4)   {\code{config}};
-\node[mod, fill=black!5] (auth)   at ( 3.6,-6.4) {\code{auth}};
+% --- layers ---------------------------------------------------------------
+\node[mod, fill=blue!8, minimum width=52mm] (server) at (0,0)
+  {\code{server}\\[-1pt]\scriptsize routes, handlers, auth guard, WS/SSE};
 
-\draw[dep] (server) -- (gest);
-\draw[dep] (server) -- (robot);
-\draw[dep] (server) -- (comp);
-\draw[dep] (server) -- (hub);
-\draw[dep] (server.west) to[out=180,in=135] (engine.north west);
-\draw[dep] (server.east) to[out=0,in=45] (media.north east);
-\draw[dep] (robot) -- (gest);
-\draw[dep] (robot) -- (comp);
-\draw[dep] (comp)  -- (gest);
-\draw[dep] (hub)   -- (engine);
-\draw[dep] (engine) -- (media);
-\draw[dep] (engine) -- (types);
-\draw[dep] (engine) -- (config);
-\draw[dep] (media)  -- (config);
-\draw[dep] (media)  -- (types);
-\draw[dep] (gest)   -- (types);
-\draw[dep] (server.south east) to[out=-60,in=60] (auth.north);
+\node[mod, fill=green!8] (gest)  at (-6.15,-3.0) {\code{gestures}\\[-1pt]\scriptsize prototypes, scoring};
+\node[mod, fill=green!8] (robot) at (-2.05,-3.0) {\code{robot}\\[-1pt]\scriptsize HAL, safety, control};
+\node[mod, fill=green!8] (comp)  at ( 2.05,-3.0) {\code{companion}\\[-1pt]\scriptsize behaviours, cues};
+\node[mod, fill=green!8] (hub)   at ( 6.15,-3.0) {\code{hub}\\[-1pt]\scriptsize catalogue, pull};
 
-\node[align=left, font=\scriptsize\itshape, anchor=west] at (7.2,0)    {transport};
-\node[align=left, font=\scriptsize\itshape, anchor=west] at (7.2,-2.2) {applications};
-\node[align=left, font=\scriptsize\itshape, anchor=west] at (7.2,-4.4) {capability};
-\node[align=left, font=\scriptsize\itshape, anchor=west] at (7.2,-6.4) {foundation};
+\node[mod, fill=orange!12, minimum width=34mm] (engine) at (-3.1,-6.4)
+  {\code{engine}\\[-1pt]\scriptsize ViT backbones, checkpoint\\[-2pt]\scriptsize loading, scene predictor};
+\node[mod, fill=orange!12, minimum width=34mm] (media)  at ( 3.1,-6.4)
+  {\code{media}\\[-1pt]\scriptsize camera, mic, ring buffer,\\[-2pt]\scriptsize image / video / audio};
+
+\node[draw, rounded corners=2pt, fill=black!5, minimum width=146mm, minimum height=9mm, align=center]
+  (found) at (0,-8.9) {\scriptsize foundation\ \ \code{types} \quad $\cdot$ \quad \code{config} \quad $\cdot$ \quad \code{auth}};
+
+% --- server to the application row, through one rail -----------------------
+\draw[semithick, gray!55!black] (server.south) -- (0,-1.55);
+\draw[semithick, gray!55!black] (-6.15,-1.55) -- (6.15,-1.55);
+\foreach \n in {gest,robot,comp,hub} { \draw[dep] (\n.north |- 0,-1.55) -- (\n.north); }
+
+% --- server to the capability row, routed around the outside ---------------
+\draw[dep, dashed] ($(server.south)+(-2.0,0)$) -- ++(0,-0.4) -- (-8.9,-0.95) |- (engine.west);
+\draw[dep, dashed] ($(server.south)+( 2.0,0)$) -- ++(0,-0.4) -- ( 8.9,-0.95) |- (media.east);
+
+% --- inside the application row -------------------------------------------
+\draw[dep] (robot.west) -- (gest.east);
+\draw[dep] (robot.east) -- (comp.west);
+\draw[dep] (comp.south) -- ++(0,-0.55) -| (gest.south);
+
+% --- applications to capability -------------------------------------------
+\draw[dep] (hub.south) -- ++(0,-1.15) -| (engine.north);
+
+% --- inside the capability row and down to the foundation ------------------
+\draw[dep] (engine.east) -- (media.west);
+\draw[dep] (engine.south) -- (engine.south |- found.north);
+\draw[dep] (media.south)  -- (media.south  |- found.north);
+\draw[dep] ($(gest.south)+(-0.7,0)$) -- ($(gest.south)+(-0.7,0)$ |- found.north);
+\draw[dep] ($(hub.south)+(0.7,0)$)   -- ($(hub.south)+(0.7,0)$   |- found.north);
+
+% --- layer captions --------------------------------------------------------
+\node[lay] at (9.45,0)    {transport};
+\node[lay] at (9.45,-3.0) {applications};
+\node[lay] at (9.45,-6.4) {capability};
+\node[lay] at (9.45,-8.9) {foundation};
 \end{tikzpicture}}
-\caption{Module dependencies. Arrows point from a module to what it uses. Application
-modules depend on \code{engine} and \code{media} but never on \code{server}, so the same
-perception and control code is reachable from the CLI, the HTTP API, and the tests
-without a running daemon.}
+\caption{Module dependencies; arrows point from a module to what it uses, and dashed
+arrows are the two that skip a layer. Application modules depend on \code{engine} and
+\code{media} but never on \code{server}, so the same perception and control code is
+reachable from the CLI, the HTTP API, and the tests without a running daemon.}
 \label{fig:components}
 \end{figure}
 
@@ -330,46 +339,52 @@ and six asynchronous tasks on the Tokio runtime.
 \resizebox{0.96\textwidth}{!}{%
 \begin{tikzpicture}[
   font=\small\sffamily,
-  th/.style={draw, rounded corners=2pt, fill=orange!12, align=center, minimum height=8mm, inner sep=3pt},
-  tk/.style={draw, rounded corners=2pt, fill=blue!8, align=center, minimum height=8mm, inner sep=3pt},
-  st/.style={draw, rounded corners=2pt, fill=green!10, align=center, minimum height=8mm, inner sep=3pt},
-  fl/.style={-{Stealth[length=2mm]}, thick}
+  th/.style={draw, rounded corners=2pt, fill=orange!14, align=center, minimum height=10mm, minimum width=32mm, inner sep=3pt},
+  st/.style={draw, rounded corners=2pt, fill=green!12, align=center, minimum height=10mm, minimum width=30mm, inner sep=3pt},
+  tk/.style={draw, rounded corners=2pt, fill=blue!8, align=center, minimum height=8.5mm, minimum width=38mm, inner sep=3pt},
+  fl/.style={-{Stealth[length=2mm]}, semithick, gray!55!black, rounded corners=2pt},
+  note/.style={draw, dashed, rounded corners=2pt, fill=yellow!8, align=left, font=\scriptsize, inner sep=4pt}
 ]
-\node[th] (camth) at (-6,1.6) {camera thread\\[-2pt]\scriptsize \code{nokhwa}, 10\,fps};
-\node[th] (micth) at (-6,0)   {microphone thread\\[-2pt]\scriptsize \code{cpal} callback};
-\node[st] (ring)  at (-2.4,1.6) {frame ring buffer\\[-2pt]\scriptsize 16 frames, \code{RwLock}};
-\node[st] (mics)  at (-2.4,0)   {audio ring\\[-2pt]\scriptsize 12\,s, \code{Mutex}};
-\node[st] (eng)   at (1.4,0.8)  {\code{EngineManager}\\[-2pt]\scriptsize active + audio model,\\[-3pt]\scriptsize inference mutex};
+% --- column 1: OS threads --------------------------------------------------
+\node[th] (camth) at (0,0)      {camera thread\\[-2pt]\scriptsize \code{nokhwa}, 10\,fps};
+\node[th] (micth) at (0,-2.0)   {microphone thread\\[-2pt]\scriptsize \code{cpal} callback};
+% --- column 2: shared buffers ---------------------------------------------
+\node[st] (ring) at (4.6,0)     {frame ring buffer\\[-2pt]\scriptsize 16 frames, \code{RwLock}};
+\node[st] (mics) at (4.6,-2.0)  {audio ring\\[-2pt]\scriptsize 12\,s, \code{Mutex}};
+% --- column 3: the one gate to the model ----------------------------------
+\node[st, minimum height=20mm, minimum width=32mm, fill=green!16] (eng) at (9.1,-1.0)
+  {\code{EngineManager}\\[-2pt]\scriptsize vision + audio slot\\[-3pt]\scriptsize inference mutex};
+% --- column 4: consumers, tapped off one bus -------------------------------
+\node[tk] (http)  at (16.0, 1.4)  {HTTP / SSE / WS\\[-2pt]\scriptsize one task per request};
+\node[tk] (rloop) at (16.0, 0.1)  {robot control loop\ \ 30\,Hz};
+\node[tk] (cloop) at (16.0,-1.2)  {companion loop\ \ 30\,Hz};
+\node[tk] (robs)  at (16.0,-2.5)  {robot observer\ \ $\approx$6.7\,Hz};
+\node[tk] (ceyes) at (16.0,-3.8)  {companion eyes 10\,Hz\\[-2pt]\scriptsize visual matcher $\approx$3\,Hz};
+\node[tk] (cears) at (16.0,-5.1)  {companion ears\ \ $\approx$1.4\,Hz};
 
-\node[tk] (http)  at (5.4,2.4)  {HTTP / SSE / WS\\[-2pt]\scriptsize one task per request};
-\node[tk] (rloop) at (5.4,1.0)  {robot loop 30\,Hz};
-\node[tk] (cloop) at (5.4,-0.4) {companion loop 30\,Hz};
-\node[tk] (robs)  at (5.4,-1.8) {robot observer\\[-2pt]\scriptsize $\approx$6.7\,Hz};
-\node[tk] (ceyes) at (5.4,-3.2) {companion eyes 10\,Hz\\[-2pt]\scriptsize + matcher $\approx$3\,Hz};
-\node[tk] (cears) at (5.4,-4.6) {companion ears $\approx$1.4\,Hz};
-
+% --- flows ------------------------------------------------------------------
 \draw[fl] (camth) -- (ring);
 \draw[fl] (micth) -- (mics);
-\draw[fl] (ring) -- (eng);
-\draw[fl] (mics) -- (eng);
-\draw[fl] (eng) -- (http);
-\draw[fl] (eng.east) to[out=0,in=180] (robs.west);
-\draw[fl] (eng.east) to[out=-20,in=180] (ceyes.west);
-\draw[fl] (eng.east) to[out=-30,in=180] (cears.west);
-\draw[fl] (ring.south) to[out=-90,in=180] (ceyes.west);
-\node[align=left, font=\scriptsize, anchor=north west] at (-6.9,-2.6)
-  {\textbf{Why two OS threads.} A \code{nokhwa} camera and a \code{cpal}\\
-   input stream are not \code{Send}: they cannot be moved between\\
-   threads, so each is owned by a dedicated thread that pushes\\
-   into a shared ring. Everything else is an async task.};
-\node[align=left, font=\scriptsize, anchor=north west] at (-6.9,-4.4)
-  {\textbf{Why one inference mutex.} Concurrent forward passes each\\
-   need their own working set of GPU buffers; serialising them\\
-   bounds peak memory (Section~\ref{sec:measure}).};
+\draw[fl] (ring.east) -- (7.25,0)    -- (7.25,-0.6) -- ($(eng.west)+(0,0.45)$);
+\draw[fl] (mics.east) -- (7.25,-2.0) -- (7.25,-1.4) -- ($(eng.west)+(0,-0.45)$);
+% one vertical bus feeding every consumer
+\coordinate (b0) at (12.6,-1.0);
+\draw[semithick, gray!55!black] (eng.east) -- (b0);
+\draw[semithick, gray!55!black] (12.6,1.4) -- (12.6,-5.1);
+\foreach \n/\y in {http/1.4,rloop/0.1,cloop/-1.2,robs/-2.5,ceyes/-3.8,cears/-5.1} {
+  \draw[fl] (12.6,\y) -- (\n.west); }
+% the companion's motion detector reads frames directly, routed under everything
+\draw[fl, dashed] (ring.south) -- (4.6,-0.95) -- (2.75,-0.95) -- (2.75,-6.7)
+                  -- (18.7,-6.7) -- (18.7,-3.8) -- (ceyes.east);
+\node[font=\scriptsize, anchor=west, gray!40!black] at (6.0,-6.95) {raw frames for motion attention};
 \end{tikzpicture}}
-\caption{Runtime view. Orange: OS threads owning non-movable hardware handles. Blue:
-Tokio tasks. Green: shared state. Every consumer reaches the model through one
-\code{EngineManager} whose inference mutex serialises forward passes.}
+\caption{Runtime view. Orange: OS threads. Blue: Tokio tasks. Green: shared state. Two
+handles force the thread boundary on the left: a \code{nokhwa} camera and a \code{cpal}
+input stream are not \code{Send}, so each is owned by a dedicated thread that pushes into
+a shared ring; everything else is asynchronous. On the right, every consumer reaches the
+model through a single \code{EngineManager}, whose inference mutex serialises forward
+passes so that concurrent requests cannot multiply the GPU working set
+(Section~\ref{sec:measure}).}
 \label{fig:runtime}
 \end{figure}
 
@@ -387,38 +402,41 @@ and \code{watch} channels to broadcast telemetry without contention.
 \centering
 \resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[
-  node distance=5mm,
-  box/.style={draw, rounded corners=2pt, align=center, font=\small, inner sep=4pt, minimum height=8mm},
-  grp/.style={draw, dashed, rounded corners=3pt, inner sep=6pt},
-  arr/.style={-{Stealth[length=2mm]}, thick}
+  font=\small\sffamily,
+  box/.style={draw, rounded corners=2pt, align=center, font=\small, inner sep=3pt, minimum height=10mm, minimum width=30mm},
+  fl/.style={-{Stealth[length=2mm]}, semithick, gray!55!black, rounded corners=2pt}
 ]
-\node[box] (cam) {Camera\\\scriptsize ring buffer, ROI};
-\node[box, below=of cam] (mic) {Microphone\\\scriptsize 12\,s ring};
-\node[box, below=of mic] (files) {Files\\\scriptsize image, clip, audio};
+% sources
+\node[box, fill=orange!10] (cam)   at (0, 1.5)  {Camera\\[-2pt]\scriptsize ring buffer, ROI};
+\node[box, fill=orange!10] (mic)   at (0, 0)    {Microphone\\[-2pt]\scriptsize 12\,s ring};
+\node[box, fill=orange!10] (files) at (0,-1.5)  {Files\\[-2pt]\scriptsize image, clip, audio};
+% pipeline
+\node[box, minimum height=26mm, fill=black!4] (pre) at (5.0,0)
+  {Preprocessing\\[-2pt]\scriptsize crop / resample /\\[-3pt]\scriptsize log-mel fbank};
+\node[box, minimum height=26mm, fill=orange!14] (eng) at (9.4,0)
+  {Engine\\[-2pt]\scriptsize ViT backbones,\\[-3pt]\scriptsize strict loading};
+\node[box, minimum height=26mm, fill=green!12] (emb) at (13.8,0)
+  {Embeddings\\[-2pt]\scriptsize pooled $+$ per-patch};
+% consumers
+\node[box, fill=blue!8] (fs)  at (19.2, 1.5) {Few-shot matcher};
+\node[box, fill=blue!8] (wm)  at (19.2, 0)   {Online world model};
+\node[box, fill=blue!8] (ctl) at (19.2,-1.5) {Control};
+% transport
+\node[box, minimum width=150mm, fill=black!4] (api) at (9.6,-4.2)
+  {REST / SSE / WebSocket API \quad $\cdot$ \quad CLI \quad $\cdot$ \quad desktop testbench};
 
-\node[box, right=14mm of mic, minimum height=20mm] (pre) {Preprocessing\\\scriptsize crop / resample /\\\scriptsize log-mel fbank};
-
-\node[box, right=12mm of pre, minimum height=20mm] (eng) {Engine\\\scriptsize ViT backbones\\\scriptsize strict checkpoint\\\scriptsize loading};
-
-\node[box, right=12mm of eng] (emb) {Embeddings\\\scriptsize pooled $+$ per-patch};
-
-\node[box, above right=6mm and 12mm of emb] (fs) {Few-shot matcher\\\scriptsize prototypes, contrastive};
-\node[box, right=12mm of emb] (wm) {Online world model\\\scriptsize predict next, surprise};
-\node[box, below right=6mm and 12mm of emb] (ctl) {Control\\\scriptsize mirror, latent goal};
-
-\node[box, below=14mm of eng] (api) {REST / SSE / WebSocket API \quad $\cdot$ \quad CLI \quad $\cdot$ \quad desktop testbench};
-
-\draw[arr] (cam) -- (pre);
-\draw[arr] (mic) -- (pre);
-\draw[arr] (files) -- (pre);
-\draw[arr] (pre) -- (eng);
-\draw[arr] (eng) -- (emb);
-\draw[arr] (emb) -- (fs);
-\draw[arr] (emb) -- (wm);
-\draw[arr] (emb) -- (ctl);
-\draw[arr] (fs.south) to[out=-90,in=30] (api.east);
-\draw[arr] (wm.south) to[out=-90,in=20] (api.east);
-\draw[arr] (ctl.south) to[out=-90,in=10] (api.east);
+% sources into preprocessing, through a short rail
+\foreach \n in {cam,mic,files} { \draw[fl] (\n.east) -- (2.6,0 |- \n.east) -- (2.6,0) -- (pre.west); }
+\draw[fl] (pre) -- (eng);
+\draw[fl] (eng) -- (emb);
+% embeddings fan out through a vertical rail, no box is crossed
+\draw[semithick, gray!55!black] (emb.east) -- (16.6,0);
+\draw[semithick, gray!55!black] (16.6,1.5) -- (16.6,-1.5);
+\foreach \n/\y in {fs/1.5,wm/0,ctl/-1.5} { \draw[fl] (16.6,\y) -- (\n.west); }
+% consumers down to the transport layer, around the right edge
+\draw[fl] (fs.east)  -- (22.0, 1.5) |- (api.east);
+\draw[fl] (wm.east)  -- (21.6, 0)   |- (api.east);
+\draw[fl] (ctl.east) -- (21.2,-1.5) |- (api.east);
 \end{tikzpicture}}
 \caption{\jepctl{} architecture. Every module above the encoder operates on embeddings
 only; none of them reads pixels. The same path serves the command line, the HTTP API, and

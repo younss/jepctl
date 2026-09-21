@@ -58,14 +58,16 @@ a single static JPEG.
 - **Figure 1** — `figures/jepa-overview.jpg`, the author's own overview infographic
   (1400x764 JPEG, downloaded from the author's blog). Since it is your own work there is
   no third-party rights question; arXiv only requires that you hold the rights.
-  Two things worth deciding before you submit:
-  1. The image was generated with an assistant and contains a few garbled strings (for
-     example "Train to trinring" near the predictor, and the mock terminal text). Reviewers
-     do notice this. Regenerating it with the text corrected, or overlaying clean labels,
-     would make the paper look tighter.
-  2. Some venues now ask authors to disclose AI-generated figures. arXiv does not currently
-     require it for figures, but adding "generated with the assistance of an image model"
-     to the caption costs nothing and pre-empts the question.
+  The artwork carried three garbled strings from the image generator; they are covered in
+  `jepctl.tex` by a TikZ overlay drawn on top of the image, so the text is vector, correct
+  and legible while the artwork itself is untouched:
+  1. the mock terminal, repainted with real `jepctl serve` output;
+  2. `vo:` corrected to `via:` after "API control examples";
+  3. `Train to tcrinring` replaced by "Fit on observed transitions".
+  The overlay uses normalised coordinates inside a `scope` keyed to the image node, so if
+  you ever regenerate the artwork you only need to re-measure those three rectangles.
+  Note: some venues ask authors to disclose AI-generated figures. arXiv does not currently
+  require it, but a line in the caption costs nothing and pre-empts the question.
 - **Figure 2** — TikZ, the `jepctl` dataflow: sensors, preprocessing, encoder, and the
   three latent-space consumers (few-shot matcher, online world model, control).
 - **Figure 3** — TikZ, the World loop: frozen encoder, online predictor, surprise as the

@@ -18,6 +18,8 @@
 \usepackage{array}
 \usepackage{booktabs}
 \usepackage{microtype}
+\usepackage{xcolor}
+\definecolor{jepctlpanel}{HTML}{F0F7FE}
 \usepackage{tikz}
 \usetikzlibrary{positioning,arrows.meta,fit,backgrounds}
 \usepackage[hidelinks]{hyperref}
@@ -82,7 +84,36 @@ whether the checkpoint layout they downloaded matches the architecture they buil
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=\textwidth]{figures/jepa-overview.jpg}
+% The source artwork carries three garbled strings from the image generator: the mock
+% terminal, "vo:" for "via:", and "Train to tcrinring". They are covered here with vector
+% text so the figure is legible and correct; the artwork itself is unchanged.
+\begin{tikzpicture}[inner sep=0pt, outer sep=0pt]
+  \node[anchor=south west] (img) {\includegraphics[width=\textwidth]{figures/jepa-overview.jpg}};
+  \begin{scope}[x={(img.south east)}, y={(img.north west)}, font=\sffamily]
+    % (1) Mock terminal: repaint the panel and typeset real jepctl output.
+    \fill[rounded corners=1.2pt, black!92] (0.1500,0.2660) rectangle (0.2815,0.3780);
+    \fill[rounded corners=1.2pt, black!75] (0.1500,0.3590) rectangle (0.2815,0.3780);
+    \fill[black!92] (0.1500,0.3590) rectangle (0.2815,0.3650);
+    \fill[red!70!black]    (0.1560,0.3690) circle (0.0028);
+    \fill[yellow!75!black] (0.1625,0.3690) circle (0.0028);
+    \fill[green!60!black]  (0.1690,0.3690) circle (0.0028);
+    \node[anchor=north west, text=white, font=\ttfamily\fontsize{3.4}{4.2}\selectfont,
+          align=left] at (0.1545,0.3545)
+      {\$ jepctl serve\\[0.7pt]
+       \textcolor{green!60!white}{INFO} Metal backend ready\\[0.7pt]
+       \textcolor{green!60!white}{INFO} dinov2-small 221/221\\[0.7pt]
+       \textcolor{green!60!white}{INFO} listening 127.0.0.1:11435\\[0.7pt]
+       \$ \rule{1.1pt}{2.6pt}};
+    % (2) "vo:" -> "via:"
+    \fill[white] (0.2075,0.1450) rectangle (0.2300,0.1760);
+    \node[anchor=west, font=\sffamily\itshape\fontsize{6.4}{7.5}\selectfont, text=black!85]
+      at (0.2085,0.1600) {via:};
+    % (3) "Train to tcrinring" -> a correct label
+    \fill[rounded corners=1pt, jepctlpanel] (0.7330,0.3900) rectangle (0.8320,0.4300);
+    \node[anchor=west, font=\sffamily\fontsize{5.6}{6.6}\selectfont, text=black!85,
+          align=left] at (0.7355,0.4100) {Fit on observed\\ transitions};
+  \end{scope}
+\end{tikzpicture}
 \caption{Overview of \jepctl{}. Left: catalogued JEPA-style encoders (I-JEPA, V-JEPA~2,
 DINOv2, AudioMAE) producing embeddings of 384 to 1280 dimensions, served by a single Rust
 binary with Metal, CUDA, or CPU backends and a small command line. Centre: few-shot

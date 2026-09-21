@@ -77,6 +77,7 @@ async-stream = "0.3.6"
 wry = "0.57.0"
 tao = "0.37.0"
 cpal = "0.18"
+sha2 = "0.10"
 
 [dev-dependencies]
 tower = { version = "0.5.3", features = ["util"] }

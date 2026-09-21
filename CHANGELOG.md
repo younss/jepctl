@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+- `keys.json` stores SHA-256 digests of API keys instead of the raw tokens (legacy files migrate on first start); digests are never returned by `GET /api/keys`.
+
 ### Changed
 - Rust edition 2024 with `rust-version = "1.88"` (the oldest toolchain that has every std API the code uses). Nested `if let` chains became let chains; no behaviour change.
 

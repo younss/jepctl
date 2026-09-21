@@ -2580,6 +2580,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serialport",
+ "sha2",
  "subtle",
  "sysinfo",
  "tao",

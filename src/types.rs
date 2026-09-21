@@ -406,6 +406,8 @@ impl std::fmt::Display for Role {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKeyRecord {
     pub key_prefix: String,
+    /// SHA-256 digest of the token (also the map key). Never sent to clients.
+    #[serde(default, skip_serializing)]
     pub token_hash: String,
     pub role: Role,
     pub name: String,

@@ -3,9 +3,6 @@
 %   - no line numbers, single spaced, 11pt type, 1 inch margins
 %   - no watermarks, no highlighted text, no embedded JavaScript, no animated figures
 % Build:  pdflatex jepctl && bibtex jepctl && pdflatex jepctl && pdflatex jepctl
-%
-% TODO(author): complete the surname and affiliation on the \author line below
-% before submitting; arXiv shows this block verbatim on the abstract page.
 
 \documentclass[11pt,onecolumn]{article}
 
@@ -31,11 +28,8 @@
 \title{\jepctl{}: Putting Joint-Embedding Predictive Architectures\\ in Practitioners' Hands\\[2mm]
 \large An engineering report on a local runtime for JEPA encoders}
 
-% TODO(author): replace with your full name and how you want to be described.
-% "Independent developer" matches the genre of this report; use your employer or
-% "Independent engineer" if you prefer.
-\author{Younss\\
-  Independent developer\\
+\author{Younss AZzzayani\\
+  Enterprise \& Solutions Architecture Expert, Software delivery Leader \\
   \texttt{younssiga@gmail.com}}
 
 \date{\today}
@@ -187,6 +181,15 @@ provide, and that every demonstration in this report relies on, is a patch-level
 representation in which semantically similar content lands close together and nuisance
 variation matters less than it does in pixel space. That property is theirs, not mine.
 
+Two of those five are not joint-embedding predictive architectures and I do not want the
+catalogue to blur the distinction. DINOv2 is trained by self-distillation with no explicit
+predictor, and AudioMAE is a masked autoencoder that reconstructs spectrogram patches
+through a decoder. They are catalogued because they expose the same interface and the same
+usable property, a patch-level latent space that is stable under nuisance variation, not
+because their training objective is a JEPA one. Where this report says ``JEPA-style
+encoder'' it means that shared interface and property, and nothing about how the weights
+were obtained.
+
 \paragraph{LeWorldModel \cite{lewm2026}: where the World loop comes from.}
 Maes et al.\ train an encoder and a predictor end to end from pixels with two loss terms:
 a mean-squared next-embedding prediction loss, and SIGReg, a regulariser that projects
@@ -325,7 +328,10 @@ that live beside the code.}
 One departure from strict layering is worth naming: \code{types} references application
 modules because several API data types embed domain structures (a robot telemetry
 snapshot, a gesture score). It is a convenience that keeps the wire format in one file,
-at the cost of a dependency edge pointing the wrong way.
+at the cost of a dependency edge pointing the wrong way. The remedy is known and not yet
+applied: split out a \code{protocol} module holding only the wire data types and their
+serialisation, and leave \code{types} to the primitives, which restores the acyclic order
+without scattering the wire format.
 
 \subsection{Runtime view: processes, threads and tasks}
 \label{sec:runtime}
@@ -694,7 +700,13 @@ Johnson--Lindenstrauss lemma \cite{jl1984} this preserves distances well enough 
 error statistic while keeping the online fit cheap and stable. In that space a
 per-dimension first-order autoregression $x_{t+1} = a \odot x_t + c$ is fit by decayed
 least squares (decay $0.97$), falling back to persistence until enough transitions have
-accumulated.
+accumulated. A small multilayer perceptron trained online by stochastic gradient descent
+would be more expressive, and it was rejected for an engineering reason rather than a
+modelling one: decayed least squares has a closed-form update per sample, no learning
+rate, and no way to diverge partway through a session. The predictor runs unattended in a
+user's application, on a stream whose statistics change whenever the camera moves, and a
+component that can silently destabilise there is worse than one that can only ever
+underfit.
 
 \paragraph{Surprise.}
 Let $e_t = \|\hat z_t - z_t\|_2$ be the error of the prediction made at $t-1$, and
@@ -822,9 +834,13 @@ roughly 0.5\,GB per transformer layer, reaching 13.5\,GB after 24 layers for a s
 V-JEPA~2 clip; with concurrent requests the process reached 36\,GB and was killed.
 Rebuilding each model on detached tensors after loading --- storage is shared, so nothing
 is copied --- reduced the peak resident set for one clip forward to 1.98\,GB, of which
-1.2\,GB is the weights themselves. It is recorded here because the failure mode is invisible in
-a framework that assumes training: nothing is wrong except that inference is paying for a
-gradient nobody will ever use.
+1.2\,GB is the weights themselves. Latency is a separate question and I cannot answer it:
+every timing in Table~\ref{tab:measure} was taken after the fix, no before-and-after
+comparison was recorded, and the tracked-variable build no longer exists to measure. The
+graph nodes it allocated per layer were certainly not free, but I have no number for what
+they cost and will not estimate one. It is recorded here because the failure mode is
+invisible in a framework that assumes training: nothing is wrong except that inference is
+paying for a gradient nobody will ever use.
 
 \paragraph{What was checked, and what was not.}
 The repository contains 76 Rust unit and integration tests, including in-memory HTTP tests
@@ -833,7 +849,12 @@ comparison against the reference PyTorch implementations, because the project ha
 Python dependency. Implementations follow the reference code structure, including
 V-JEPA~2's tiled sine/cosine rotary tables with interleaved rotation and the Kaldi Povey
 window for the audio front end, and determinism and discriminativeness are checked, but a
-bit-level equivalence claim would be unsupported, so none is made.
+bit-level equivalence claim would be unsupported, so none is made. The gap is closable
+without taking on a Python dependency, and this is the intended route: commit one fixed
+synthetic input as a \code{safetensors} file, record the reference implementation's output
+for it once, off-line, and ship both as a test fixture. That turns the open question into
+a stated numerical tolerance that regressions can be measured against, which is what an
+integrator actually needs, and it costs one file rather than a runtime dependency.
 
 \section{Limitations}
 \label{sec:limits}

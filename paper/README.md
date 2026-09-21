@@ -13,7 +13,7 @@ Source for the paper describing `jepctl`. Written against the arXiv
 
 ## Build
 
-The PDF in this directory (`jepctl.pdf`, 10 pages) was produced from this source with
+The PDF in this directory (`jepctl.pdf`, 15 pages) was produced from this source with
 Tectonic 0.17.0 and compiles with **zero warnings**. `jepctl.bbl` is the generated
 bibliography and is tracked on purpose, because arXiv wants it in the upload. To rebuild:
 
@@ -30,9 +30,11 @@ which compiles both and lets you download the `.bbl`.
 
 ## Before you submit
 
-1. **Complete the author block.** `jepctl.tex` carries two `% TODO(author)` comments:
-   the full name and affiliation on the `\author` line, and the acknowledgements section.
-   arXiv reproduces the author block verbatim on the abstract page.
+1. **Finish the acknowledgements.** The author block is complete. One `% TODO(author)`
+   comment remains, on the acknowledgements section: add funding and colleagues, or delete
+   the section. Note that any `&` you type in LaTeX must be written `\&`, otherwise
+   `\maketitle` reads it as a column separator and the build fails with
+   "Extra alignment tab has been changed to \cr".
 2. **Ship the `.bbl`.** The safest upload is `jepctl.tex` plus `jepctl.bbl` plus
    `figures/jepa-overview.jpg`; both are already in this directory, so the build is
    deterministic on arXiv's side. (`refs.bib` is kept here for future edits.)
@@ -53,8 +55,14 @@ which compiles both and lets you download the `.bbl`.
 
 The source already satisfies the stated requirements: no line numbers, single-spaced,
 11 pt type, 1-inch margins on every side, no watermark, no highlighted text, no embedded
-JavaScript, and no animated figures. Figures 2 and 3 are TikZ vector graphics; Figure 1 is
+JavaScript, and no animated figures. Figures 2 to 8 are TikZ vector graphics; Figure 1 is
 a single static JPEG.
+
+One known typographic limit: the small type inside Figure 1 (the command-line block at the
+lower left, the robot legends) is baked into the raster artwork and cannot be enlarged from
+LaTeX. The TikZ overlay panel that repaints the mock terminal is already at its space
+limit, so raising its font size would overflow the panel. If that text has to be bigger on
+an A4 print, the artwork itself has to be regenerated at a larger type scale.
 
 ## Figures
 

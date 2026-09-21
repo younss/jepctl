@@ -118,6 +118,13 @@ impl RingBuffer {
         preprocess_dynamic_image(&DynamicImage::ImageRgb8(model_input_image(&entry.rgb_image, roi)), prep, device)
     }
 
+    /// Preprocess the full latest frame (no centre crop, stretched to the model
+    /// input) into a tensor [1, 3, H, W], for full field-of-view reconstruction.
+    pub fn latest_full_image_tensor(&self, prep: &Preprocessing, device: &Device) -> Result<Tensor, JepaError> {
+        let entry = self.latest().ok_or_else(|| JepaError::InvalidPayload("Ring buffer is empty".into()))?;
+        crate::media::image::preprocess_stretch(&DynamicImage::ImageRgb8(entry.rgb_image.clone()), prep, device)
+    }
+
     /// JPEG of exactly what the model receives from the latest frame (ROI applied,
     /// centre crop, `size`×`size`), plus its sequence number.
     pub fn latest_model_view_jpeg(&self, size: u32, roi: Option<&Roi>) -> Option<(Vec<u8>, u64)> {

@@ -11,6 +11,7 @@ All notable changes to this project are documented here. The format follows
 - Settings: **Allow access from other machines** toggle (off by default). Off binds `127.0.0.1`, on binds `0.0.0.0` on the next restart; authentication stays mandatory for network access and an explicit `--host` still overrides it.
 
 ### Fixed
+- World now reconstructs the **full camera field of view** at its native aspect ratio (16:9), not the small square centre crop. The whole frame is embedded (stretched) and textured; the mesh matches the sensor's aspect.
 - Settings save no longer fails when a numeric field is blank (the idle-timeout default 15 was not a dropdown option); added the 15-minute option and coerced blank values.
 
 ### Security

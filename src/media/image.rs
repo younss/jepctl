@@ -120,6 +120,29 @@ pub fn preprocess_dynamic_image(
     Ok(tensor)
 }
 
+/// Preprocess without cropping: the whole frame is stretched to the square model
+/// input. Used by the World tab so the reconstruction covers the full camera field
+/// of view instead of the centre square.
+pub fn preprocess_stretch(img: &DynamicImage, prep: &Preprocessing, device: &Device) -> Result<Tensor, JepaError> {
+    let mean = prep.normalization.mean();
+    let std = prep.normalization.std();
+    let resized = img.resize_exact(prep.size, prep.size, FilterType::CatmullRom).to_rgb8();
+    let num_pixels = (prep.size * prep.size) as usize;
+    let mut r = Vec::with_capacity(num_pixels);
+    let mut g = Vec::with_capacity(num_pixels);
+    let mut b = Vec::with_capacity(num_pixels);
+    for p in resized.pixels() {
+        r.push(((p[0] as f32 / 255.0) - mean[0]) / std[0]);
+        g.push(((p[1] as f32 / 255.0) - mean[1]) / std[1]);
+        b.push(((p[2] as f32 / 255.0) - mean[2]) / std[2]);
+    }
+    let mut planar = Vec::with_capacity(3 * num_pixels);
+    planar.extend(r);
+    planar.extend(g);
+    planar.extend(b);
+    Ok(Tensor::from_vec(planar, (1, 3, prep.size as usize, prep.size as usize), device)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

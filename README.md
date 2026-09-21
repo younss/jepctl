@@ -315,9 +315,11 @@ The World tab drapes the **live camera frame** over a **3D surface whose relief 
 from JEPA**. The active vision model embeds each frame into one vector per patch;
 `GET /api/world/frame` separates foreground from background in that embedding space
 (each patch's distance from the frame's background prototype) and returns a smoothed
-relief field plus the aligned frame as a texture. The UI builds a textured mesh and
-displaces it by the field, so a person or object in front of the camera stands out in
-3D, in the real colours of the scene, live as you move.
+relief field plus the aligned frame as a texture. It uses the **full camera frame**
+(the whole field of view at its native aspect ratio, not a square centre crop), so the
+mesh is as wide as the sensor. The UI builds a textured mesh and displaces it by the
+field, so a person or object in front of the camera stands out in 3D, in the real
+colours of the scene, live as you move.
 
 Be clear about what it is and is not: JEPA encoders are **not generative** and do not
 predict pixels or metric depth. This is the real camera image given **shape** by what
@@ -327,7 +329,7 @@ Controls: surface shading, relief height scale, refresh rate.
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/world/frame` | inference: embeds the current camera frame and returns per patch `heights` (JEPA foreground relief, smoothed), `colors` (latent projection), `pixels` (camera), the aligned `image` (JPEG data URI used as the texture) and `grid_w`/`grid_h` |
+| GET | `/api/world/frame` | inference: embeds the **full** camera frame (whole field of view, not a centre crop; image models) and returns per patch `heights` (JEPA foreground relief, smoothed), `colors` (latent projection), `pixels` (camera), the aligned `image` (JPEG data URI used as the texture), `aspect` (width/height) and `grid_w`/`grid_h` |
 
 ## Jepafile (custom models)
 

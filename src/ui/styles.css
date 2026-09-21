@@ -2891,3 +2891,6 @@ body.dark-theme { font-size: 13px; }
     display: block;
     margin-bottom: 8px;
 }
+
+.world-eye-box { width: 100%; max-width: 320px; aspect-ratio: 16 / 9; height: auto; }
+.world-eye-box img { width: 100%; height: 100%; object-fit: cover; display: block; }

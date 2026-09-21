@@ -59,9 +59,12 @@ pub struct WorldFrame {
     /// Foreground relief per patch, `grid_w * grid_h` values in `[0, 1]`: how far the
     /// patch is from the background prototype, smoothed. This is the geometry.
     pub heights: Vec<f32>,
-    /// The model-view frame as a JPEG data URI, aligned with the grid: the UI drapes
-    /// it over the relief as a texture, so the surface shows the real scene.
+    /// The camera frame as a JPEG data URI, aligned with the grid: the UI drapes it
+    /// over the relief as a texture, so the surface shows the real scene.
     pub image: String,
+    /// Texture aspect ratio (width / height) so the UI mesh matches the real field of
+    /// view instead of forcing a square.
+    pub aspect: f32,
     pub latency_ms: f64,
 }
 
@@ -71,8 +74,37 @@ pub async fn handle_world_frame(
     headers: HeaderMap,
 ) -> Result<Json<WorldFrame>, ApiError> {
     let _ = authenticate_request(&headers, &state.auth, Role::Inference).await?;
-    let view = embed_current_view(&state).await?;
-    let patches = view.patches.filter(|p| !p.is_empty()).ok_or_else(|| {
+    let started = std::time::Instant::now();
+
+    // Full field of view: for image models embed the whole frame (stretched to the
+    // model input), not the centre square crop, and texture with the full frame at
+    // its real aspect ratio. Video models keep the centre-crop path.
+    let modality = state.engine.get_active_modality().await;
+    let model_name = crate::server::handlers::ensure_model_loaded(&state).await?;
+    let prep = state.engine.preprocessing().await;
+    let (raw_patches, model, full_jpeg, aspect) = if modality == Some(crate::types::ModelModality::Image) {
+        let tensor = {
+            let rb = state.ring_buffer.read().await;
+            rb.latest_full_image_tensor(&prep, &state.engine.device).map_err(|_| {
+                api_error(axum::http::StatusCode::CONFLICT, "Camera is not running or no frame captured yet")
+            })?
+        };
+        let (_m, _dim, _emb, patches, _lat) =
+            state.engine.embed_image(&tensor).await.map_err(crate::server::handlers::engine_error)?;
+        let (jpeg, _seq, w, h) = {
+            let rb = state.ring_buffer.read().await;
+            rb.latest_full_frame_jpeg(720).ok_or_else(|| {
+                api_error(axum::http::StatusCode::CONFLICT, "Camera is not running or no frame captured yet")
+            })?
+        };
+        state.embeddings_total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let aspect = if h > 0 { w as f32 / h as f32 } else { 1.0 };
+        (patches, model_name, jpeg, aspect)
+    } else {
+        let view = embed_current_view(&state).await?;
+        (view.patches, view.model, view.frame_jpeg.as_ref().clone(), 1.0)
+    };
+    let patches = raw_patches.filter(|p| !p.is_empty()).ok_or_else(|| {
         api_error(axum::http::StatusCode::CONFLICT, "The active model does not expose per-patch tokens")
     })?;
 
@@ -139,19 +171,11 @@ pub async fn handle_world_frame(
     let _ = &mut cdist;
     // Smooth the relief so the draped surface is continuous, not stepped.
     let heights = smooth_grid(&raw, grid_w, grid_h);
-    let pixels = average_patch_colors(&view.frame_jpeg, grid_w, grid_h);
-    let image = format!("data:image/jpeg;base64,{}", BASE64_STANDARD.encode(view.frame_jpeg.as_slice()));
+    let latency_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let pixels = average_patch_colors(&full_jpeg, grid_w, grid_h);
+    let image = format!("data:image/jpeg;base64,{}", BASE64_STANDARD.encode(&full_jpeg));
 
-    Ok(Json(WorldFrame {
-        model: view.model,
-        grid_w,
-        grid_h,
-        colors,
-        pixels,
-        heights,
-        image,
-        latency_ms: view.latency_ms,
-    }))
+    Ok(Json(WorldFrame { model, grid_w, grid_h, colors, pixels, heights, image, aspect, latency_ms }))
 }
 
 /// 3x3 box blur over a `w x h` grid (edges clamp).

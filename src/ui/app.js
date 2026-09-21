@@ -4426,6 +4426,7 @@
         raf: null,
         field: null,
         heightScale: 1,
+        aspect: 1,
         rateHz: 6,
         shade: true,
         spin: false,
@@ -4482,7 +4483,8 @@
             tex: gl.getUniformLocation(program, "u_tex"),
             shade: gl.getUniformLocation(program, "u_shade")
         };
-        world.mesh = worldBuildMesh(gl, WORLD_RES);
+        world.aspect = 1;
+        world.mesh = worldBuildMesh(gl, WORLD_RES, world.aspect);
         // Placeholder texture until the first frame arrives.
         world.tex = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, world.tex);
@@ -4494,19 +4496,21 @@
         return gl;
     }
 
-    function worldBuildMesh(gl, res) {
+    function worldBuildMesh(gl, res, aspect) {
         const n = res + 1;
         const verts = n * n;
         const positions = new Float32Array(verts * 3); // updated per frame (z displaced)
         const normals = new Float32Array(verts * 3);   // updated per frame
         const uvs = new Float32Array(verts * 2);
-        const span = 1.8;
+        // Match the real camera field of view: wider than tall for a 16:9 sensor.
+        const spanW = 1.8 * Math.max(1, aspect || 1);
+        const spanH = 1.8 / Math.max(1, 1 / (aspect || 1));
         for (let y = 0; y < n; y++) {
             for (let x = 0; x < n; x++) {
                 const i = y * n + x;
                 const u = x / res, v = y / res;
-                positions[i * 3] = -span / 2 + u * span;       // right
-                positions[i * 3 + 1] = span / 2 - v * span;    // up (image top at top)
+                positions[i * 3] = -spanW / 2 + u * spanW;     // right
+                positions[i * 3 + 1] = spanH / 2 - v * spanH;  // up (image top at top)
                 positions[i * 3 + 2] = 0;                      // toward camera, set per frame
                 uvs[i * 2] = u;
                 uvs[i * 2 + 1] = v;                            // texture: v=0 is image top
@@ -4527,7 +4531,7 @@
         const idxBuf = gl.createBuffer();
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(idx), gl.STATIC_DRAW);
-        return { n, verts, positions, normals, uvs, posBuf, normBuf, uvBuf, idxBuf, count: idx.length };
+        return { n, verts, positions, normals, uvs, posBuf, normBuf, uvBuf, idxBuf, count: idx.length, spanW, spanH };
     }
 
     // Bilinear sample of the JEPA field (grid_w x grid_h) at normalized (u, v).
@@ -4556,7 +4560,8 @@
         }
         // Normals from neighbouring heights (finite differences).
         const norm = m.normals;
-        const step = 1.8 / (n - 1);
+        const stepX = (m.spanW || 1.8) / (n - 1);
+        const stepY = (m.spanH || 1.8) / (n - 1);
         for (let y = 0; y < n; y++) {
             for (let x = 0; x < n; x++) {
                 const i = y * n + x;
@@ -4564,8 +4569,8 @@
                 const zr = pos[(y * n + Math.min(n - 1, x + 1)) * 3 + 2];
                 const zd = pos[(Math.max(0, y - 1) * n + x) * 3 + 2];
                 const zu = pos[(Math.min(n - 1, y + 1) * n + x) * 3 + 2];
-                const nx = (zl - zr) / (2 * step);
-                const ny = (zd - zu) / (2 * step);
+                const nx = (zl - zr) / (2 * stepX);
+                const ny = (zd - zu) / (2 * stepY);
                 const nz = 1.0;
                 const len = Math.hypot(nx, ny, nz) || 1;
                 norm[i * 3] = nx / len; norm[i * 3 + 1] = ny / len; norm[i * 3 + 2] = nz / len;
@@ -4647,6 +4652,10 @@
             if (res.ok) {
                 const f = await res.json();
                 world.field = f;
+                if (f.aspect && Math.abs((world.aspect || 1) - f.aspect) > 0.01 && world.gl) {
+                    world.aspect = f.aspect;
+                    world.mesh = worldBuildMesh(world.gl, WORLD_RES, world.aspect);
+                }
                 worldUpdateMesh();
                 if (f.image) {
                     const img = new Image();
@@ -4678,6 +4687,26 @@
     function worldUpdateCameraButton() {
         const t = document.getElementById("world-camera-btn-text");
         if (t) t.textContent = state.isStreaming ? "Stop camera" : "Start camera";
+    }
+
+    async function worldRefreshEye() {
+        const img = document.getElementById("world-eye");
+        const ph = document.getElementById("world-eye-placeholder");
+        if (!img) return;
+        if (!state.isStreaming) { if (ph) { ph.style.display = "flex"; ph.textContent = "Camera stopped"; } return; }
+        if (world.eyeBusy) return;
+        world.eyeBusy = true;
+        try {
+            const res = await apiFetch("/api/camera/frame?full=true");
+            if (res.ok) {
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                img.src = url;
+                if (world.eyeUrl) URL.revokeObjectURL(world.eyeUrl);
+                world.eyeUrl = url;
+                if (ph) ph.style.display = "none";
+            }
+        } catch (_) {} finally { world.eyeBusy = false; }
     }
 
     function worldStartPoll() {
@@ -4752,11 +4781,13 @@
         worldUpdateCameraButton();
         worldUpdateBanner();
         worldStartPoll();
+        if (!world.eyeTimer) world.eyeTimer = setInterval(worldRefreshEye, 300);
         if (!world.raf) world.raf = requestAnimationFrame(worldAnimate);
     }
 
     function worldLeaveSection() {
         worldStopPoll();
+        if (world.eyeTimer) { clearInterval(world.eyeTimer); world.eyeTimer = null; }
         if (world.raf) { cancelAnimationFrame(world.raf); world.raf = null; }
     }
 

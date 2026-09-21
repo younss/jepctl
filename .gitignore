@@ -1,9 +1,8 @@
 /target
 .DS_Store
 
-# LaTeX build artefacts (paper/)
+# LaTeX build artefacts (paper/); jepctl.bbl is kept: arXiv wants it in the upload
 *.aux
-*.bbl
 *.blg
 *.log
 *.out

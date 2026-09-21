@@ -13,8 +13,9 @@ Source for the paper describing `jepctl`. Written against the arXiv
 
 ## Build
 
-No TeX distribution is installed in the repository, so this source has **not been
-compiled here**. Build it with either:
+The PDF in this directory (`jepctl.pdf`, 10 pages) was produced from this source with
+Tectonic 0.17.0 and compiles with **zero warnings**. `jepctl.bbl` is the generated
+bibliography and is tracked on purpose, because arXiv wants it in the upload. To rebuild:
 
 ```bash
 # MacTeX / TeX Live
@@ -32,9 +33,9 @@ which compiles both and lets you download the `.bbl`.
 1. **Complete the author block.** `jepctl.tex` carries two `% TODO(author)` comments:
    the full name and affiliation on the `\author` line, and the acknowledgements section.
    arXiv reproduces the author block verbatim on the abstract page.
-2. **Ship the `.bbl`.** arXiv runs BibTeX only if you include `refs.bib`, and the safest
-   upload is `jepctl.tex` **plus the generated `jepctl.bbl`** (produced by the build
-   above). Include both and the build is deterministic on their side.
+2. **Ship the `.bbl`.** The safest upload is `jepctl.tex` plus `jepctl.bbl` plus
+   `figures/jepa-overview.jpg`; both are already in this directory, so the build is
+   deterministic on arXiv's side. (`refs.bib` is kept here for future edits.)
 3. **Pick the subject class.** `cs.LG` (Machine Learning) fits this paper best, with
    `cs.CV` and `cs.RO` as cross-lists. The two cited works sit in `cs.LG`
    (arXiv:2603.19312) and `cs.CL` (arXiv:2609.20800).

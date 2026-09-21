@@ -15,6 +15,7 @@
 \usepackage{lmodern}
 \usepackage{amsmath,amssymb}
 \usepackage{graphicx}
+\usepackage{array}
 \usepackage{booktabs}
 \usepackage{microtype}
 \usepackage{tikz}
@@ -38,6 +39,7 @@
 \maketitle
 
 \begin{abstract}
+\sloppy
 Joint-Embedding Predictive Architectures (JEPAs) learn by predicting representations
 rather than pixels, and a growing body of work shows that the resulting latent spaces
 support recognition, anomaly detection, and control. That capability is largely
@@ -173,6 +175,7 @@ Figure~\ref{fig:arch} the dataflow.
 
 \begin{figure}[t]
 \centering
+\resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[
   node distance=5mm,
   box/.style={draw, rounded corners=2pt, align=center, font=\small, inner sep=4pt, minimum height=8mm},
@@ -206,7 +209,7 @@ Figure~\ref{fig:arch} the dataflow.
 \draw[arr] (fs.south) to[out=-90,in=30] (api.east);
 \draw[arr] (wm.south) to[out=-90,in=20] (api.east);
 \draw[arr] (ctl.south) to[out=-90,in=10] (api.east);
-\end{tikzpicture}
+\end{tikzpicture}}
 \caption{\jepctl{} architecture. Every module above the encoder operates on embeddings
 only; none of them reads pixels. The same path serves the command line, the HTTP API, and
 the desktop testbench.}
@@ -450,7 +453,7 @@ is claimed.
 \begin{table}[t]
 \centering
 \small
-\begin{tabular}{@{}p{0.27\textwidth}p{0.40\textwidth}p{0.27\textwidth}@{}}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.27\textwidth}>{\raggedright\arraybackslash}p{0.40\textwidth}>{\raggedright\arraybackslash}p{0.27\textwidth}@{}}
 \toprule
 Quantity & Setting & Observed \\
 \midrule

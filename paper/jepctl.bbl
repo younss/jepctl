@@ -1,0 +1,93 @@
+\begin{thebibliography}{10}
+
+\bibitem{ijepa2023}
+Mahmoud Assran, Quentin Duval, Ishan Misra, Piotr Bojanowski, Pascal Vincent,
+  Michael Rabbat, Yann LeCun, and Nicolas Ballas.
+\newblock Self-supervised learning from images with a joint-embedding
+  predictive architecture.
+\newblock {\em arXiv preprint arXiv:2301.08243}, 2023.
+
+\bibitem{vjepa2_2025}
+Mido Assran, Adrien Bardes, David Fan, Quentin Garrido, Russell Howes, Mojtaba
+  Komeili, Matthew Muckley, Ammar Rizvi, Claire Roberts, Koustuv Sinha, Artem
+  Zholus, Sergio Arnaud, Abha Gejji, Ada Martin, Francois Robert~Hogan, Daniel
+  Dugas, Piotr Bojanowski, Vasil Khalidov, Patrick Labatut, Francisco Massa,
+  Marc Szafraniec, Kapil Krishnakumar, Yong Li, Xiaodong Ma, Sarath Chandar,
+  Franziska Meier, Yann LeCun, Michael Rabbat, and Nicolas Ballas.
+\newblock {V-JEPA 2}: Self-supervised video models enable understanding,
+  prediction and planning.
+\newblock {\em arXiv preprint arXiv:2506.09985}, 2025.
+
+\bibitem{jepaanything2026}
+Taoyong Cui, Zhongyao Wang, Xinyue Xu, Weiyang Liu, Zhaochen Yu, Yuying Zhang,
+  Qiang Gao, Mengyue Yang, Wanli Ouyang, Pheng~Ann Heng, Yingcheng Wu, Zhenfei
+  Yin, and Ling Yang.
+\newblock {JEPA-Anything}: Learning predictive models across different worlds.
+\newblock {\em arXiv preprint arXiv:2609.20800}, 2026.
+
+\bibitem{vit2021}
+Alexey Dosovitskiy, Lucas Beyer, Alexander Kolesnikov, Dirk Weissenborn,
+  Xiaohua Zhai, Thomas Unterthiner, Mostafa Dehghani, Matthias Minderer, Georg
+  Heigold, Sylvain Gelly, Jakob Uszkoreit, and Neil Houlsby.
+\newblock An image is worth 16x16 words: Transformers for image recognition at
+  scale.
+\newblock In {\em International Conference on Learning Representations (ICLR)},
+  2021.
+
+\bibitem{audiomae2022}
+Po-Yao Huang, Hu~Xu, Juncheng Li, Alexei Baevski, Michael Auli, Wojciech
+  Galuba, Florian Metze, and Christoph Feichtenhofer.
+\newblock Masked autoencoders that listen.
+\newblock In {\em Advances in Neural Information Processing Systems (NeurIPS)},
+  2022.
+
+\bibitem{safetensors}
+{Hugging Face}.
+\newblock Safetensors: a simple, safe format for storing tensors.
+\newblock \url{https://github.com/huggingface/safetensors}, 2023.
+
+\bibitem{candle}
+{Hugging Face}.
+\newblock Candle: a minimalist ml framework for rust.
+\newblock \url{https://github.com/huggingface/candle}, 2024.
+
+\bibitem{jl1984}
+William~B. Johnson and Joram Lindenstrauss.
+\newblock Extensions of {Lipschitz} mappings into a {Hilbert} space.
+\newblock {\em Contemporary Mathematics}, 26:189--206, 1984.
+
+\bibitem{lecun2022path}
+Yann LeCun.
+\newblock A path towards autonomous machine intelligence.
+\newblock Technical report, OpenReview, 2022.
+\newblock Version 0.9.2.
+
+\bibitem{lewm2026}
+Lucas Maes, Quentin Le~Lidec, Damien Scieur, Yann LeCun, and Randall
+  Balestriero.
+\newblock {LeWorldModel}: Stable end-to-end joint-embedding predictive
+  architecture from pixels.
+\newblock {\em arXiv preprint arXiv:2603.19312}, 2026.
+
+\bibitem{ollama}
+{Ollama}.
+\newblock Ollama: get up and running with large language models locally.
+\newblock \url{https://github.com/ollama/ollama}, 2024.
+
+\bibitem{dinov2_2023}
+Maxime Oquab, Timoth{\'e}e Darcet, Th{\'e}o Moutakanni, Huy~V. Vo, Marc
+  Szafraniec, Vasil Khalidov, Pierre Fernandez, Daniel Haziza, Francisco Massa,
+  Alaaeldin El-Nouby, Mahmoud Assran, Nicolas Ballas, Wojciech Galuba, Russell
+  Howes, Po-Yao Huang, Shang-Wen Li, Ishan Misra, Michael Rabbat, Vasu Sharma,
+  Gabriel Synnaeve, Hu~Xu, Herv{\'e} Jegou, Julien Mairal, Patrick Labatut,
+  Armand Joulin, and Piotr Bojanowski.
+\newblock {DINOv2}: Learning robust visual features without supervision.
+\newblock {\em arXiv preprint arXiv:2304.07193}, 2023.
+
+\bibitem{cem2004}
+Reuven~Y. Rubinstein and Dirk~P. Kroese.
+\newblock {\em The Cross-Entropy Method: A Unified Approach to Combinatorial
+  Optimization, Monte-Carlo Simulation and Machine Learning}.
+\newblock Springer, 2004.
+
+\end{thebibliography}

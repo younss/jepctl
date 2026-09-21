@@ -14,6 +14,7 @@
         activeSection: "overview",
         hardwareInfo: null,
         activeModel: null,
+        audioModel: null,
         totalEmbeddings: 0,
         lastLatencyMs: 0,
         streamFps: 10,
@@ -510,6 +511,7 @@
         setupGestureSandbox();
         setupRoiEditor();
         setupRobotTwin();
+        setupCompanion();
         setupHeader();
 
         // Initial fetch
@@ -659,6 +661,7 @@
         const scrollNodes = (section) => [main, section, ...section.querySelectorAll("[role='region']")];
         workspaceScroll.set(state.activeSection, scrollNodes(previous).map((node) => ({ top: node.scrollTop, left: node.scrollLeft })));
         if (state.activeSection === "robot" && sectionId !== "robot") robotLeaveSection();
+        if (state.activeSection === "companion" && sectionId !== "companion") companionLeaveSection();
         state.activeSection = sectionId;
         document.getElementById("current-section-label").textContent = selectedNav.querySelector(".nav-text").textContent;
 
@@ -693,6 +696,8 @@
             fetchGesturesList();
         } else if (sectionId === "robot") {
             robotEnterSection();
+        } else if (sectionId === "companion") {
+            companionEnterSection();
         }
     }
 
@@ -751,8 +756,9 @@
             if (el.integrationModel) el.integrationModel.textContent = data.active_model || "none: load one in Models";
 
             // Active Model
-            const modelChanged = state.activeModel !== data.active_model;
+            const modelChanged = state.activeModel !== data.active_model || state.audioModel !== (data.audio_model || null);
             state.activeModel = data.active_model;
+            state.audioModel = data.audio_model || null;
             updateWeightsBadge(data.weights, data.active_model);
             if (modelChanged) {
                 fetchGesturesList();
@@ -937,11 +943,11 @@
 
         models.forEach((m) => {
             const tr = document.createElement("tr");
-            const isLoaded = state.activeModel === m.name;
+            const isLoaded = state.activeModel === m.name || state.audioModel === m.name;
             const sizeMb = (m.disk_size_bytes / (1024 * 1024)).toFixed(1);
 
             tr.innerHTML = `
-                <td><strong>${m.name}</strong> ${isLoaded ? '<span class="badge badge-image">Active</span>' : ''}</td>
+                <td><strong>${m.name}</strong> ${isLoaded ? `<span class="badge badge-image">${state.audioModel === m.name ? "Active (audio)" : "Active"}</span>` : ''}</td>
                 <td><span class="badge badge-${m.modality}">${m.modality}</span></td>
                 <td><code>${m.embed_dim}</code></td>
                 <td>${m.parameter_count}</td>
@@ -960,7 +966,7 @@
                     const action = btn.getAttribute("data-action");
                     const name = btn.getAttribute("data-name");
                     if (action === "load") loadModel(name);
-                    else if (action === "unload") unloadModel();
+                    else if (action === "unload") unloadModel(name);
                     else if (action === "delete") deleteModel(name);
                 });
             });
@@ -992,9 +998,9 @@
         }
     }
 
-    async function unloadModel() {
+    async function unloadModel(name) {
         try {
-            await apiFetch("/api/models/unload", { method: "POST" });
+            await apiFetch("/api/models/unload", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(name ? { model_name: name } : {}) });
             notify("Model unloaded", "info", 2500);
             await pollStatus();
             await fetchModels();
@@ -3429,7 +3435,28 @@
         stepDone("robot-step-goal", goal.has_goal && t.mode === "goal_seeking");
         stepDone("robot-step-scramble", goal.has_goal && (goal.steps || 0) > 0);
         stepDone("robot-step-watch", goal.world && goal.world.ready);
+        renderMirrorWeights("robot-mirror-weights", t.mode === "mirror" ? t.mirror : null, t.mode === "mirror");
         if (!robot.raf && state.activeSection === "robot") robot.raf = requestAnimationFrame(robotAnimate);
+    }
+
+    // Shared by the arm and the companion: how much each taught pose weighs now.
+    function renderMirrorWeights(hostId, weights, active) {
+        const host = document.getElementById(hostId);
+        if (!host) return;
+        if (!active) {
+            host.textContent = "";
+            return;
+        }
+        if (!weights || !weights.length) {
+            host.innerHTML = `<span class="card-subtitle-inline">Mirror mode: no taught pose scored yet. Teach poses with the camera running.</span>`;
+            return;
+        }
+        host.innerHTML = weights.map((w) => `
+            <div class="mirror-weight">
+                <span>${escapeHtml(w.name)}</span>
+                <div class="slot-live-track"><div class="slot-live-fill" style="width:${Math.round(w.weight * 100)}%"></div></div>
+                <span class="mono">${Math.round(w.weight * 100)}% (score ${w.score.toFixed(2)})</span>
+            </div>`).join("");
     }
 
     function robotBuildSliders(limits) {
@@ -3607,7 +3634,7 @@
         });
         if (modeSel) {
             modeSel.addEventListener("change", async () => {
-                if ((modeSel.value === "exploring" || modeSel.value === "goal_seeking") && !(await robotEnsureCamera())) {
+                if (["exploring", "goal_seeking", "mirror"].includes(modeSel.value) && !(await robotEnsureCamera())) {
                     modeSel.value = robot.telemetry ? robot.telemetry.mode : "manual";
                     return;
                 }
@@ -3616,6 +3643,36 @@
         }
         const gate = document.getElementById("toggle-robot-gate");
         if (gate) gate.addEventListener("change", () => robotPost("/api/robot/mode", { mode: modeSel ? modeSel.value : "manual", safety_gate: gate.checked }));
+        bind("btn-robot-teach-pose", async () => {
+            const input = document.getElementById("input-robot-teach-name");
+            const name = (input ? input.value : "").trim();
+            if (!name) {
+                notify("Give the pose a name first.", "warning");
+                if (input) input.focus();
+                return;
+            }
+            if (!(await robotEnsureCamera())) return;
+            const t = robot.telemetry;
+            if (!t) return;
+            try {
+                let res = await apiFetch("/api/gestures", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, from_camera: true }) });
+                let data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.error || `${res.status}`);
+                const samples = data.sample_count;
+                res = await apiFetch("/api/robot/gesture-map");
+                const map = res.ok ? await res.json() : {};
+                map[name] = { action: "pose", joints: t.targets.map((v) => +v.toFixed(4)), gripper: +t.gripper_target.toFixed(3) };
+                res = await apiFetch("/api/robot/gesture-map", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(map) });
+                data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.error || `${res.status}`);
+                const ta = document.getElementById("robot-gesture-map");
+                if (ta) ta.value = JSON.stringify(map, null, 2);
+                notify(`Taught "${name}" (${samples} sample${samples > 1 ? "s" : ""}) with the current arm pose. Switch to Mirror mode to follow.`, "success", 4000);
+                if (input) input.value = "";
+            } catch (e) {
+                notify(`Teach pose: ${e.message}`, "error");
+            }
+        });
         bind("btn-robot-gesture-map-save", async () => {
             const ta = document.getElementById("robot-gesture-map");
             try {
@@ -3654,6 +3711,571 @@
         if (robot.raf) {
             cancelAnimationFrame(robot.raf);
             robot.raf = null;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Companion: a virtual character that watches (camera) and listens
+    // (microphone). Telemetry comes from /api/companion/ws; teaching goes
+    // through /api/companion/teach, which registers the cue in the gesture
+    // or sound registry and maps it to a behaviour.
+    // ------------------------------------------------------------------
+
+    const COMPANION_PARAMS = [
+        ["head_pan", "Head pan", -1, 1],
+        ["head_tilt", "Head tilt", -1, 1],
+        ["left_arm", "Left arm", -1, 1],
+        ["right_arm", "Right arm", -1, 1],
+        ["lean", "Lean", -1, 1],
+        ["mood", "Mood", 0, 1]
+    ];
+
+    const companion = {
+        ws: null,
+        wsRetry: null,
+        telemetry: null,
+        shown: null,
+        gfx: null,
+        orbit: { yaw: 0.35, pitch: 0.25, dist: 1.5, dragging: false, lastX: 0, lastY: 0 },
+        raf: null,
+        lastSend: 0,
+        sendTimer: null,
+        pendingSend: null,
+        sliderBusy: false,
+        mic: null,
+        statusTimer: null
+    };
+
+    // A second WebGL context with the same shaders as the arm, kept separate so
+    // the two canvases never share GL state.
+    function createGlRenderer(canvas) {
+        const gl = canvas.getContext("webgl", { antialias: true, preserveDrawingBuffer: true });
+        if (!gl) return null;
+        const program = gl.createProgram();
+        gl.attachShader(program, robotCompile(gl, gl.VERTEX_SHADER, ROBOT_VS));
+        gl.attachShader(program, robotCompile(gl, gl.FRAGMENT_SHADER, ROBOT_FS));
+        gl.linkProgram(program);
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+        gl.useProgram(program);
+        gl.enable(gl.DEPTH_TEST);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        const loc = {
+            pos: gl.getAttribLocation(program, "a_pos"),
+            normal: gl.getAttribLocation(program, "a_normal"),
+            mvp: gl.getUniformLocation(program, "u_mvp"),
+            model: gl.getUniformLocation(program, "u_model"),
+            color: gl.getUniformLocation(program, "u_color"),
+            lit: gl.getUniformLocation(program, "u_lit")
+        };
+        gl.enableVertexAttribArray(loc.pos);
+        gl.enableVertexAttribArray(loc.normal);
+        const cube = robotCubeMesh(gl);
+        const grid = robotGridMesh(gl);
+        const bind = (mesh) => {
+            gl.bindBuffer(gl.ARRAY_BUFFER, mesh.buf);
+            gl.vertexAttribPointer(loc.pos, 3, gl.FLOAT, false, 24, 0);
+            gl.vertexAttribPointer(loc.normal, 3, gl.FLOAT, false, 24, 12);
+        };
+        return {
+            gl,
+            drawBox(viewProj, model, size, color, alpha) {
+                const m = m4multiply(model, m4scale(size[0], size[1], size[2]));
+                gl.uniformMatrix4fv(loc.model, false, m);
+                gl.uniformMatrix4fv(loc.mvp, false, m4multiply(viewProj, m));
+                gl.uniform4f(loc.color, color[0], color[1], color[2], alpha === undefined ? 1 : alpha);
+                gl.uniform1f(loc.lit, 1);
+                bind(cube);
+                gl.drawArrays(gl.TRIANGLES, 0, cube.count);
+            },
+            drawGrid(viewProj, color) {
+                gl.uniformMatrix4fv(loc.model, false, m4identity());
+                gl.uniformMatrix4fv(loc.mvp, false, viewProj);
+                gl.uniform4f(loc.color, color[0], color[1], color[2], 1);
+                gl.uniform1f(loc.lit, 0);
+                bind(grid);
+                gl.drawArrays(gl.LINES, 0, grid.count);
+            }
+        };
+    }
+
+    function companionDefaultPose() {
+        return { head_pan: 0, head_tilt: 0, left_arm: -0.8, right_arm: -0.8, lean: 0, mood: 0.3 };
+    }
+
+    // Body: a base, a torso that leans, a head that pans and tilts with two eyes,
+    // two arms hinged at the shoulders, a chest light coloured by mood.
+    function companionDraw(gfx, viewProj, p, eyesClosed) {
+        const body = [0.62, 0.66, 0.74];
+        const dark = [0.22, 0.25, 0.31];
+        const mood = Math.max(0, Math.min(1, p.mood));
+        const light = [0.2 + 0.8 * mood, 0.55 + 0.1 * (1 - mood), 1.0 - 0.8 * mood];
+        // Base and neck column
+        gfx.drawBox(viewProj, m4translate(0, 0.02, 0), [0.26, 0.04, 0.26], dark);
+        const torso = m4multiply(m4translate(0, 0.04, 0), m4rotateX(-p.lean * 0.35));
+        gfx.drawBox(viewProj, m4multiply(torso, m4translate(0, 0.17, 0)), [0.22, 0.30, 0.16], body);
+        gfx.drawBox(viewProj, m4multiply(torso, m4translate(0, 0.22, 0.085)), [0.06, 0.06, 0.01], light);
+        // Shoulders and arms (elevation about the shoulder, out to the sides)
+        for (const side of [-1, 1]) {
+            const elev = side < 0 ? p.left_arm : p.right_arm;
+            const angle = (elev + 1) * 0.5 * Math.PI; // -1 hanging (0), 1 straight up (pi)
+            const shoulder = m4multiply(torso, m4translate(side * 0.13, 0.29, 0));
+            gfx.drawBox(viewProj, shoulder, [0.05, 0.05, 0.05], dark);
+            const arm = m4multiply(shoulder, m4rotateZ(-side * angle));
+            gfx.drawBox(viewProj, m4multiply(arm, m4translate(0, -0.11, 0)), [0.045, 0.22, 0.045], body);
+            gfx.drawBox(viewProj, m4multiply(arm, m4translate(0, -0.23, 0)), [0.06, 0.04, 0.06], light);
+        }
+        // Head
+        const neck = m4multiply(torso, m4translate(0, 0.34, 0));
+        gfx.drawBox(viewProj, neck, [0.05, 0.05, 0.05], dark);
+        const head = m4multiply(m4multiply(neck, m4rotateY(p.head_pan * 0.9)), m4rotateX(-p.head_tilt * 0.6));
+        gfx.drawBox(viewProj, m4multiply(head, m4translate(0, 0.11, 0)), [0.22, 0.18, 0.18], body);
+        const eyeH = eyesClosed ? 0.008 : 0.04;
+        for (const side of [-1, 1]) {
+            gfx.drawBox(viewProj, m4multiply(head, m4translate(side * 0.05, 0.12, 0.095)), [0.045, eyeH, 0.01], [0.1, 0.12, 0.16]);
+            if (!eyesClosed) gfx.drawBox(viewProj, m4multiply(head, m4translate(side * 0.05, 0.12, 0.1)), [0.02, 0.02, 0.005], light);
+        }
+        // Antenna
+        gfx.drawBox(viewProj, m4multiply(head, m4translate(0, 0.23, 0)), [0.012, 0.08, 0.012], dark);
+        gfx.drawBox(viewProj, m4multiply(head, m4translate(0, 0.275, 0)), [0.03, 0.03, 0.03], light);
+    }
+
+    function companionRender() {
+        const gfx = companion.gfx;
+        if (!gfx) return;
+        const gl = gfx.gl;
+        const canvas = gl.canvas;
+        gl.viewport(0, 0, canvas.width, canvas.height);
+        gl.clearColor(0.04, 0.05, 0.07, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        const o = companion.orbit;
+        const eye = [
+            o.dist * Math.cos(o.pitch) * Math.sin(o.yaw),
+            0.3 + o.dist * Math.sin(o.pitch),
+            o.dist * Math.cos(o.pitch) * Math.cos(o.yaw)
+        ];
+        const view = m4lookAt(eye, [0, 0.3, 0], [0, 1, 0]);
+        const proj = m4perspective(0.8, canvas.width / canvas.height, 0.05, 20);
+        const viewProj = m4multiply(proj, view);
+        gfx.drawGrid(viewProj, [0.22, 0.25, 0.32]);
+        const t = companion.telemetry;
+        companionDraw(gfx, viewProj, companion.shown || companionDefaultPose(), !!(t && t.eyes_closed));
+    }
+
+    function companionAnimate() {
+        companion.raf = null;
+        if (state.activeSection !== "companion") return;
+        const t = companion.telemetry;
+        if (t) {
+            if (!companion.shown) companion.shown = { ...t.pose };
+            for (const [k] of COMPANION_PARAMS) companion.shown[k] += (t.pose[k] - companion.shown[k]) * 0.35;
+        }
+        companionRender();
+        companion.raf = requestAnimationFrame(companionAnimate);
+    }
+
+    function companionConnectWs() {
+        if (companion.ws || state.activeSection !== "companion") return;
+        const proto = location.protocol === "https:" ? "wss:" : "ws:";
+        const tokenParam = state.authToken && state.authToken !== "no_auth" ? `?token=${encodeURIComponent(state.authToken)}` : "";
+        const ws = new WebSocket(`${proto}//${location.host}/api/companion/ws${tokenParam}`);
+        companion.ws = ws;
+        ws.onopen = () => companionSetWsChip(true);
+        ws.onmessage = (e) => {
+            try {
+                companionApplyTelemetry(JSON.parse(e.data));
+            } catch (err) {
+                console.warn("companion telemetry parse error", err);
+            }
+        };
+        ws.onclose = () => {
+            companion.ws = null;
+            companionSetWsChip(false);
+            if (state.activeSection === "companion") companion.wsRetry = setTimeout(companionConnectWs, 1500);
+        };
+        ws.onerror = () => ws.close();
+    }
+
+    function companionDisconnectWs() {
+        if (companion.wsRetry) {
+            clearTimeout(companion.wsRetry);
+            companion.wsRetry = null;
+        }
+        if (companion.ws) {
+            companion.ws.onclose = null;
+            companion.ws.close();
+            companion.ws = null;
+        }
+        companionSetWsChip(false);
+    }
+
+    function companionSetWsChip(on) {
+        const chip = document.getElementById("companion-ws-chip");
+        const text = document.getElementById("companion-ws-text");
+        if (chip) chip.classList.toggle("on", on);
+        if (text) text.textContent = on ? "telemetry 30 Hz" : "telemetry off";
+    }
+
+    function companionSendPose(pose) {
+        if (companion.ws && companion.ws.readyState === WebSocket.OPEN) {
+            const now = performance.now();
+            if (now - companion.lastSend < 33) {
+                companion.pendingSend = pose;
+                if (!companion.sendTimer) {
+                    companion.sendTimer = setTimeout(() => {
+                        companion.sendTimer = null;
+                        if (companion.pendingSend && companion.ws) {
+                            companion.ws.send(JSON.stringify(companion.pendingSend));
+                            companion.pendingSend = null;
+                            companion.lastSend = performance.now();
+                        }
+                    }, 33);
+                }
+                return;
+            }
+            companion.lastSend = now;
+            companion.ws.send(JSON.stringify(pose));
+        } else {
+            companionPost("/api/companion/pose", pose);
+        }
+    }
+
+    async function companionPost(path, body, okMsg) {
+        try {
+            const res = await apiFetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || `${res.status}`);
+            if (okMsg) notify(okMsg, "success", 2500);
+            if (data && data.pose) companionApplyTelemetry(data);
+            return data;
+        } catch (e) {
+            notify(`Companion: ${e.message}`, "error");
+            return null;
+        }
+    }
+
+    function companionBuildSliders() {
+        const host = document.getElementById("companion-sliders");
+        if (!host || host.childElementCount) return;
+        for (const [key, label, min, max] of COMPANION_PARAMS) {
+            const row = document.createElement("div");
+            row.className = "sensitivity-row";
+            row.innerHTML = `
+                <div class="sensitivity-label-row">
+                    <label for="slider-companion-${key}">${label}</label>
+                    <span class="joint-value" id="val-companion-${key}">0.00</span>
+                </div>
+                <input type="range" id="slider-companion-${key}" class="range-slider" min="${min}" max="${max}" step="0.01" value="0">`;
+            host.appendChild(row);
+            const slider = row.querySelector("input");
+            slider.addEventListener("pointerdown", () => { companion.sliderBusy = true; });
+            slider.addEventListener("pointerup", () => { companion.sliderBusy = false; });
+            slider.addEventListener("change", () => { companion.sliderBusy = false; });
+            slider.addEventListener("input", companionSlidersChanged);
+        }
+    }
+
+    function companionReadSliders() {
+        const pose = {};
+        for (const [key] of COMPANION_PARAMS) {
+            const s = document.getElementById(`slider-companion-${key}`);
+            pose[key] = parseFloat(s ? s.value : "0");
+        }
+        return pose;
+    }
+
+    function companionSlidersChanged() {
+        const pose = companionReadSliders();
+        for (const [key] of COMPANION_PARAMS) {
+            const v = document.getElementById(`val-companion-${key}`);
+            if (v) v.textContent = key === "mood" ? `${Math.round(pose[key] * 100)}%` : pose[key].toFixed(2);
+        }
+        companionSendPose(pose);
+    }
+
+    function companionSyncSliders(pose) {
+        if (companion.sliderBusy) return;
+        for (const [key] of COMPANION_PARAMS) {
+            const s = document.getElementById(`slider-companion-${key}`);
+            const v = document.getElementById(`val-companion-${key}`);
+            if (s && document.activeElement !== s) s.value = String(pose[key]);
+            if (v) v.textContent = key === "mood" ? `${Math.round(pose[key] * 100)}%` : pose[key].toFixed(2);
+        }
+    }
+
+    function companionBehaviourLabel(cue) {
+        if (cue.behaviour === "pose") {
+            const p = cue.pose || {};
+            return `pose (arms ${(p.left_arm ?? 0).toFixed(1)} / ${(p.right_arm ?? 0).toFixed(1)}, head ${(p.head_pan ?? 0).toFixed(1)})`;
+        }
+        if (cue.behaviour === "mood") return `mood ${Math.round((cue.value || 0) * 100)}%`;
+        return cue.behaviour.replace("_", " ");
+    }
+
+    function companionRenderCues(cues) {
+        const host = document.getElementById("companion-cues");
+        const count = document.getElementById("companion-cue-count");
+        if (count) count.textContent = `${cues.length} cue${cues.length === 1 ? "" : "s"}`;
+        if (!host) return;
+        const key = cues.map((c) => `${c.kind}:${c.name}:${c.behaviour}`).join("|");
+        if (host.dataset.key === key) return;
+        host.dataset.key = key;
+        host.innerHTML = cues.map((c) => `
+            <li>
+                <span class="cue-kind">${c.kind === "sound" ? "hear" : "see"}</span>
+                <span class="cue-name">${escapeHtml(c.name)}</span>
+                <span class="cue-behaviour">${escapeHtml(companionBehaviourLabel(c))}</span>
+                <button class="btn btn-sm btn-outline" data-cue-kind="${c.kind}" data-cue-name="${escapeHtml(c.name)}" aria-label="Forget ${escapeHtml(c.name)}">Forget</button>
+            </li>`).join("");
+        host.querySelectorAll("button[data-cue-kind]").forEach((btn) => {
+            btn.addEventListener("click", async () => {
+                const res = await apiFetch(`/api/companion/cues/${btn.dataset.cueKind}/${encodeURIComponent(btn.dataset.cueName)}`, { method: "DELETE" });
+                if (res.ok) notify(`Forgot "${btn.dataset.cueName}"`, "success", 2000);
+                else notify("Could not forget the cue", "error");
+            });
+        });
+    }
+
+    function companionApplyTelemetry(t) {
+        const prev = companion.telemetry;
+        companion.telemetry = t;
+        if (!prev) {
+            companion.shown = { ...t.pose };
+            companionBuildSliders();
+            companionSyncSliders(t.target);
+        } else if (t.mode === "interactive" || t.animation) {
+            companionSyncSliders(t.pose);
+        }
+        const modeSel = document.getElementById("select-companion-mode");
+        if (modeSel && document.activeElement !== modeSel) modeSel.value = t.mode;
+        const readout = document.getElementById("companion-readout");
+        if (readout) {
+            const p = t.pose;
+            readout.textContent = `pan ${p.head_pan.toFixed(2)}  tilt ${p.head_tilt.toFixed(2)}  left ${p.left_arm.toFixed(2)}  right ${p.right_arm.toFixed(2)}  lean ${p.lean.toFixed(2)}  mood ${Math.round(p.mood * 100)}%`
+                + (t.last_error ? `   ${t.last_error}` : "");
+        }
+        const animChip = document.getElementById("companion-anim-chip");
+        const animText = document.getElementById("companion-anim-text");
+        if (animChip) animChip.classList.toggle("on", !!t.animation);
+        if (animText) animText.textContent = t.animation ? `${t.animation.replace("_", " ")} ${Math.round(t.animation_progress * 100)}%` : (t.last_behaviour ? `last: ${t.last_behaviour.replace("_", " ")}` : "idle");
+        const seeing = document.getElementById("companion-seeing");
+        const attention = document.getElementById("companion-attention");
+        if (seeing) {
+            seeing.textContent = t.mode !== "interactive"
+                ? "manual mode (not watching)"
+                : t.seeing.last_gesture ? `${t.seeing.last_gesture} (${Math.round(t.seeing.last_gesture_confidence * 100)}%)` : (state.isStreaming ? "watching, no known pose" : "camera off");
+        }
+        if (attention) {
+            const a = t.attention;
+            attention.textContent = t.mode === "interactive" && a.tracking
+                ? `attention: ${a.x < -0.2 ? "left" : a.x > 0.2 ? "right" : "centre"} ${a.y > 0.2 ? "up" : a.y < -0.2 ? "down" : ""} (motion ${(a.motion * 100).toFixed(1)}%)`
+                : "attention: still";
+        }
+        const hearing = document.getElementById("companion-hearing");
+        const level = document.getElementById("companion-level-bar");
+        if (hearing) {
+            hearing.textContent = t.mode !== "interactive"
+                ? "manual mode (not listening)"
+                : t.hearing.last_sound ? `${t.hearing.last_sound} (${Math.round(t.hearing.last_sound_confidence * 100)}%)` : (companion.mic && companion.mic.active ? "listening, no known sound" : "microphone off");
+        }
+        if (level) level.style.width = `${Math.min(100, Math.round(Math.sqrt(t.hearing.level) * 100))}%`;
+        renderMirrorWeights("companion-mirror-weights", t.seeing.mirror, t.mode === "interactive" && t.cues.some((c) => c.kind === "gesture" && c.behaviour === "pose"));
+        companionRenderCues(t.cues || []);
+        const stepDone = (id, on) => { const n = document.getElementById(id); if (n) n.classList.toggle("done", !!on); };
+        stepDone("companion-step-models", state.activeModel && state.audioModel);
+        stepDone("companion-step-senses", t.mode === "interactive" && state.isStreaming && companion.mic && companion.mic.active);
+        stepDone("companion-step-pose", (t.cues || []).some((c) => c.kind === "gesture"));
+        stepDone("companion-step-sound", (t.cues || []).some((c) => c.kind === "sound"));
+        companionUpdateBanner();
+        if (!companion.raf && state.activeSection === "companion") companion.raf = requestAnimationFrame(companionAnimate);
+    }
+
+    function companionUpdateBanner() {
+        const banner = document.getElementById("companion-models-banner");
+        const text = document.getElementById("companion-models-banner-text");
+        if (!banner || !text) return;
+        const missing = [];
+        if (!state.activeModel) missing.push("a vision model (Gestures tab, DINOv2-small recommended)");
+        if (!state.audioModel) missing.push("an audio model (Models tab, AudioMAE)");
+        if (missing.length) {
+            text.textContent = `To watch and listen the companion needs ${missing.join(" and ")}. Without a model the head still follows motion.`;
+            banner.style.display = "flex";
+        } else {
+            banner.style.display = "none";
+        }
+    }
+
+    async function companionRefreshMic() {
+        try {
+            const res = await apiFetch("/api/mic/status");
+            if (!res.ok) return;
+            companion.mic = await res.json();
+            const btnText = document.getElementById("companion-mic-btn-text");
+            const chip = document.getElementById("companion-ear-chip");
+            const earText = document.getElementById("companion-ear-text");
+            const m = companion.mic;
+            if (btnText) btnText.textContent = m.active ? "Stop microphone" : "Start microphone";
+            if (chip) chip.classList.toggle("on", m.active && m.source === "device");
+            if (earText) earText.textContent = m.active ? (m.source === "device" ? `${m.device_name || "microphone"} ${Math.round(Math.sqrt(m.level) * 100)}%` : "opening") : (m.error ? "microphone error" : "not listening");
+            if (m.error && !companion.micErrorShown) {
+                companion.micErrorShown = true;
+                notify(m.error, "warning", 9000);
+            }
+            if (!m.error) companion.micErrorShown = false;
+        } catch (e) {
+            console.warn("mic status failed", e);
+        }
+    }
+
+    function companionUpdateCameraButton() {
+        const text = document.getElementById("companion-camera-btn-text");
+        if (text) text.textContent = state.isStreaming ? "Stop camera" : "Start camera";
+    }
+
+    function companionTeachPayload(kind) {
+        const input = document.getElementById("input-companion-teach-name");
+        const sel = document.getElementById("select-companion-behaviour");
+        const name = (input ? input.value : "").trim();
+        if (!name) {
+            notify("Give the cue a name first.", "warning");
+            if (input) input.focus();
+            return null;
+        }
+        const behaviour = sel ? sel.value : "pose";
+        const payload = { kind, name };
+        if (behaviour === "pose") {
+            if (kind === "sound") {
+                notify("A sound cannot be mirrored as a pose: pick a behaviour such as nod or wave.", "warning", 5000);
+                return null;
+            }
+            payload.behaviour = "pose";
+            payload.pose = companionReadSliders();
+        } else {
+            payload.behaviour = behaviour;
+        }
+        return payload;
+    }
+
+    function setupCompanion() {
+        const canvas = document.getElementById("companion-canvas");
+        if (!canvas) return;
+        try {
+            companion.gfx = createGlRenderer(canvas);
+            if (!companion.gfx) notify("WebGL is not available in this window; the companion cannot render.", "warning", 8000);
+        } catch (e) {
+            notify(`WebGL init failed: ${e.message}`, "error");
+        }
+        canvas.addEventListener("pointerdown", (e) => {
+            companion.orbit.dragging = true;
+            companion.orbit.lastX = e.clientX;
+            companion.orbit.lastY = e.clientY;
+            canvas.setPointerCapture(e.pointerId);
+        });
+        canvas.addEventListener("pointermove", (e) => {
+            if (!companion.orbit.dragging) return;
+            companion.orbit.yaw -= (e.clientX - companion.orbit.lastX) * 0.01;
+            companion.orbit.pitch = Math.max(-0.2, Math.min(1.4, companion.orbit.pitch + (e.clientY - companion.orbit.lastY) * 0.01));
+            companion.orbit.lastX = e.clientX;
+            companion.orbit.lastY = e.clientY;
+        });
+        const stopDrag = () => { companion.orbit.dragging = false; };
+        canvas.addEventListener("pointerup", stopDrag);
+        canvas.addEventListener("pointercancel", stopDrag);
+        canvas.addEventListener("wheel", (e) => {
+            e.preventDefault();
+            companion.orbit.dist = Math.max(0.6, Math.min(4, companion.orbit.dist * (e.deltaY > 0 ? 1.1 : 0.9)));
+        }, { passive: false });
+
+        const bind = (id, fn) => {
+            const n = document.getElementById(id);
+            if (n) n.addEventListener("click", fn);
+        };
+        const modeSel = document.getElementById("select-companion-mode");
+        if (modeSel) {
+            modeSel.addEventListener("change", async () => {
+                if (modeSel.value === "interactive") {
+                    await robotEnsureCamera();
+                    if (!(companion.mic && companion.mic.active)) await companionPost("/api/mic/start", {});
+                    await companionRefreshMic();
+                }
+                companionPost("/api/companion/mode", { mode: modeSel.value }, `Companion: ${modeSel.options[modeSel.selectedIndex].text}`);
+            });
+        }
+        bind("btn-companion-camera", async () => {
+            if (state.isStreaming) await stopLiveStream();
+            else await robotEnsureCamera();
+            companionUpdateCameraButton();
+        });
+        bind("btn-companion-mic", async () => {
+            if (companion.mic && companion.mic.active) await companionPost("/api/mic/stop", null, "Microphone stopped");
+            else {
+                const m = await companionPost("/api/mic/start", {});
+                if (m && m.active) notify(`Listening on ${m.device_name || "the default microphone"}`, "success", 2500);
+            }
+            await companionRefreshMic();
+        });
+        bind("btn-companion-teach-pose", async () => {
+            const payload = companionTeachPayload("gesture");
+            if (!payload) return;
+            if (!(await robotEnsureCamera())) return;
+            const r = await companionPost("/api/companion/teach", payload);
+            if (r) {
+                notify(`Learned to see "${payload.name}" (${r.sample_count} sample${r.sample_count > 1 ? "s" : ""}): ${payload.behaviour === "pose" ? "mirrors this pose" : payload.behaviour.replace("_", " ")}`, "success", 4000);
+                const input = document.getElementById("input-companion-teach-name");
+                if (input && r.sample_count >= 3) input.value = "";
+            }
+        });
+        bind("btn-companion-teach-sound", async () => {
+            const payload = companionTeachPayload("sound");
+            if (!payload) return;
+            if (!(companion.mic && companion.mic.active)) {
+                await companionPost("/api/mic/start", {});
+                await companionRefreshMic();
+            }
+            notify(`Make the sound now: capturing 1.5 s`, "info", 1600);
+            await new Promise((r) => setTimeout(r, 1500));
+            const r = await companionPost("/api/companion/teach", payload);
+            if (r) notify(`Learned to hear "${payload.name}" (${r.sample_count} sample${r.sample_count > 1 ? "s" : ""}): ${payload.behaviour.replace("_", " ")}. Repeat it a couple of times.`, "success", 4000);
+        });
+        bind("btn-companion-teach-ambient", async () => {
+            if (!(companion.mic && companion.mic.active)) {
+                await companionPost("/api/mic/start", {});
+                await companionRefreshMic();
+            }
+            notify("Stay quiet: capturing 1.5 s of room noise", "info", 1600);
+            await new Promise((r) => setTimeout(r, 1500));
+            const r = await companionPost("/api/sounds", { name: "quiet room", is_neutral: true, seconds: 1.5 });
+            if (r) notify(`Quiet room registered (${r.sample_count} sample${r.sample_count > 1 ? "s" : ""}). Silence will not trigger cues.`, "success", 3500);
+        });
+        bind("btn-companion-try", () => {
+            const sel = document.getElementById("select-companion-behaviour");
+            const b = sel ? sel.value : "nod";
+            if (b === "pose") companionSendPose(companionReadSliders());
+            else companionPost("/api/companion/behaviour", { behaviour: b });
+        });
+        bind("btn-api-companion", () => {
+            showApiDialog("Teach the companion", "Inference role. kind is gesture (camera) or sound (microphone); behaviour is one of pose, nod, shake, wave_left, wave_right, cheer, dance, startle, sleep, mood. A pose cue carries the pose to hold. Telemetry: GET /api/companion/status or the WebSocket /api/companion/ws.",
+                { method: "POST", path: "/api/companion/teach", json: { kind: "sound", name: "clap", behaviour: "nod" } });
+        });
+    }
+
+    async function companionEnterSection() {
+        companionConnectWs();
+        companionUpdateCameraButton();
+        await companionRefreshMic();
+        if (!companion.statusTimer) companion.statusTimer = setInterval(() => { companionRefreshMic(); companionUpdateCameraButton(); }, 1000);
+        if (!companion.raf) companion.raf = requestAnimationFrame(companionAnimate);
+    }
+
+    function companionLeaveSection() {
+        companionDisconnectWs();
+        if (companion.statusTimer) {
+            clearInterval(companion.statusTimer);
+            companion.statusTimer = null;
+        }
+        if (companion.raf) {
+            cancelAnimationFrame(companion.raf);
+            companion.raf = null;
         }
     }
 

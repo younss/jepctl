@@ -256,7 +256,11 @@ impl JepaModelTrait for VJepa2Model {
 
 /// Thread-safe active model executor and memory supervisor
 pub struct EngineManager {
+    /// Vision slot (image or video model).
     active_model: RwLock<Option<Box<dyn JepaModelTrait>>>,
+    /// Audio slot: an audio model lives next to the vision model so that the camera
+    /// and the microphone can be watched at the same time.
+    audio_model: RwLock<Option<Box<dyn JepaModelTrait>>>,
     pub device: Device,
     pub hardware_info: RwLock<HardwareInfo>,
     /// One forward pass at a time: concurrent passes each need their own working set
@@ -268,6 +272,7 @@ impl EngineManager {
     pub fn new(device: Device, hardware_info: HardwareInfo) -> Arc<Self> {
         Arc::new(Self {
             active_model: RwLock::new(None),
+            audio_model: RwLock::new(None),
             device,
             hardware_info: RwLock::new(hardware_info),
             inference: tokio::sync::Mutex::new(()),
@@ -307,17 +312,58 @@ impl EngineManager {
             .map_err(|e| JepaError::InferenceError(format!("Model load task failed: {e}")))??;
 
         let report = model_box.weight_report();
-        let mut lock = self.active_model.write().await;
-        *lock = Some(model_box);
-        tracing::info!("Model '{}' loaded into active memory.", name);
+        if model_box.modality() == ModelModality::Audio {
+            *self.audio_model.write().await = Some(model_box);
+            tracing::info!("Audio model '{}' loaded into the audio slot.", name);
+        } else {
+            *self.active_model.write().await = Some(model_box);
+            tracing::info!("Model '{}' loaded into active memory.", name);
+        }
         Ok(report)
     }
 
-    /// Unload currently active model from memory
+    /// Unload the vision model from memory.
     pub async fn unload_model(&self) {
         let mut lock = self.active_model.write().await;
         *lock = None;
         tracing::info!("Active model unloaded from memory.");
+    }
+
+    /// Unload the audio model from memory.
+    pub async fn unload_audio_model(&self) {
+        let mut lock = self.audio_model.write().await;
+        *lock = None;
+        tracing::info!("Audio model unloaded from memory.");
+    }
+
+    /// Unload whichever slot holds `name`.
+    pub async fn unload_named(&self, name: &str) {
+        if self.get_active_model_name().await.as_deref() == Some(name) {
+            self.unload_model().await;
+        }
+        if self.get_audio_model_name().await.as_deref() == Some(name) {
+            self.unload_audio_model().await;
+        }
+    }
+
+    /// Name of the loaded audio model, if any.
+    pub async fn get_audio_model_name(&self) -> Option<String> {
+        let lock = self.audio_model.read().await;
+        lock.as_ref().map(|m| m.name().to_string())
+    }
+
+    /// Checkpoint coverage report of the audio model, if any.
+    pub async fn get_audio_weight_report(&self) -> Option<WeightReport> {
+        let lock = self.audio_model.read().await;
+        lock.as_ref().map(|m| m.weight_report())
+    }
+
+    /// Randomly initialised audio model for tests.
+    #[doc(hidden)]
+    pub async fn load_random_audio_for_test(&self, manifest: ModelManifest) -> Result<(), JepaError> {
+        let model = AudioModel::load_random(manifest, self.device.clone())?;
+        *self.audio_model.write().await = Some(Box::new(model));
+        Ok(())
     }
 
     /// Get active model name if loaded
@@ -402,9 +448,12 @@ impl EngineManager {
         clip: &crate::media::audio::AudioClip,
     ) -> Result<(String, usize, Vec<f32>, Option<Vec<Vec<f32>>>, f64), JepaError> {
         let _serial = self.inference.lock().await;
-        let lock = self.active_model.read().await;
+        let lock = self.audio_model.read().await;
         let model = lock.as_ref().ok_or_else(|| {
-            JepaError::ModelNotFound("No model currently loaded in memory. Load a model first.".to_string())
+            JepaError::ModelNotFound(
+                "No audio model loaded. Load an audio model (for example gaunernst/vit_base_patch16_1024_128.audiomae_as2m) first."
+                    .to_string(),
+            )
         })?;
         let name = model.name().to_string();
         let dim = model.dimension();

@@ -3,6 +3,12 @@
 use axum::routing::{delete, get, post};
 use axum::Router;
 
+use crate::server::companion_handlers::{
+    handle_clear_sounds, handle_companion_behaviour, handle_companion_cues, handle_companion_delete_cue,
+    handle_companion_mode, handle_companion_pose, handle_companion_set_cue, handle_companion_status,
+    handle_companion_teach, handle_companion_ws, handle_create_sound, handle_delete_sound, handle_list_sounds,
+    handle_match_sound, handle_mic_start, handle_mic_status, handle_mic_stop, handle_mics,
+};
 use crate::server::gesture_handlers::{
     handle_camera_frame, handle_clear_gestures, handle_clear_roi, handle_create_gesture, handle_delete_gesture,
     handle_export_gestures, handle_get_roi, handle_import_gestures, handle_list_gestures, handle_match_gesture,
@@ -80,6 +86,23 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/robot/view", get(handle_robot_view))
         .route("/api/robot/background", post(handle_robot_background))
         .route("/api/robot/ws", get(handle_robot_ws))
+        // API: Microphone and sounds (audio prototypes)
+        .route("/api/mics", get(handle_mics))
+        .route("/api/mic/start", post(handle_mic_start))
+        .route("/api/mic/stop", post(handle_mic_stop))
+        .route("/api/mic/status", get(handle_mic_status))
+        .route("/api/sounds", post(handle_create_sound).get(handle_list_sounds).delete(handle_clear_sounds))
+        .route("/api/sounds/match", post(handle_match_sound))
+        .route("/api/sounds/{name}", delete(handle_delete_sound))
+        // API: Companion robot (watches and listens)
+        .route("/api/companion/status", get(handle_companion_status))
+        .route("/api/companion/mode", post(handle_companion_mode))
+        .route("/api/companion/pose", post(handle_companion_pose))
+        .route("/api/companion/behaviour", post(handle_companion_behaviour))
+        .route("/api/companion/cues", get(handle_companion_cues).put(handle_companion_set_cue))
+        .route("/api/companion/cues/{kind}/{name}", delete(handle_companion_delete_cue))
+        .route("/api/companion/teach", post(handle_companion_teach))
+        .route("/api/companion/ws", get(handle_companion_ws))
         // Fallback for SPA routing
         .fallback(serve_index)
         .with_state(state)

@@ -25,6 +25,7 @@
         <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol>
         <symbol id="icon-lock" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V6a4 4 0 0 1 8 0v4m-4 5v2"/></symbol>
         <symbol id="icon-warning" viewBox="0 0 24 24"><path d="m12 3 10 18H2Z"/><path d="M12 9v4m0 4h.01"/></symbol>
+        <symbol id="icon-companion" viewBox="0 0 24 24"><rect x="5" y="7" width="14" height="11" rx="3"/><circle cx="10" cy="12" r="1.2"/><circle cx="14" cy="12" r="1.2"/><path d="M12 3v4M2 12h3M19 12h3M9 21h6"/></symbol>
         <symbol id="icon-sound" viewBox="0 0 24 24"><path d="m11 4-6 5H2v6h3l6 5ZM15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/></symbol>
         <symbol id="icon-palette" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v18M3 12h9"/></symbol>
         <symbol id="icon-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
@@ -94,6 +95,10 @@
                     <button class="nav-item" role="tab" id="tab-robot" tabindex="-1" aria-selected="false" aria-controls="section-robot" data-section="robot">
                         <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-robot"></use></svg>
                         <span class="nav-text">Robot Twin</span>
+                    </button>
+                    <button class="nav-item" role="tab" id="tab-companion" tabindex="-1" aria-selected="false" aria-controls="section-companion" data-section="companion">
+                        <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-companion"></use></svg>
+                        <span class="nav-text">Companion</span>
                     </button>
                 </div>
                 <div class="nav-group-title" id="nav-admin-title">Manage</div>
@@ -646,6 +651,7 @@
                         <select id="select-robot-mode" class="select-input select-compact">
                             <option value="manual">Manual</option>
                             <option value="shadowing">Mode A: gesture shadowing</option>
+                            <option value="mirror">Mirror: follow taught poses</option>
                             <option value="exploring">Learn: explore and watch</option>
                             <option value="goal_seeking">Mode C: reach a visual goal</option>
                         </select>
@@ -754,6 +760,17 @@
                             </div>
                         </div>
 
+                        <div class="card" id="robot-mirror-card">
+                            <h3>Teach by showing</h3>
+                            <p class="card-subtitle">Set the arm with the sliders, strike the matching pose in front of the camera, then teach it. In Mirror mode the arm blends every taught pose by how much you look like each one, so it follows you between them. Teach a rest pose too.</p>
+                            <div class="robot-side-actions">
+                                <label class="visually-hidden" for="input-robot-teach-name">Pose name</label>
+                                <input type="text" id="input-robot-teach-name" class="input-text" placeholder="Pose name (for example arm up)" maxlength="64">
+                                <button class="btn btn-sm btn-primary" id="btn-robot-teach-pose">Teach this pose</button>
+                            </div>
+                            <div class="mirror-weights" id="robot-mirror-weights" aria-live="polite"></div>
+                        </div>
+
                         <details class="card">
                             <summary class="roi-summary"><span><strong>Mode A: gesture map</strong></span><span class="roi-summary-hint">gesture name to action</span></summary>
                             <p class="card-subtitle">Actions: <code>open_gripper</code>, <code>close_gripper</code>, <code>approve</code>, <code>stop</code>, <code>{"action":"joint_delta","joint":3,"delta":0.05}</code>, <code>{"action":"pose","joints":[...],"gripper":0.5}</code>. Gesture names are those of the Gestures tab.</p>
@@ -764,6 +781,114 @@
                                 <span class="card-subtitle-inline" id="robot-last-gesture">last gesture: none</span>
                             </div>
                         </details>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SECTION: COMPANION -->
+            <section class="content-section" id="section-companion" tabindex="0" role="tabpanel" aria-labelledby="tab-companion">
+                <div class="section-title">
+                    <h2>Companion</h2>
+                    <p>A virtual robot that watches and listens to you, and learns what to do from a few demonstrations.</p>
+                </div>
+
+                <div class="robot-topbar card">
+                    <div class="robot-topbar-group">
+                        <label class="fact-label" for="select-companion-mode">Mode</label>
+                        <select id="select-companion-mode" class="select-input select-compact">
+                            <option value="manual">Manual: sliders only</option>
+                            <option value="interactive">Interactive: watch and listen</option>
+                        </select>
+                    </div>
+                    <div class="robot-topbar-group">
+                        <button class="btn btn-sm btn-outline" id="btn-companion-camera">
+                            <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-video"></use></svg> <span id="companion-camera-btn-text">Start camera</span>
+                        </button>
+                        <button class="btn btn-sm btn-outline" id="btn-companion-mic">
+                            <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-sound"></use></svg> <span id="companion-mic-btn-text">Start microphone</span>
+                        </button>
+                        <span class="status-chip" id="companion-ear-chip" title="Microphone level"><span class="chip-dot" id="companion-ear-dot"></span><span id="companion-ear-text">not listening</span></span>
+                    </div>
+                    <div class="robot-topbar-group robot-topbar-right">
+                        <span class="status-chip" id="companion-ws-chip"><span class="chip-dot" id="companion-ws-dot"></span><span id="companion-ws-text">telemetry off</span></span>
+                        <button class="btn btn-sm btn-api" id="btn-api-companion" title="Show the API request">{ } API</button>
+                    </div>
+                </div>
+
+                <div class="robot-banner robot-banner-pending" id="companion-models-banner" role="status" style="display: none;">
+                    <span id="companion-models-banner-text"></span>
+                </div>
+
+                <div class="robot-layout">
+                    <div class="card robot-scene-card">
+                        <div class="gesture-card-header">
+                            <div>
+                                <h3>Companion</h3>
+                                <p class="card-subtitle">Drag to orbit, wheel to zoom. The head follows where the picture moves; the chest light shows the mood.</p>
+                            </div>
+                            <span class="status-chip" id="companion-anim-chip"><span class="chip-dot" id="companion-anim-dot"></span><span id="companion-anim-text">idle</span></span>
+                        </div>
+                        <canvas id="companion-canvas" width="720" height="440" role="img" aria-label="3D view of the companion robot"></canvas>
+                        <div class="robot-readout" id="companion-readout">pan 0.00  tilt 0.00  left 0.00  right 0.00  lean 0.00  mood 30%</div>
+                        <div class="companion-senses">
+                            <div class="companion-sense">
+                                <span class="fact-label">Seeing</span>
+                                <strong id="companion-seeing">nothing yet</strong>
+                                <span class="card-subtitle-inline" id="companion-attention">attention: none</span>
+                            </div>
+                            <div class="companion-sense">
+                                <span class="fact-label">Hearing</span>
+                                <strong id="companion-hearing">nothing yet</strong>
+                                <div class="slot-live-track"><div class="slot-live-fill" id="companion-level-bar"></div></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="robot-side-col" tabindex="0" role="region" aria-label="Companion inspector">
+                        <div class="card">
+                            <h3>Teach</h3>
+                            <ol class="slots-tips robot-steps" id="companion-steps">
+                                <li id="companion-step-models">Load a vision model (Gestures tab) and the AudioMAE audio model (Models tab). Both stay loaded side by side.</li>
+                                <li id="companion-step-senses">Start the camera and the microphone, switch to Interactive: the head follows you.</li>
+                                <li id="companion-step-pose">Pose the companion with the sliders, strike the matching pose yourself, teach it. It mirrors you between taught poses.</li>
+                                <li id="companion-step-sound">Teach the quiet room first (neutral), then pick a behaviour, make a sound (clap, whistle, a word) and teach it. Repeat each sound two or three times.</li>
+                            </ol>
+                            <div class="companion-teach-row">
+                                <label class="visually-hidden" for="input-companion-teach-name">Cue name</label>
+                                <input type="text" id="input-companion-teach-name" class="input-text" placeholder="Cue name (for example wave, clap)" maxlength="64">
+                                <select id="select-companion-behaviour" class="select-input select-compact" aria-label="Behaviour">
+                                    <option value="pose">Hold this pose (mirror)</option>
+                                    <option value="nod">Nod</option>
+                                    <option value="shake">Shake head</option>
+                                    <option value="wave_left">Wave left arm</option>
+                                    <option value="wave_right">Wave right arm</option>
+                                    <option value="cheer">Cheer</option>
+                                    <option value="dance">Dance</option>
+                                    <option value="startle">Startle</option>
+                                    <option value="sleep">Sleep</option>
+                                </select>
+                            </div>
+                            <div class="robot-side-actions">
+                                <button class="btn btn-sm btn-primary" id="btn-companion-teach-pose">Teach from camera</button>
+                                <button class="btn btn-sm btn-primary" id="btn-companion-teach-sound">Teach from microphone</button>
+                                <button class="btn btn-sm btn-outline" id="btn-companion-teach-ambient" title="Register the room's background noise as a neutral sound so silence never triggers a cue">Teach quiet room</button>
+                                <button class="btn btn-sm btn-outline" id="btn-companion-try">Try behaviour</button>
+                            </div>
+                            <div class="mirror-weights" id="companion-mirror-weights" aria-live="polite"></div>
+                        </div>
+
+                        <div class="card">
+                            <h3>Body</h3>
+                            <div class="joint-sliders" id="companion-sliders"></div>
+                        </div>
+
+                        <div class="card">
+                            <div class="gesture-card-header">
+                                <h3>What it learned</h3>
+                                <span class="card-subtitle-inline" id="companion-cue-count">0 cues</span>
+                            </div>
+                            <ul class="cue-list" id="companion-cues"></ul>
+                        </div>
                     </div>
                 </div>
             </section>

@@ -376,6 +376,36 @@ impl RobotCore {
         Ok(())
     }
 
+    /// Mirror mode: blend the poses of every mapped gesture by how much the person
+    /// looks like each one right now. Called with the full score list of a frame.
+    pub fn apply_mirror(&mut self, scores: &[crate::gestures::GestureScore]) -> Result<(), RobotError> {
+        if self.mode != RobotMode::Mirror {
+            return Ok(());
+        }
+        let candidates: Vec<(String, f32, [f32; DOF], f32)> = scores
+            .iter()
+            .filter_map(|s| match self.gesture_map.get(&s.name) {
+                Some(GestureAction::Pose { joints, gripper }) => Some((s.name.clone(), s.combined, *joints, *gripper)),
+                _ => None,
+            })
+            .collect();
+        let (weights, blend) =
+            crate::companion::blend_weights(&candidates.iter().map(|c| (c.0.clone(), c.1)).collect::<Vec<_>>());
+        self.mirror = weights;
+        let Some(weights) = blend else { return Ok(()) };
+        let mut joints = [0.0f32; DOF];
+        let mut gripper = 0.0f32;
+        for (i, w) in weights.iter().enumerate() {
+            for (j, v) in joints.iter_mut().enumerate() {
+                *v += candidates[i].2[j] * w;
+            }
+            gripper += candidates[i].3 * w;
+        }
+        let cmd = JointCommand { joints: self.safety.limits.clamp(joints), gripper: gripper.clamp(0.0, 1.0) };
+        self.submit(cmd, false)?;
+        Ok(())
+    }
+
     /// One control step: ramp toward targets, drive the backend, pull real positions.
     pub fn tick(&mut self, dt: f32) {
         self.tick += 1;

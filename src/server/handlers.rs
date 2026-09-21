@@ -41,6 +41,11 @@ pub struct AppState {
     pub ring_buffer: SharedRingBuffer,
     pub embeddings_total: Arc<AtomicU64>,
     pub gestures: Arc<tokio::sync::RwLock<GestureStore>>,
+    /// Registered sounds: same prototype store, embedded by the audio model.
+    pub sounds: Arc<tokio::sync::RwLock<GestureStore>>,
+    pub mic: Arc<crate::media::mic::MicSupervisor>,
+    /// Companion robot (watches and listens).
+    pub companion: crate::companion::CompanionHandle,
     /// Region of interest applied to camera frames (see `types::Roi`).
     pub camera_roi: Arc<tokio::sync::RwLock<Option<Roi>>>,
     /// Robot arm control and digital twin.
@@ -172,8 +177,11 @@ pub async fn handle_status(State(state): State<AppState>) -> Json<StatusResponse
         hardware: hw,
         active_model,
         weights,
+        audio_model: state.engine.get_audio_model_name().await,
+        audio_weights: state.engine.get_audio_weight_report().await,
         camera_active: state.camera_supervisor.is_active(),
         camera: Some(state.camera_supervisor.health()),
+        mic: Some(state.mic.health()),
         embeddings_computed_total: embeddings,
         uptime_seconds: uptime,
     })
@@ -219,12 +227,23 @@ pub async fn handle_load_model(
 }
 
 /// POST /api/models/unload - Unload active model from memory
+#[derive(Deserialize, Default)]
+pub struct UnloadModelPayload {
+    /// Unload this model wherever it is loaded (vision or audio slot). Without it
+    /// the vision model is unloaded.
+    pub model_name: Option<String>,
+}
+
 pub async fn handle_unload_model(
     State(state): State<AppState>,
     headers: HeaderMap,
+    payload: Option<Json<UnloadModelPayload>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let _ = authenticate_request(&headers, &state.auth, Role::Admin).await?;
-    state.engine.unload_model().await;
+    match payload.and_then(|p| p.model_name.clone()) {
+        Some(name) => state.engine.unload_named(&name).await,
+        None => state.engine.unload_model().await,
+    }
     Ok(Json(json!({ "status": "unloaded" })))
 }
 
@@ -249,12 +268,9 @@ async fn execute_delete_model(
 
     let name = raw_name.trim().trim_start_matches('/').replace("%2F", "/").replace("%2f", "/");
 
-    // If deleting active model, unload first
-    if let Some(active) = state.engine.get_active_model_name().await {
-        if active == name || active.replace(':', "/") == name.replace(':', "/") {
-            state.engine.unload_model().await;
-        }
-    }
+    // If deleting a loaded model, unload it first.
+    state.engine.unload_named(&name).await;
+    state.engine.unload_named(&name.replace(':', "/")).await;
 
     match state.catalog.delete_model(&name) {
         Ok(true) => Ok(Json(json!({ "status": "deleted", "model": name }))),
@@ -345,7 +361,6 @@ pub async fn handle_embed(
 
     // Audio first (WAV/MP3/FLAC/OGG), then images and clips.
     if let Some(audio_fmt) = crate::media::audio::sniff_audio_format(&buffer) {
-        ensure_model_loaded(&state).await?;
         let clip = tokio::task::spawn_blocking({
             let buffer = buffer.clone();
             move || crate::media::audio::decode_audio_bytes(&buffer)
@@ -482,10 +497,16 @@ pub async fn handle_embed_stream(
                             match_gestures(&view.embedding, view.patches.as_deref(), &registered, threshold, margin)
                         })
                     };
-                    // Mode A: shadowing follows the same detections the UI shows.
-                    if let Some(name) = gesture_match.as_ref().and_then(|m| m.matched.clone()) {
+                    // Mode A: shadowing follows the same detections the UI shows;
+                    // mirror mode blends every mapped pose by score.
+                    if let Some(m) = gesture_match.as_ref() {
                         let mut core = state.robot.core.lock().await;
-                        if let Err(e) = core.apply_gesture(&name) {
+                        if let Some(name) = m.matched.as_deref() {
+                            if let Err(e) = core.apply_gesture(name) {
+                                core.last_error = Some(e.to_string());
+                            }
+                        }
+                        if let Err(e) = core.apply_mirror(&m.scores) {
                             core.last_error = Some(e.to_string());
                         }
                     }

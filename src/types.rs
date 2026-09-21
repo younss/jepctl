@@ -306,12 +306,20 @@ pub struct StatusResponse {
     /// How the active model's weights were obtained (checkpoint coverage).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub weights: Option<WeightReport>,
+    /// Audio model loaded next to the vision model, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_weights: Option<WeightReport>,
     /// Whether the server camera capture thread is running.
     #[serde(default)]
     pub camera_active: bool,
     /// Capture state: source (device or synthetic), frame count, last error.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera: Option<crate::media::capture::CameraHealth>,
+    /// Microphone capture state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mic: Option<crate::media::mic::MicHealth>,
     pub embeddings_computed_total: u64,
     pub uptime_seconds: u64,
 }

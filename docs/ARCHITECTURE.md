@@ -227,6 +227,45 @@ RobotCore   { backend: Box<dyn RobotBackend>, safety: SafetyGuard, mode, safety_
   `converged` (below 2.5 x the noise floor measured at capture) or `plateau` (60 steps
   without improvement) and re-checks the view once a second afterwards.
 
+### Mirror mode
+
+`RobotCore::apply_mirror(scores)` receives the full score list of every stream frame
+(not only the winner). Gestures mapped to `GestureAction::Pose` are blended with
+`companion::blend_weights`: softmax over `combined` scores with temperature 0.06,
+candidates more than 0.2 below the best get no weight, and nothing moves while the
+best score is under 0.35. The result is one joint command submitted through the
+usual gate, so the physical arm still needs approval. Poses are taught from the UI
+with two calls: `POST /api/gestures {from_camera}` then `PUT /api/robot/gesture-map`.
+
+## 3c. Companion (`companion/`), microphone (`media/mic.rs`) and sounds
+
+```
+CompanionHandle { core: Arc<Mutex<CompanionCore>>, telemetry_tx: watch::Sender<CompanionTelemetry> }
+CompanionCore   { mode, pose (actual), target (manual), mirror_target, animation, cues,
+                  attention, hearing, seeing, last_trigger (cooldowns) }
+```
+
+- The control loop ticks at 30 Hz: an animation (nod, shake, wave, cheer, dance,
+  startle, sleep) overrides the target with a time envelope; otherwise the body
+  approaches `mirror_target` (interactive) or `target` (manual), and in interactive
+  mode the head pans and tilts toward `attention`. Idle breathing and blinks are
+  cosmetic and computed from the tick.
+- Two observer tasks (`server/companion_handlers.rs::spawn_observers`) run only in
+  interactive mode. Eyes: every 100 ms a 32x24 grayscale thumbnail of the latest
+  frame is diffed with the previous one (`motion_centroid`) to update attention; every
+  300 ms the camera view is embedded and matched against the gestures of the vision
+  model (same `match_gestures` as the sandbox). Ears: every 700 ms the last 1.5 s of
+  microphone audio are embedded by the audio model and matched against the sounds.
+- `observe_gestures` triggers the cue of the winner (non pose behaviours, 2 s
+  cooldown per cue) and blends every pose cue with `blend_poses`; `observe_sound`
+  triggers sound cues and startles on loud unknown audio (RMS above 0.35).
+- `MicSupervisor` mirrors `CameraSupervisor`: a worker thread owns the `cpal` input
+  stream, down-mixes to mono into a 12 s ring at the device rate, and `latest_clip`
+  resamples the tail to 16 kHz. `push_samples` feeds the ring in tests.
+- Sounds reuse `GestureStore` (`~/.jepctl/sounds.json`), bound to the audio model's
+  name; the audio model has its own slot in `EngineManager` so both modalities stay
+  loaded. Cues persist in `~/.jepctl/companion.json`.
+
 ## 4. HTTP layer
 
 - `handlers.rs` holds the shared helpers: `ensure_model_loaded` (auto-loads the first

@@ -136,6 +136,23 @@ All endpoints live under `/api`. With authentication enabled (the default) send 
 | GET / PUT / DELETE | `/api/camera/roi` | inference | region of interest `{ x, y, w, h }` normalised on the raw frame; applied before every camera embedding and stored in exported bundles |
 | GET | `/api/ring-buffer` | inference | last 16 frame thumbnails |
 
+### Microphone and sounds
+
+An audio model (AudioMAE) loads into its own slot next to the vision model, so the camera and the microphone can be watched at the same time; `/api/status` reports both (`active_model`, `audio_model`). Sounds are few-shot prototypes exactly like gestures, embedded from the last 1.5 s of microphone audio (zero padded to the model window).
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/api/mics` | inference | input devices |
+| POST | `/api/mic/start` | inference | `{ "device"?: index }` (system default otherwise) |
+| POST | `/api/mic/stop` | inference | |
+| GET | `/api/mic/status` | inference | active, source, buffered seconds, level (RMS 0 to 1), device name |
+| POST | `/api/sounds` | inference | `{ "name", "is_neutral"?, "seconds"?: 1.5, "embedding"? }` register (or add a sample to) a sound from the microphone |
+| GET / DELETE | `/api/sounds[?model=&all=]` | inference | list / clear |
+| DELETE | `/api/sounds/{name}` | inference | |
+| POST | `/api/sounds/match` | inference | `{ "seconds"?, "embedding"?, "threshold"?: 0.55, "margin"? }` → same result shape as gestures |
+
+Register the quiet room as a neutral sound first, then two or three samples per cue (a clap, a whistle, a word).
+
 ### Few-shot gestures
 
 A gesture is a *prototype*: the L2-normalised mean of one or more reference embeddings, bound to the model that produced them. The registry persists in `~/.jepctl/gestures.json`.
@@ -185,7 +202,8 @@ The header is the single source of truth: **model · checkpoint coverage · came
 - **Embed**: drop an image, see the patch grid and the pooled vector.
 - **Live**: server camera, ring-buffer scrubber, and an **event console** (filter errors / detections, copy a line).
 - **Energy**: lock a baseline, chart the drift, alerts and webhook.
-- **Robot Twin**: WebGL arm, joint sliders, backend switch, mode selector, E-stop, safety gate banner, energy gauge and gesture map editor.
+- **Robot Twin**: WebGL arm, joint sliders, backend switch, mode selector (including Mirror), teach by showing, E-stop, safety gate banner, energy gauge and gesture map editor.
+- **Companion**: WebGL character that watches (camera) and listens (microphone), teach panel for poses and sounds, mirror weights, list of what it learned.
 - **Gestures**: *model view* (the exact frame the network receives) with a per-patch difference heatmap; 3 gesture slots + 1 neutral slot; a per-frame **"Why this decision"** table (raw / contrastive / combined per gesture, margin, threshold, server and client decisions with their reasons); threshold, margin and smoothing; **Export / Import bundle**.
 
 **Admin**
@@ -217,6 +235,7 @@ cargo run --release --features "metal serial"     # plus the physical arm over U
 
 - **Manual**: sliders (or the API) set targets.
 - **Mode A, gesture shadowing**: detections from the Gestures tab are mapped to actions through an editable map (`open_gripper`, `close_gripper`, `joint_delta`, `pose`, `approve`, `stop`). Defaults: Open Hand opens the gripper, Fist closes it, Victory approves the pending command.
+- **Mirror, follow taught poses**: "Teach this pose" registers what the camera sees as a gesture and maps it to the arm's current pose. In Mirror mode every mapped pose is blended by a softmax over its match score (temperature 0.06, poses more than 0.2 below the best get no weight, nothing moves under a score of 0.35), so the arm follows you continuously *between* the poses you taught rather than snapping to one. Teach a rest pose too. It interpolates, it does not extrapolate, and a single camera cannot tell depth from elevation: five to ten well separated poses work best.
 - **Mode B, safety gate**: forced on with the physical backend. Commands are held as a pending pose, drawn as an amber ghost on the twin, and sent to the hardware only after "Approve and execute" (or the approve gesture).
 - **Learn (exploring)**: the arm babbles with small random actions. After every move, once settled, the **camera** frame is embedded with the active JEPA model; the transition `(z_t, a, z_{t+1})` trains a latent world model `z_{t+1} = z_t + W[a; 1]` (ridge regression in embedding space, refit after every observation, persisted in `~/.jepctl/robot_world_model.json`). Nothing is predicted in pixel space: that is the JEPA principle applied to control.
 - **Mode C, reach a visual goal**: `POST /api/robot/goal` embeds what the camera sees now as `z_goal`. At each step the controller samples 96 candidate actions, predicts their outcome **inside the learned model**, executes the one with the lowest predicted energy `E = ||z - z_goal||_2 / sqrt(dim)` (the `/api/energy` metric, plus a little exploration noise), observes the real result and learns from it. Until 12 transitions exist the policy is random; the telemetry says which one is in use, and shows predicted versus observed energy so you can judge the model.
@@ -233,7 +252,7 @@ Typical run in the simulator: 45 s of Learn, capture the goal at a pose, scrambl
 | POST | `/api/robot/target` (admin) | `{ "backend": "virtual" \| "physical" }` (physical needs `--features serial`) |
 | POST | `/api/robot/joints` | `{ "joints": [6 rad], "gripper": 0..1, "approved": false }` |
 | POST | `/api/robot/approve` | execute the pending command |
-| POST | `/api/robot/mode` | `{ "mode": "manual" \| "shadowing" \| "goal_seeking", "safety_gate"?: bool }` |
+| POST | `/api/robot/mode` | `{ "mode": "manual" \| "shadowing" \| "mirror" \| "exploring" \| "goal_seeking", "safety_gate"?: bool }` |
 | POST / DELETE | `/api/robot/goal` | capture (`{ "image_base64"? }`, camera otherwise) / forget the latent goal |
 | POST | `/api/robot/observe` | feed one observation (`image_base64` for replays / external cameras); the server camera does this automatically |
 | GET / DELETE | `/api/robot/world-model` | learned transitions summary / forget everything learned (admin) |
@@ -244,7 +263,29 @@ Typical run in the simulator: 45 s of Learn, capture the goal at a pose, scrambl
 | GET / PUT | `/api/robot/gesture-map` | gesture name to action mapping |
 | GET | `/api/robot/ws[?token=]` | WebSocket: telemetry at 30 Hz, accepts `{ joints, gripper, approved }` back |
 
+Telemetry carries `mirror`: the weight and score of every taught pose in Mirror mode.
+
 Serial settings (port, baud, servo IDs, tick calibration, direction) live under `robot_hardware` in `~/.jepctl/settings.json`; defaults target `/dev/ttyUSB0` at 1 000 000 baud with IDs 1 to 7. The physical protocol has been written from the STS3215 register map and is unit tested at the frame level, but it has not been run against a real arm here: treat the first connection as a bench test with the E-stop within reach.
+
+## Companion (a virtual robot that watches and listens)
+
+The Companion tab is a second WebGL character (head that pans and tilts, two arms, lean, a mood light) meant to be taught by a person rather than by moving hardware. It does not need an arm: it learns from **you**, through the camera and the microphone.
+
+- **Attention** is not learned: the head follows where the picture moves (motion centroid between consecutive frames), so it visibly watches you as soon as the camera runs in Interactive mode.
+- **Teach from camera**: strike a pose, name it, choose what the companion does. "Hold this pose" maps it to the pose set with the sliders and is **mirrored**: taught poses are blended by similarity, so raising your arm slowly raises its arm through the poses you showed. Any other behaviour (nod, shake, wave left/right, cheer, dance, startle, sleep) is triggered when the pose is recognised, with a 2 s cooldown.
+- **Teach from microphone**: make a sound (clap, whistle, a word), name it, choose a behaviour. Teach the quiet room first as a neutral sound so silence never triggers anything; a loud unknown sound startles it.
+- Cues persist in `~/.jepctl/companion.json`; the samples live in the gesture and sound registries, bound to the models that embedded them.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/companion/status` | mode, pose, target, running animation, attention, what it sees and hears, mirror weights, cues |
+| POST | `/api/companion/mode` | `{ "mode": "manual" \| "interactive" }` |
+| POST | `/api/companion/pose` | `{ head_pan, head_tilt, left_arm, right_arm, lean, mood }` (all -1 to 1, mood 0 to 1) |
+| POST | `/api/companion/behaviour` | `{ "behaviour": "nod" }` or `{ "behaviour": "pose", "pose": {...} }` or `{ "behaviour": "mood", "value": 0.8 }` |
+| POST | `/api/companion/teach` | `{ "kind": "gesture" \| "sound", "name", "behaviour"?, "pose"?, "seconds"? }`: registers what the camera or microphone captures now and maps it (default: hold the current pose) |
+| GET / PUT | `/api/companion/cues` | list / map an already registered gesture or sound (`{ kind, name, behaviour, ... }`) |
+| DELETE | `/api/companion/cues/{kind}/{name}` | forget a cue |
+| GET | `/api/companion/ws[?token=]` | WebSocket telemetry at 30 Hz, accepts a pose back |
 
 ## Jepafile (custom models)
 
@@ -293,7 +334,6 @@ src/
 - Numerical parity tests against PyTorch reference outputs (needs a contributor with a Python environment, see Verification).
 - Larger V-JEPA 2 variants (`vith`, `vitg`) once someone can verify memory and latency on their hardware.
 - Native H.264 decoding without `ffmpeg`, if a dependable pure-Rust decoder appears.
-- Microphone capture for live audio, mirroring the camera pipeline.
 - Running the serial robot backend against a real SO-100 arm (the protocol is frame-tested only).
 
 ## Contributing

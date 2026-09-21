@@ -105,6 +105,8 @@ async fn app_with(with_model: bool, no_auth: bool) -> TestApp {
         settings_path: root.0.join("settings.json"),
         gestures_path: root.0.join("gestures.json"),
         world_model_path: root.0.join("robot_world_model.json"),
+        sounds_path: root.0.join("sounds.json"),
+        companion_path: root.0.join("companion.json"),
         host: "127.0.0.1".into(),
         port: 0,
         no_auth,
@@ -126,6 +128,9 @@ async fn app_with(with_model: bool, no_auth: bool) -> TestApp {
         ring_buffer,
         embeddings_total: Arc::new(AtomicU64::new(0)),
         gestures: Arc::new(tokio::sync::RwLock::new(GestureStore::load(&config.gestures_path))),
+        sounds: Arc::new(tokio::sync::RwLock::new(GestureStore::load(&config.sounds_path))),
+        mic: Arc::new(crate::media::mic::MicSupervisor::new()),
+        companion: crate::companion::CompanionHandle::new(),
         camera_roi: Arc::new(tokio::sync::RwLock::new(None)),
         robot: {
             let r = crate::robot::RobotHandle::new(Default::default());
@@ -507,8 +512,7 @@ async fn roi_changes_what_the_model_sees_and_travels_in_bundles() {
 #[tokio::test]
 async fn embed_accepts_wav_with_an_audio_model_and_rejects_images() {
     let t = app(false).await;
-    let model = crate::engine::audio::AudioModel::load_random(audio_manifest(), candle_core::Device::Cpu).unwrap();
-    *t.state.engine.engine_active_model_for_test().await = Some(Box::new(model));
+    t.state.engine.load_random_audio_for_test(audio_manifest()).await.unwrap();
 
     // 0.5 s of a 440 Hz tone, PCM16 mono 16 kHz.
     let mut data = Vec::new();
@@ -549,10 +553,91 @@ async fn embed_accepts_wav_with_an_audio_model_and_rejects_images() {
     assert_eq!(json["embedding"].as_array().unwrap().len(), 32);
     assert_eq!(json["patch_embeddings"].as_array().unwrap().len(), (64 / 16) * (32 / 16));
 
-    // A PNG sent to an audio model is a clear 400, not a silent embedding.
+    // The audio model lives in its own slot: an image still needs a vision model.
     let png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D];
     let res = t.router.clone().oneshot(multipart("a.png", "image/png", &png)).await.unwrap();
-    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert_ne!(res.status(), StatusCode::OK);
+    let (status, st) = call(&t.router, "GET", "/api/status", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(st["audio_model"], "test/audio-tiny");
+    assert!(st["active_model"].is_null());
+}
+
+#[tokio::test]
+async fn sounds_and_companion_learn_from_the_microphone() {
+    let t = app(true).await;
+    let r = &t.router;
+    t.state.engine.load_random_audio_for_test(audio_manifest()).await.unwrap();
+
+    // Nothing captured yet: registering a sound is a clear 409.
+    let (status, body) = call(r, "POST", "/api/sounds", Some(json!({ "name": "clap" }))).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+    // Feed the microphone ring directly (no device in CI) and mark it active.
+    let tone: Vec<f32> = (0..16_000).map(|i| ((i as f32) * 0.2).sin() * 0.4).collect();
+    t.state.mic.push_samples(&tone, 16_000);
+    let (status, mic) = call(r, "GET", "/api/mic/status", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(mic["buffered_seconds"].as_f64().unwrap() > 0.9);
+    assert!(mic["level"].as_f64().unwrap() > 0.1);
+    t.state.mic.force_active_for_test(true);
+
+    let (status, body) = call(r, "POST", "/api/sounds", Some(json!({ "name": "clap", "seconds": 0.5 }))).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["model_name"], "test/audio-tiny");
+    let (status, list) = call(r, "GET", "/api/sounds", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    let (status, m) = call(r, "POST", "/api/sounds/match", Some(json!({ "seconds": 0.5 }))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(m["scores"].as_array().unwrap().len(), 1);
+
+    // Companion: teach a sound cue and a pose cue, then check the memory.
+    let (status, c) = call(r, "GET", "/api/companion/status", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(c["mode"], "manual");
+    let (status, body) =
+        call(r, "POST", "/api/companion/teach", Some(json!({ "kind": "sound", "name": "clap", "behaviour": "nod" })))
+            .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["cue"]["behaviour"], "nod");
+    assert_eq!(body["sample_count"], 2);
+    let (status, body) = call(
+        r,
+        "POST",
+        "/api/companion/pose",
+        Some(
+            json!({ "head_pan": 0.0, "head_tilt": 0.0, "left_arm": 1.0, "right_arm": -0.5, "lean": 0.0, "mood": 0.5 }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // A pose cue needs a camera frame (the registry pipeline is the gesture one).
+    let (status, body) =
+        call(r, "POST", "/api/companion/teach", Some(json!({ "kind": "gesture", "name": "arm up" }))).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    t.state.ring_buffer.write().await.push_frame(image::RgbImage::from_pixel(64, 48, image::Rgb([40, 120, 200])), 1);
+    let (status, body) =
+        call(r, "POST", "/api/companion/teach", Some(json!({ "kind": "gesture", "name": "arm up" }))).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["cue"]["behaviour"], "pose");
+    assert_eq!(body["cue"]["pose"]["left_arm"], 1.0);
+    let (status, cues) = call(r, "GET", "/api/companion/cues", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(cues.as_array().unwrap().len(), 2);
+    assert!(t.state.config.companion_path.is_file());
+
+    let (status, _) = call(r, "POST", "/api/companion/mode", Some(json!({ "mode": "interactive" }))).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = call(r, "POST", "/api/companion/behaviour", Some(json!({ "behaviour": "dance" }))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["animation"], "dance");
+    let (status, _) = call(r, "DELETE", "/api/companion/cues/sound/clap", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = call(r, "DELETE", "/api/companion/cues/sound/clap", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(r, "DELETE", "/api/sounds/clap", None).await;
+    assert_eq!(status, StatusCode::OK);
 }
 
 #[tokio::test]

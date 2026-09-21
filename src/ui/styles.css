@@ -2700,3 +2700,113 @@ body.dark-theme { font-size: 13px; }
 
 /* Inset rings remain visible inside independently scrolling panels. */
 .content-section:focus-visible, [role="region"]:focus-visible { outline-offset: -2px; }
+
+/* Companion and mirror mode */
+.companion-senses {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-top: 12px;
+}
+
+.companion-sense {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.companion-sense strong {
+    font-size: 13px;
+    overflow-wrap: anywhere;
+}
+
+.companion-teach-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.companion-teach-row .input-text,
+.robot-side-actions .input-text {
+    min-width: 0;
+    flex: 1;
+}
+
+.mirror-weights {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 10px;
+}
+
+.mirror-weights:empty {
+    display: none;
+}
+
+.mirror-weight {
+    display: grid;
+    grid-template-columns: minmax(80px, 1fr) minmax(0, 2fr) auto;
+    gap: 8px;
+    align-items: center;
+    font-size: 12px;
+}
+
+.mirror-weight .slot-live-track {
+    margin: 0;
+}
+
+.mirror-weight .mono {
+    color: var(--text-muted);
+}
+
+.cue-list {
+    list-style: none;
+    padding: 0;
+    margin: 8px 0 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.cue-list li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    padding: 6px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+}
+
+.cue-list li .cue-kind {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    min-width: 52px;
+}
+
+.cue-list li .cue-name {
+    flex: 1;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.cue-list li .cue-behaviour {
+    color: var(--text-muted);
+}
+
+.cue-list:empty::after {
+    content: "Nothing taught yet.";
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+@media (max-width: 720px) {
+    .companion-senses,
+    .companion-teach-row {
+        grid-template-columns: 1fr;
+    }
+}

@@ -1,6 +1,7 @@
 //! jepctl: local runtime, CLI, and testbench for Joint-Embedding Predictive Architectures.
 
 pub mod auth;
+pub mod companion;
 pub mod config;
 pub mod desktop;
 pub mod engine;
@@ -318,6 +319,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    let companion = crate::companion::CompanionHandle::new();
+    crate::companion::spawn_control_loop(companion.clone());
+    if let Ok(text) = std::fs::read_to_string(&config.companion_path) {
+        match serde_json::from_str::<crate::companion::CompanionMemory>(&text) {
+            Ok(m) => {
+                tracing::info!("Loaded companion memory: {} cues", m.cues.len());
+                companion.core.lock().await.restore(m);
+            }
+            Err(e) => tracing::warn!("Ignoring unreadable companion memory: {}", e),
+        }
+    }
+
     let app_state = AppState {
         engine: engine.clone(),
         catalog: catalog.clone(),
@@ -327,6 +340,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ring_buffer: ring_buffer.clone(),
         embeddings_total,
         gestures: gestures.clone(),
+        sounds: Arc::new(tokio::sync::RwLock::new(crate::gestures::GestureStore::load(&config.sounds_path))),
+        mic: Arc::new(crate::media::mic::MicSupervisor::new()),
+        companion: companion.clone(),
         camera_roi: Arc::new(tokio::sync::RwLock::new(settings.camera_roi)),
         robot: robot.clone(),
         start_time: Instant::now(),
@@ -334,6 +350,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     crate::server::robot_handlers::spawn_camera_observer(app_state.clone());
+    crate::server::companion_handlers::spawn_observers(app_state.clone());
 
     let should_launch_gui = cli.gui
         || matches!(cli.command, Some(Commands::App) | Some(Commands::Gui))

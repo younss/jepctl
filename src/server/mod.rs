@@ -1,5 +1,6 @@
 //! Axum server initialization, CORS, payload limits, and graceful shutdown.
 
+pub mod companion_handlers;
 pub mod gesture_handlers;
 pub mod handlers;
 pub mod middleware;

@@ -35,6 +35,10 @@ pub struct RuntimeConfig {
     pub gestures_path: PathBuf,
     /// Persisted robot latent world model (learned transitions).
     pub world_model_path: PathBuf,
+    /// Registered sounds (audio prototypes), the audio counterpart of `gestures_path`.
+    pub sounds_path: PathBuf,
+    /// Companion robot memory (taught cues).
+    pub companion_path: PathBuf,
     pub host: String,
     pub port: u16,
     pub no_auth: bool,
@@ -65,6 +69,8 @@ impl RuntimeConfig {
         let settings_path = home_dir.join("settings.json");
         let gestures_path = home_dir.join("gestures.json");
         let world_model_path = home_dir.join("robot_world_model.json");
+        let sounds_path = home_dir.join("sounds.json");
+        let companion_path = home_dir.join("companion.json");
 
         // Ensure directories exist with proper permissions
         fs::create_dir_all(&models_dir)?;
@@ -85,6 +91,8 @@ impl RuntimeConfig {
             settings_path,
             gestures_path,
             world_model_path,
+            sounds_path,
+            companion_path,
             host,
             port,
             no_auth,

@@ -75,6 +75,7 @@ thiserror = "2.0.20"
 async-stream = "0.3.6"
 wry = "0.57.0"
 tao = "0.37.0"
+cpal = "0.18"
 
 [dev-dependencies]
 tower = { version = "0.5.3", features = ["util"] }

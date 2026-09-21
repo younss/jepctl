@@ -60,6 +60,9 @@ pub enum RobotMode {
     Manual,
     /// Mode A: gesture detections are mapped to joint deltas or poses.
     Shadowing,
+    /// Mirror: every gesture mapped to a pose is blended by similarity, so the arm
+    /// follows the person continuously between the poses it was taught.
+    Mirror,
     /// Learn the latent world model by moving and watching (no goal yet).
     Exploring,
     /// Mode C: reach a goal embedding by planning inside the learned world model.
@@ -145,6 +148,9 @@ pub struct RobotTelemetry {
     pub max_rad_per_s: f32,
     pub goal: GoalProgress,
     pub last_gesture: Option<String>,
+    /// Mirror mode: the taught poses and the weight each one has in the blend.
+    #[serde(default)]
+    pub mirror: Vec<crate::companion::MirrorWeight>,
     /// Virtual backend: observations use a frozen camera frame as background.
     pub freeze_background: bool,
     pub has_background: bool,
@@ -167,6 +173,7 @@ pub struct RobotCore {
     pub pending: Option<JointCommand>,
     pub gesture_map: std::collections::HashMap<String, GestureAction>,
     pub last_gesture: Option<String>,
+    pub mirror: Vec<crate::companion::MirrorWeight>,
     pub agent: controller::LatentAgent,
     pub tick: u64,
     pub last_error: Option<String>,
@@ -193,6 +200,7 @@ impl RobotCore {
             pending: None,
             gesture_map: controller::default_gesture_map(),
             last_gesture: None,
+            mirror: Vec::new(),
             agent: controller::LatentAgent::default(),
             tick: 0,
             last_error: None,
@@ -223,6 +231,7 @@ impl RobotCore {
                 g
             },
             last_gesture: self.last_gesture.clone(),
+            mirror: self.mirror.clone(),
             freeze_background: self.freeze_background,
             has_background: self.background.is_some(),
             tick: self.tick,

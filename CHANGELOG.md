@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Companion**: a second virtual WebGL robot that learns from the person in front of it. Head follows motion, taught poses are mirrored by similarity, taught sounds and poses trigger behaviours (nod, shake, wave, cheer, dance, startle, sleep). `src/companion/`, `/api/companion/*`, persisted cues in `~/.jepctl/companion.json`.
+- **Microphone capture** (`cpal`) with a 12 s ring, `/api/mic/*`, and **sounds**: few-shot audio prototypes (`/api/sounds`, `~/.jepctl/sounds.json`) matched like gestures.
+- **Audio slot**: an audio model loads next to the vision model instead of replacing it; `/api/status` reports `audio_model` and `audio_weights`; `POST /api/models/unload` takes an optional `model_name`.
+- **Mirror mode** for the arm: "Teach this pose" registers the camera view and maps it to the current joints; in Mirror mode every taught pose is blended by match score so the arm follows between them. Telemetry carries `mirror` weights.
+
 ### Fixed
 - Inference no longer records an autograd graph: models are rebuilt on detached weights after loading. A V-JEPA 2 clip forward peaked at 13 GB of GPU buffers (and froze the machine during gesture capture); it now peaks under 2 GB.
 - Embedding requests are serialized on one inference lock, so concurrent captures and the stream cannot multiply the working set.

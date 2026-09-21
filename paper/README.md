@@ -52,22 +52,43 @@ The source already satisfies the stated requirements: no line numbers, single-sp
 JavaScript, and no animated figures. Both figures are TikZ, so the PDF contains vector
 graphics and no raster assets.
 
-## A note on the image you suggested
+## Figures
 
-The image at `miro.medium.com/.../1*Ee9SwJ-8L250WIQtCr-CJQ.jpeg` is hosted on Medium and
-is almost certainly covered by someone else's copyright. arXiv requires the submitter to
-hold the rights to everything in the submission, so including it would put the submission
-at risk and could get it removed. I did not include it.
-
-Instead the paper carries two original figures drawn in TikZ:
-
-- **Figure 1** — the `jepctl` architecture: sensors, preprocessing, encoder, and the three
-  latent-space consumers (few-shot matcher, online world model, control).
-- **Figure 2** — the World loop: frozen encoder, online predictor, surprise as the
+- **Figure 1** — `figures/jepa-overview.jpg`, the author's own overview infographic
+  (1400x764 JPEG, downloaded from the author's blog). Since it is your own work there is
+  no third-party rights question; arXiv only requires that you hold the rights.
+  Two things worth deciding before you submit:
+  1. The image was generated with an assistant and contains a few garbled strings (for
+     example "Train to trinring" near the predictor, and the mock terminal text). Reviewers
+     do notice this. Regenerating it with the text corrected, or overlaying clean labels,
+     would make the paper look tighter.
+  2. Some venues now ask authors to disclose AI-generated figures. arXiv does not currently
+     require it for figures, but adding "generated with the assistance of an image model"
+     to the caption costs nothing and pre-empts the question.
+- **Figure 2** — TikZ, the `jepctl` dataflow: sensors, preprocessing, encoder, and the
+  three latent-space consumers (few-shot matcher, online world model, control).
+- **Figure 3** — TikZ, the World loop: frozen encoder, online predictor, surprise as the
   normalised prediction error, following the structure in arXiv:2603.19312.
 
-If you want the picture you linked, the clean routes are: (a) reuse the original figure
-from the paper it came from and cite it, only if that paper's licence allows reuse (arXiv
-papers under CC BY do; "arXiv.org perpetual licence" ones do not), (b) ask the Medium
-author for written permission, or (c) ask me to redraw the same concept as an original
-TikZ figure, which is free of any rights question. I would recommend (c).
+Figures 2 and 3 are vector graphics; Figure 1 is the only raster asset, at 198 KB, well
+within arXiv's limits.
+
+## Reference provenance
+
+Every arXiv reference was checked against its abstract page during preparation, not
+written from memory:
+
+| Key | Identifier | Verified |
+|---|---|---|
+| `lewm2026` | arXiv:2603.19312 | full PDF read |
+| `jepaanything2026` | arXiv:2609.20800 | abstract page |
+| `ijepa2023` | arXiv:2301.08243 | abstract page |
+| `vjepa2_2025` | arXiv:2506.09985 | abstract page (first author is **Mido** Assran) |
+| `dinov2_2023` | arXiv:2304.07193 | abstract page |
+| `vit2021` | arXiv:2010.11929 | abstract page |
+| `audiomae2022` | arXiv:2207.06405 | abstract page (NeurIPS 2022) |
+| `lecun2022path` | OpenReview `BZ5a1r-kVsf` | confirmed by search; page itself is behind a bot check |
+| `cem2004` | Rubinstein & Kroese, Springer 2004 | matches the citation in arXiv:2603.19312's own bibliography |
+| `jl1984` | Johnson & Lindenstrauss, Contemp. Math. 26 | standard citation, **not** re-verified online |
+| `candle`, `safetensors`, `ollama` | GitHub URLs | project dependencies / well-known repositories |
+

@@ -78,6 +78,21 @@ practitioner who wants to use I-JEPA or V-JEPA~2 against their own webcam assemb
 Python environment, writes their own preprocessing, and discovers only at inference time
 whether the checkpoint layout they downloaded matches the architecture they built.
 
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{figures/jepa-overview.jpg}
+\caption{Overview of \jepctl{}. Left: catalogued JEPA-style encoders (I-JEPA, V-JEPA~2,
+DINOv2, AudioMAE) producing embeddings of 384 to 1280 dimensions, served by a single Rust
+binary with Metal, CUDA, or CPU backends and a small command line. Centre: few-shot
+recognition with its reasoning exposed, including the raw cosine scores, the contrastive
+score that separates otherwise near-identical classes, and the per-patch difference map.
+Right: the camera-driven robot loop, in which embeddings before and after an action train
+a locally weighted linear predictor that is then used to plan by sampling candidate
+actions and executing the one predicted to land closest to the goal. Bottom: the
+integration surface and the security defaults. Figure by the author.}
+\label{fig:overview}
+\end{figure}
+
 \jepctl{} is that missing runtime. It is a single Rust binary with no Python dependency
 that (a) downloads and loads JEPA-style checkpoints with an explicit, auditable report of
 how many tensors were covered, (b) serves embeddings over HTTP, a live SSE stream, and a
@@ -153,7 +168,8 @@ rather than hiding it behind a visualisation.
 \jepctl{} is written in Rust and builds to one binary. Inference uses \code{candle}
 \cite{candle} with Metal, CUDA, or multi-threaded CPU backends selected at runtime. The
 HTTP layer is \code{axum}; the desktop testbench is a native window hosting a
-dependency-free web UI. Figure~\ref{fig:arch} shows the arrangement.
+dependency-free web UI. Figure~\ref{fig:overview} gives the overall picture and
+Figure~\ref{fig:arch} the dataflow.
 
 \begin{figure}[t]
 \centering

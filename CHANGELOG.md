@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- World rendering reworked from a single bent sheet into a 3D scene: the semantic relief now goes through a foreground transfer function so background stays flat on a wall and only the foreground extrudes as a solid volume (steep sides shaded as such), the patch grid is upsampled bicubically so silhouettes are smooth instead of terraced, and a floor grid plus wall frame give the scene a space to sit in.
 - World tab reworked into a usable sentinel/inspection tool (per design review): opens on a 3/4 isometric view with Isometric/Profile/Face presets and 1.5x relief; four render-mode tabs (Realistic hologram, JEPA depth false-colour map, Anomaly map, Latent prediction); a **Sentinel** with an alarm threshold that flashes the scene, snaps to the anomaly map and writes a timestamped, spatially localised **incident log**; and **named states** (save/recognise/delete a reference view) via `POST /api/world/snapshot`, `DELETE /api/world/snapshot/{name}`, exposed as `recognized_label`/`snapshots` on `/api/world/frame`.
 
 ### Added

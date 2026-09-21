@@ -325,11 +325,14 @@ predictor is fit, online, on your live stream (no training run, no checkpoint).
 
 What you see and can do:
 
-- **Reconstruction in full field of view**: the live frame is draped over a 3D surface
-  whose relief comes from JEPA separating foreground from background in embedding space
-  (native aspect ratio). Not generative, not metric depth: the real scene given shape
-  by what the model perceives. Opens on a 3/4 isometric view with **Isometric / Profile
-  / Face** presets so the volume is visible without touching the mouse.
+- **Reconstruction in full field of view**: the live frame is mapped onto a 3D scene,
+  not a bent sheet. What the model reads as **background stays flat on a wall**, and
+  only the **foreground is extruded** as a solid volume with steep, shaded sides
+  (a smoothstep transfer on the semantic relief, bicubically upsampled from the patch
+  grid so the silhouette is smooth). A floor grid and the wall frame put it in a space.
+  Not generative, not metric depth: the real scene given shape by what the model
+  perceives. Opens on a 3/4 isometric view with **Isometric / Profile / Face** presets
+  so the volume is visible without touching the mouse.
 - **Four render modes** (tabs above the canvas): **Realistic hologram** (camera texture
   on the shaded relief), **JEPA depth map** (false colour, blue background to red
   foreground: the object is isolated with no depth sensor), **Anomaly map** (the scene

@@ -4422,7 +4422,7 @@
         tex: null,
         texReady: false,
         pendingImg: null,
-        orbit: { yaw: 0.45, pitch: 0.30, dist: 2.4, dragging: false, lastX: 0, lastY: 0 },
+        orbit: { yaw: 0.45, pitch: 0.30, dist: 3.6, dragging: false, lastX: 0, lastY: 0 },
         raf: null,
         field: null,
         heightScale: 1.5,
@@ -4463,7 +4463,8 @@
         uniform sampler2D u_tex;
         uniform sampler2D u_surprise;
         uniform float u_shade;
-        uniform float u_mode;   // 0 hologram, 1 depth, 2 anomaly
+        uniform float u_mode;   // 0 hologram, 1 depth, 2 anomaly, 3 solid room geometry
+        uniform vec3 u_solid;
         varying vec2 v_uv;
         varying vec3 v_normal;
         varying float v_height;
@@ -4475,13 +4476,20 @@
             return vec3(r, g, b);
         }
         void main() {
+            if (u_mode > 2.5) {                                    // room geometry: flat colour
+                gl_FragColor = vec4(u_solid, 1.0);
+                return;
+            }
             vec3 base = texture2D(u_tex, v_uv).rgb;
             vec3 n = normalize(v_normal);
             float d = max(dot(n, normalize(vec3(0.3, 0.5, 0.8))), 0.0);
             float sh = mix(1.0, 0.45 + 0.65 * d, u_shade);
+            // The steep sides of an extruded object face away from the light: darken
+            // them so the foreground reads as a solid volume, not a bent sheet.
+            float side = 1.0 - clamp(abs(n.z), 0.0, 1.0);
             vec3 col;
             if (u_mode < 0.5) {
-                col = base * sh;                                   // realistic hologram / prediction
+                col = base * sh * (1.0 - 0.45 * side);             // realistic hologram / prediction
             } else if (u_mode < 1.5) {
                 col = depthColor(v_height) * (0.6 + 0.4 * d);      // JEPA depth false colour
             } else {
@@ -4513,7 +4521,8 @@
             tex: gl.getUniformLocation(program, "u_tex"),
             surprise: gl.getUniformLocation(program, "u_surprise"),
             shade: gl.getUniformLocation(program, "u_shade"),
-            mode: gl.getUniformLocation(program, "u_mode")
+            mode: gl.getUniformLocation(program, "u_mode"),
+            solid: gl.getUniformLocation(program, "u_solid")
         };
         world.aspect = 1;
         world.mesh = worldBuildMesh(gl, WORLD_RES, world.aspect);
@@ -4572,7 +4581,7 @@
                 idx.push(a, c, b, b, c, d);
             }
         }
-        const heights = new Float32Array(verts); // raw relief 0..1, updated per frame
+        const heights = new Float32Array(verts); // foreground mask 0..1, updated per frame
         const posBuf = gl.createBuffer();
         const normBuf = gl.createBuffer();
         const heightBuf = gl.createBuffer();
@@ -4582,7 +4591,27 @@
         const idxBuf = gl.createBuffer();
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(idx), gl.STATIC_DRAW);
-        return { n, verts, positions, normals, heights, uvs, posBuf, normBuf, heightBuf, uvBuf, idxBuf, count: idx.length, spanW, spanH };
+        // Room: a floor grid receding from the wall toward the viewer, plus the wall
+        // frame. Pure lines, drawn in the solid-colour mode.
+        const room = [];
+        const y0 = -spanH / 2;
+        const zNear = 1.3, zFar = -0.05, step = 0.12;
+        for (let x = -spanW / 2; x <= spanW / 2 + 1e-6; x += step) {
+            room.push(x, y0, zFar, x, y0, zNear);
+        }
+        for (let z = zFar; z <= zNear + 1e-6; z += step) {
+            room.push(-spanW / 2, y0, z, spanW / 2, y0, z);
+        }
+        // Wall frame at z = 0.
+        const x0 = -spanW / 2, x1 = spanW / 2, y1 = spanH / 2;
+        room.push(x0, y0, 0, x1, y0, 0, x1, y0, 0, x1, y1, 0, x1, y1, 0, x0, y1, 0, x0, y1, 0, x0, y0, 0);
+        const roomBuf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, roomBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(room), gl.STATIC_DRAW);
+        return {
+            n, verts, positions, normals, heights, uvs, posBuf, normBuf, heightBuf, uvBuf, idxBuf,
+            count: idx.length, spanW, spanH, roomBuf, roomCount: room.length / 3
+        };
     }
 
     // Bilinear sample of the JEPA field (grid_w x grid_h) at normalized (u, v).
@@ -4607,6 +4636,25 @@
         return f.heights;
     }
 
+    function worldCatmull(p0, p1, p2, p3, t) {
+        return 0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t
+            + (-p0 + 3 * p1 - 3 * p2 + p3) * t * t * t);
+    }
+
+    // Smooth (bicubic) sample of a grid_w x grid_h field at normalised (u, v).
+    function worldSampleSmooth(arr, gw, gh, u, v) {
+        const fx = u * (gw - 1), fy = v * (gh - 1);
+        const x1 = Math.floor(fx), y1 = Math.floor(fy);
+        const tx = fx - x1, ty = fy - y1;
+        const cl = (i, n) => Math.max(0, Math.min(n - 1, i));
+        const at = (xx, yy) => arr[cl(yy, gh) * gw + cl(xx, gw)];
+        const rows = [];
+        for (let j = -1; j <= 2; j++) {
+            rows.push(worldCatmull(at(x1 - 1, y1 + j), at(x1, y1 + j), at(x1 + 1, y1 + j), at(x1 + 2, y1 + j), tx));
+        }
+        return worldCatmull(rows[0], rows[1], rows[2], rows[3], ty);
+    }
+
     function worldSampleArray(arr, gw, gh, u, v) {
         const fx = u * (gw - 1), fy = v * (gh - 1);
         const x0 = Math.floor(fx), y0 = Math.floor(fy);
@@ -4614,6 +4662,19 @@
         const tx = fx - x0, ty = fy - y0;
         const a = arr[y0 * gw + x0], b = arr[y0 * gw + x1], c = arr[y1 * gw + x0], d = arr[y1 * gw + x1];
         return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
+    }
+
+    // JEPA separates foreground from background semantically, so the reconstruction
+    // should not be one continuously bent sheet: everything the model reads as
+    // background stays on a flat wall, and only the foreground is extruded, with steep
+    // sides, so it reads as a solid object standing in front of the wall.
+    const WORLD_FG_LO = 0.42;
+    const WORLD_FG_HI = 0.84;
+    const WORLD_EXTRUSION = 0.85;
+
+    function worldSmoothstep(a, b, x) {
+        const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+        return t * t * (3 - 2 * t);
     }
 
     function worldUpdateMesh() {
@@ -4625,9 +4686,10 @@
             for (let x = 0; x < n; x++) {
                 const i = y * n + x;
                 const u = x / (n - 1), v = y / (n - 1);
-                const h = worldSampleArray(relief, f.grid_w, f.grid_h, u, v);
+                const raw = worldSampleSmooth(relief, f.grid_w, f.grid_h, u, v);
+                const h = worldSmoothstep(WORLD_FG_LO, WORLD_FG_HI, raw);
                 hattr[i] = h;
-                pos[i * 3 + 2] = h * world.heightScale * 0.7;
+                pos[i * 3 + 2] = h * world.heightScale * WORLD_EXTRUSION;
             }
         }
         // Normals from neighbouring heights (finite differences).
@@ -4716,6 +4778,18 @@
         gl.vertexAttribPointer(world.loc.height, 1, gl.FLOAT, false, 0, 0);
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, m.idxBuf);
         gl.drawElements(gl.TRIANGLES, m.count, gl.UNSIGNED_SHORT, 0);
+
+        // Room geometry (floor grid + wall frame): flat colour, position only.
+        if (m.roomBuf && m.roomCount) {
+            gl.disableVertexAttribArray(world.loc.uv);
+            gl.disableVertexAttribArray(world.loc.normal);
+            gl.disableVertexAttribArray(world.loc.height);
+            gl.uniform1f(world.loc.mode, 3);
+            gl.uniform3f(world.loc.solid, 0.30, 0.35, 0.44);
+            gl.bindBuffer(gl.ARRAY_BUFFER, m.roomBuf);
+            gl.vertexAttribPointer(world.loc.pos, 3, gl.FLOAT, false, 0, 0);
+            gl.drawArrays(gl.LINES, 0, m.roomCount);
+        }
     }
 
     function worldAnimate() {
@@ -4875,9 +4949,9 @@
     }
 
     function worldSetView(name) {
-        if (name === "iso") { world.orbit.yaw = 0.45; world.orbit.pitch = 0.30; world.orbit.dist = 2.4; }
-        else if (name === "profile") { world.orbit.yaw = 1.45; world.orbit.pitch = 0.05; world.orbit.dist = 2.6; }
-        else if (name === "face") { world.orbit.yaw = 0.0; world.orbit.pitch = 0.02; world.orbit.dist = 2.2; }
+        if (name === "iso") { world.orbit.yaw = 0.45; world.orbit.pitch = 0.30; world.orbit.dist = 3.6; }
+        else if (name === "profile") { world.orbit.yaw = 1.32; world.orbit.pitch = 0.10; world.orbit.dist = 3.4; }
+        else if (name === "face") { world.orbit.yaw = 0.0; world.orbit.pitch = 0.04; world.orbit.dist = 3.0; }
         document.querySelectorAll("#btn-world-view-iso,#btn-world-view-profile,#btn-world-view-face").forEach((b) => b.classList.remove("active"));
         const active = document.getElementById(`btn-world-view-${name}`);
         if (active) active.classList.add("active");
@@ -4963,7 +5037,7 @@
         canvas.addEventListener("pointercancel", stop);
         canvas.addEventListener("wheel", (e) => {
             e.preventDefault();
-            world.orbit.dist = Math.max(1.0, Math.min(6, world.orbit.dist * (e.deltaY > 0 ? 1.1 : 0.9)));
+            world.orbit.dist = Math.max(1.2, Math.min(9, world.orbit.dist * (e.deltaY > 0 ? 1.1 : 0.9)));
         }, { passive: false });
 
         const bind = (id, fn) => { const n = document.getElementById(id); if (n) n.addEventListener("click", fn); };

@@ -196,6 +196,7 @@
 
         // Settings
         settingsBackend: document.getElementById("settings-backend"),
+        settingsAllowLan: document.getElementById("settings-allow-lan"),
         settingsMemWatermark: document.getElementById("settings-mem-watermark"),
         settingsIdleTimeout: document.getElementById("settings-idle-timeout"),
         settingsStorageDir: document.getElementById("settings-storage-dir"),
@@ -1963,20 +1964,28 @@
                 if (el.settingsMemWatermark && s.gpu_memory_high_watermark) {
                     el.settingsMemWatermark.value = s.gpu_memory_high_watermark;
                 }
-                if (el.settingsIdleTimeout && s.idle_unload_timeout_minutes) {
-                    el.settingsIdleTimeout.value = s.idle_unload_timeout_minutes;
+                if (el.settingsIdleTimeout && s.idle_unload_timeout_minutes != null) {
+                    const want = String(s.idle_unload_timeout_minutes);
+                    const has = [...el.settingsIdleTimeout.options].some((o) => o.value === want);
+                    el.settingsIdleTimeout.value = has ? want : "30";
                 }
                 if (el.settingsStorageDir && s.storage_dir) {
                     el.settingsStorageDir.value = s.storage_dir;
+                }
+                if (el.settingsAllowLan) {
+                    el.settingsAllowLan.checked = !!s.allow_lan;
+                    el.settingsAllowLan.dataset.saved = s.allow_lan ? "1" : "0";
                 }
             }
         } catch (_) {}
 
         if (el.btnSaveSettings) {
             el.btnSaveSettings.addEventListener("click", async () => {
-                const backend = el.settingsBackend.value;
-                const memRatio = parseFloat(el.settingsMemWatermark.value);
-                const timeout = parseInt(el.settingsIdleTimeout.value, 10);
+                const backend = el.settingsBackend.value || "auto";
+                let memRatio = parseFloat(el.settingsMemWatermark.value);
+                if (!Number.isFinite(memRatio)) memRatio = 0.85;
+                let timeout = parseInt(el.settingsIdleTimeout.value, 10);
+                if (!Number.isFinite(timeout)) timeout = 15;
 
                 try {
                     const res = await apiFetch("/api/settings", {
@@ -1986,11 +1995,20 @@
                             compute_backend: backend,
                             gpu_memory_high_watermark: memRatio,
                             idle_unload_timeout_minutes: timeout,
-                            storage_dir: el.settingsStorageDir.value
+                            storage_dir: el.settingsStorageDir.value,
+                            allow_lan: el.settingsAllowLan ? el.settingsAllowLan.checked : false
                         })
                     });
                     if (res.ok) {
-                        notify("Settings saved.", "success");
+                        const lanChanged = el.settingsAllowLan && el.settingsAllowLan.dataset.saved !== (el.settingsAllowLan.checked ? "1" : "0");
+                        if (lanChanged) {
+                            el.settingsAllowLan.dataset.saved = el.settingsAllowLan.checked ? "1" : "0";
+                            notify(el.settingsAllowLan.checked
+                                ? "Saved. Restart jepctl to start accepting connections from other machines on your network."
+                                : "Saved. Restart jepctl to stop accepting network connections (loopback only).", "warning", 8000);
+                        } else {
+                            notify("Settings saved.", "success");
+                        }
                     } else {
                         const err = await res.json().catch(() => ({}));
                         notify(`Could not save settings: ${err.error || "unknown error"}`, "error");

@@ -43,9 +43,10 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
-    /// Host network interface to bind (e.g. 127.0.0.1 or 0.0.0.0)
-    #[arg(short = 'H', long, default_value = DEFAULT_HOST, global = true)]
-    host: String,
+    /// Host network interface to bind (e.g. 127.0.0.1 or 0.0.0.0). Overrides the
+    /// "Allow access from other machines" setting when given.
+    #[arg(short = 'H', long, global = true)]
+    host: Option<String>,
 
     /// Network port to bind
     #[arg(short = 'p', long, default_value_t = DEFAULT_PORT, global = true)]
@@ -268,18 +269,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cli = Cli::parse();
 
-    // Security check: --no-auth is strictly restricted to 127.0.0.1 or localhost
-    if cli.no_auth && cli.host != "127.0.0.1" && cli.host != "localhost" {
-        eprintln!(
-            "Security violation: --no-auth is strictly forbidden when binding to external interfaces ({}).",
-            cli.host
-        );
-        eprintln!("Authentication must remain enabled for external/LAN connections.");
+    // Initialize configuration (creates ~/.jepctl and reads settings.json).
+    let mut runtime_config = RuntimeConfig::init(DEFAULT_HOST.to_string(), cli.port, cli.no_auth)?;
+
+    // The bind interface: an explicit `--host` always wins; otherwise the persisted
+    // "Allow access from other machines" toggle chooses loopback (default) or all
+    // interfaces, so a restart is all it takes to apply the toggle.
+    runtime_config.host = match &cli.host {
+        Some(h) => h.clone(),
+        None if runtime_config.load_settings().allow_lan => "0.0.0.0".to_string(),
+        None => DEFAULT_HOST.to_string(),
+    };
+    let host = runtime_config.host.clone();
+    let is_loopback = host == "127.0.0.1" || host == "localhost";
+
+    // Security: --no-auth is only ever allowed on loopback.
+    if cli.no_auth && !is_loopback {
+        eprintln!("Security violation: --no-auth is forbidden when binding an external interface ({host}).");
+        eprintln!("Turn off Allow access from other machines in Settings, or keep authentication on for LAN access.");
         std::process::exit(1);
     }
+    if !is_loopback {
+        tracing::warn!(
+            "Binding {host}: reachable from other machines on your network. Every request needs a Bearer token; keep tokens scoped and short-lived."
+        );
+    }
 
-    // Initialize configuration
-    let mut runtime_config = RuntimeConfig::init(cli.host.clone(), cli.port, cli.no_auth)?;
     runtime_config.cors_origins =
         cli.cors_origins.iter().map(|o| o.trim().to_string()).filter(|o| !o.is_empty()).collect();
     let config = Arc::new(runtime_config);
@@ -363,9 +378,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None | Some(Commands::Serve(_)) | Some(Commands::App) | Some(Commands::Gui) => {
             print_startup_banner(&config, &auth);
             if should_launch_gui {
-                let host = cli.host.clone();
+                let host = host.clone();
                 let port = cli.port;
-                let url = format!("http://{}:{}", host, port);
+                // The desktop window always talks to loopback even when the daemon
+                // also listens on the LAN.
+                let url = format!("http://127.0.0.1:{}", port);
 
                 tokio::spawn(async move {
                     if let Err(e) = server::start_daemon(app_state, &host, port).await {
@@ -376,7 +393,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tokio::time::sleep(std::time::Duration::from_millis(150)).await;
                 desktop::launch_desktop_window(&url)?;
             } else {
-                server::start_daemon(app_state, &cli.host, cli.port).await?;
+                server::start_daemon(app_state, &host, cli.port).await?;
             }
         }
 
@@ -394,9 +411,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             if should_launch_gui {
-                let host = cli.host.clone();
+                let host = host.clone();
                 let port = cli.port;
-                let url = format!("http://{}:{}", host, port);
+                // The desktop window always talks to loopback even when the daemon
+                // also listens on the LAN.
+                let url = format!("http://127.0.0.1:{}", port);
 
                 tokio::spawn(async move {
                     if let Err(e) = server::start_daemon(app_state, &host, port).await {
@@ -407,7 +426,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tokio::time::sleep(std::time::Duration::from_millis(150)).await;
                 desktop::launch_desktop_window(&url)?;
             } else {
-                server::start_daemon(app_state, &cli.host, cli.port).await?;
+                server::start_daemon(app_state, &host, cli.port).await?;
             }
         }
 

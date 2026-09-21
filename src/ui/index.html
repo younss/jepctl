@@ -611,6 +611,7 @@
                             <label for="settings-idle-timeout">Idle Model Unload Timeout:</label>
                             <select id="settings-idle-timeout" class="select-input">
                                 <option value="5">5 Minutes</option>
+                                <option value="15">15 Minutes</option>
                                 <option value="30" selected>30 Minutes</option>
                                 <option value="0">Never Unload</option>
                             </select>
@@ -621,6 +622,15 @@
                             <input type="text" id="settings-storage-dir" class="input-text" readonly value="~/.jepctl">
                             <span class="field-hint">Configured via dirs cross-platform resolution.</span>
                         </div>
+                    </div>
+
+                    <div class="form-group settings-network-group">
+                        <span class="fact-label">Network access</span>
+                        <label class="toggle-label" for="settings-allow-lan">
+                            <input type="checkbox" id="settings-allow-lan" class="checkbox-input">
+                            <span>Allow access from other machines on the local network</span>
+                        </label>
+                        <span class="field-hint" id="settings-allow-lan-hint">Off: the daemon answers only this computer (127.0.0.1). On: it binds all interfaces (0.0.0.0) so other devices on your network can reach it. Requires a daemon restart, and authentication stays mandatory for network access. An explicit <code>--host</code> on the command line overrides this.</span>
                     </div>
 
                     <div class="form-actions">

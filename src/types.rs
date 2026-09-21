@@ -471,6 +471,12 @@ pub struct SettingsDto {
     pub gpu_memory_high_watermark: f32,
     pub idle_unload_timeout_minutes: i64,
     pub storage_dir: String,
+    /// Allow connections from other machines on the local network. When false
+    /// (default) the daemon binds 127.0.0.1 and is reachable only from this
+    /// machine. Takes effect on the next daemon start; an explicit `--host` on the
+    /// command line always wins over this setting.
+    #[serde(default)]
+    pub allow_lan: bool,
     /// Region of interest applied to camera frames before embedding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera_roi: Option<Roi>,

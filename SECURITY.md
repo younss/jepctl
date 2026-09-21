@@ -13,7 +13,7 @@ credited unless you prefer otherwise.
 `jepctl serve` is a local service that can read your camera. The defaults are chosen so that
 **a web page open in your browser cannot use it**:
 
-- Binds to `127.0.0.1` only. `--host 0.0.0.0` requires authentication (`--no-auth` is refused).
+- Binds to `127.0.0.1` only by default. The Settings tab has an **Allow access from other machines** toggle (off by default) that switches the bind to `0.0.0.0` on the next restart; an explicit `--host` on the command line always overrides it. Either way, external binding requires authentication (`--no-auth` is refused off loopback), and the daemon logs a warning when it listens beyond loopback.
 - Bearer tokens (`~/.jepctl/auth.token`, plus `jepctl key …` scoped tokens) with constant-time comparison; roles `admin` and `inference`. `keys.json` holds SHA-256 digests only (files from before 0.3.1 are migrated on first start); the admin token itself lives in `auth.token` (mode 0600) because the desktop testbench needs it to bootstrap.
 - **No CORS headers by default.** Cross-origin pages cannot read responses. Opt in per origin with `--cors-origins`.
 - `/api/auth/token` (testbench bootstrap) answers only same-origin requests (`Sec-Fetch-Site`) on loopback.

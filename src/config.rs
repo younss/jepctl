@@ -125,6 +125,7 @@ impl RuntimeConfig {
             gpu_memory_high_watermark: 0.85,
             idle_unload_timeout_minutes: 15,
             storage_dir: self.models_dir.to_string_lossy().to_string(),
+            allow_lan: false,
             camera_roi: None,
             robot_hardware: None,
         }

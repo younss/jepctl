@@ -2880,3 +2880,14 @@ body.dark-theme { font-size: 13px; }
     width: auto;
     white-space: nowrap;
 }
+
+.settings-network-group {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-color);
+}
+
+.settings-network-group .fact-label {
+    display: block;
+    margin-bottom: 8px;
+}

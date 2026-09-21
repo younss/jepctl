@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Settings: **Allow access from other machines** toggle (off by default). Off binds `127.0.0.1`, on binds `0.0.0.0` on the next restart; authentication stays mandatory for network access and an explicit `--host` still overrides it.
+
+### Fixed
+- Settings save no longer fails when a numeric field is blank (the idle-timeout default 15 was not a dropdown option); added the 15-minute option and coerced blank values.
+
 ### Security
 - Decoders capped (8192 px per side, 256 MB decoder allocations, 256 million pixels per animation): a decompression bomb is refused before allocation.
 - Model identifiers that resolve to the models directory itself (empty, `/`, `.`) are refused, so a delete cannot wipe the library.

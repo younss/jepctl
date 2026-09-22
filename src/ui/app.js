@@ -3242,6 +3242,37 @@
         return { buf, count: data.length / 6 };
     }
 
+    function robotCylinderMesh(gl, segments) {
+        segments = segments || 16;
+        const data = [];
+        const r = 0.5, h = 0.5;
+        for (let i = 0; i < segments; i++) {
+            const a1 = (i / segments) * Math.PI * 2;
+            const a2 = ((i + 1) / segments) * Math.PI * 2;
+            const c1 = Math.cos(a1), s1 = Math.sin(a1);
+            const c2 = Math.cos(a2), s2 = Math.sin(a2);
+            // Side quad
+            data.push(c1 * r, -h, s1 * r, c1, 0, s1);
+            data.push(c2 * r, -h, s2 * r, c2, 0, s2);
+            data.push(c2 * r,  h, s2 * r, c2, 0, s2);
+            data.push(c1 * r, -h, s1 * r, c1, 0, s1);
+            data.push(c2 * r,  h, s2 * r, c2, 0, s2);
+            data.push(c1 * r,  h, s1 * r, c1, 0, s1);
+            // Top cap
+            data.push(0, h, 0, 0, 1, 0);
+            data.push(c1 * r, h, s1 * r, 0, 1, 0);
+            data.push(c2 * r, h, s2 * r, 0, 1, 0);
+            // Bottom cap
+            data.push(0, -h, 0, 0, -1, 0);
+            data.push(c2 * r, -h, s2 * r, 0, -1, 0);
+            data.push(c1 * r, -h, s1 * r, 0, -1, 0);
+        }
+        const buf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
+        return { buf, count: data.length / 6 };
+    }
+
     function robotInitGl(canvas) {
         const gl = canvas.getContext("webgl", { antialias: true, preserveDrawingBuffer: true });
         if (!gl) return null;
@@ -4122,6 +4153,7 @@
         gl.enableVertexAttribArray(loc.pos);
         gl.enableVertexAttribArray(loc.normal);
         const cube = robotCubeMesh(gl);
+        const cyl = robotCylinderMesh(gl, 16);
         const grid = robotGridMesh(gl);
         const bind = (mesh) => {
             gl.bindBuffer(gl.ARRAY_BUFFER, mesh.buf);
@@ -4130,14 +4162,23 @@
         };
         return {
             gl,
-            drawBox(viewProj, model, size, color, alpha) {
+            drawBox(viewProj, model, size, color, alpha, unlit) {
                 const m = m4multiply(model, m4scale(size[0], size[1], size[2]));
                 gl.uniformMatrix4fv(loc.model, false, m);
                 gl.uniformMatrix4fv(loc.mvp, false, m4multiply(viewProj, m));
                 gl.uniform4f(loc.color, color[0], color[1], color[2], alpha === undefined ? 1 : alpha);
-                gl.uniform1f(loc.lit, 1);
+                gl.uniform1f(loc.lit, unlit ? 0 : 1);
                 bind(cube);
                 gl.drawArrays(gl.TRIANGLES, 0, cube.count);
+            },
+            drawCylinder(viewProj, model, radius, height, color, alpha, unlit) {
+                const m = m4multiply(model, m4scale(radius * 2, height, radius * 2));
+                gl.uniformMatrix4fv(loc.model, false, m);
+                gl.uniformMatrix4fv(loc.mvp, false, m4multiply(viewProj, m));
+                gl.uniform4f(loc.color, color[0], color[1], color[2], alpha === undefined ? 1 : alpha);
+                gl.uniform1f(loc.lit, unlit ? 0 : 1);
+                bind(cyl);
+                gl.drawArrays(gl.TRIANGLES, 0, cyl.count);
             },
             drawGrid(viewProj, color) {
                 gl.uniformMatrix4fv(loc.model, false, m4identity());
@@ -4154,43 +4195,122 @@
         return { head_pan: 0, head_tilt: 0, left_arm: -0.8, right_arm: -0.8, lean: 0, mood: 0.3 };
     }
 
-    // Body: a base, a torso that leans, a head that pans and tilts with two eyes,
-    // two arms hinged at the shoulders, a chest light coloured by mood.
-    function companionDraw(gfx, viewProj, p, eyesClosed) {
-        const body = [0.62, 0.66, 0.74];
-        const dark = [0.22, 0.25, 0.31];
+    // Body: a friendly, stylized humanoid companion robot.
+    // Clean pearlescent white ceramic armor plates, deep graphite mechanical chassis,
+    // glowing electric cyan OLED eyes with expressive blinking, and a glowing chest mood reactor.
+    function companionDraw(gfx, viewProj, p, eyesClosed, telemetry) {
+        const whiteArmor  = [0.93, 0.95, 0.98];
+        const darkChassis = [0.10, 0.13, 0.18];
+        const jointAccent = [0.24, 0.28, 0.36];
+        const visorGlass  = [0.05, 0.07, 0.10];
+        const cyanGlow    = [0.15, 0.90, 1.00];
+        const amberGlow   = [1.00, 0.72, 0.12];
+        const redAlert    = [1.00, 0.25, 0.25];
+
         const mood = Math.max(0, Math.min(1, p.mood));
-        const light = [0.2 + 0.8 * mood, 0.55 + 0.1 * (1 - mood), 1.0 - 0.8 * mood];
-        // Base and neck column
-        gfx.drawBox(viewProj, m4translate(0, 0.02, 0), [0.26, 0.04, 0.26], dark);
-        const torso = m4multiply(m4translate(0, 0.04, 0), m4rotateX(-p.lean * 0.35));
-        gfx.drawBox(viewProj, m4multiply(torso, m4translate(0, 0.17, 0)), [0.22, 0.30, 0.16], body);
-        gfx.drawBox(viewProj, m4multiply(torso, m4translate(0, 0.22, 0.085)), [0.06, 0.06, 0.01], light);
-        // Shoulders and arms (elevation about the shoulder, out to the sides)
+        const moodColor = [
+            0.15 + 0.85 * mood,
+            0.90 - 0.18 * mood,
+            1.00 - 0.88 * mood
+        ];
+        const isStartle = telemetry && telemetry.animation === "startle";
+        const coreColor = isStartle ? redAlert : moodColor;
+
+        const now = Date.now();
+        const bob = Math.sin(now * 0.0025) * 0.006;
+        const root = m4translate(0, 0.02 + bob, 0);
+
+        // 1. Floating Hover Base (multi-tiered pedestal with anti-grav glow)
+        gfx.drawCylinder(viewProj, m4multiply(root, m4translate(0, 0.015, 0)), 0.18, 0.025, darkChassis);
+        gfx.drawCylinder(viewProj, m4multiply(root, m4translate(0, 0.005, 0)), 0.15, 0.010, cyanGlow, 0.85, true);
+        gfx.drawCylinder(viewProj, m4multiply(root, m4translate(0, 0.004, 0)), 0.08, 0.008, [1, 1, 1], 0.95, true);
+        gfx.drawCylinder(viewProj, m4multiply(root, m4translate(0, 0.038, 0)), 0.15, 0.020, whiteArmor);
+        gfx.drawCylinder(viewProj, m4multiply(root, m4translate(0, 0.075, 0)), 0.065, 0.055, darkChassis);
+
+        // 2. Torso (leans with p.lean)
+        const torso = m4multiply(m4multiply(root, m4translate(0, 0.09, 0)), m4rotateX(-p.lean * 0.35));
+
+        gfx.drawBox(viewProj, m4multiply(torso, m4translate(0, 0.14, 0)), [0.18, 0.22, 0.14], darkChassis);
+        gfx.drawBox(viewProj, m4multiply(torso, m4translate(0, 0.15, 0.035)), [0.20, 0.18, 0.08], whiteArmor);
+        gfx.drawBox(viewProj, m4multiply(torso, m4translate(0, 0.05, 0.02)), [0.16, 0.06, 0.09], whiteArmor);
+        gfx.drawBox(viewProj, m4multiply(torso, m4translate(0, 0.14, -0.01)), [0.21, 0.16, 0.12], jointAccent);
+        gfx.drawBox(viewProj, m4multiply(torso, m4translate(0, 0.14, -0.065)), [0.14, 0.18, 0.045], darkChassis);
+        gfx.drawBox(viewProj, m4multiply(torso, m4translate(0, 0.18, -0.088)), [0.09, 0.04, 0.01], cyanGlow, 0.9, true);
+
+        // Glowing Chest Arc-Reactor / Mood Core
+        gfx.drawCylinder(viewProj, m4multiply(m4multiply(torso, m4translate(0, 0.16, 0.08)), m4rotateX(Math.PI / 2)), 0.042, 0.012, darkChassis);
+        gfx.drawCylinder(viewProj, m4multiply(m4multiply(torso, m4translate(0, 0.16, 0.086)), m4rotateX(Math.PI / 2)), 0.034, 0.008, coreColor, 1.0, true);
+        gfx.drawCylinder(viewProj, m4multiply(m4multiply(torso, m4translate(0, 0.16, 0.091)), m4rotateX(Math.PI / 2)), 0.015, 0.006, [1, 1, 1], 1.0, true);
+
+        // 3. Shoulders and Expressive Robotic Arms
         for (const side of [-1, 1]) {
             const elev = side < 0 ? p.left_arm : p.right_arm;
-            const angle = (elev + 1) * 0.5 * Math.PI; // -1 hanging (0), 1 straight up (pi)
-            const shoulder = m4multiply(torso, m4translate(side * 0.135, 0.29, 0));
-            gfx.drawBox(viewProj, shoulder, [0.05, 0.05, 0.05], dark);
-            // Rotate about the shoulder so the arm swings out to the side (never
-            // through the torso): positive Z rotation lifts the right arm outward.
-            const arm = m4multiply(shoulder, m4rotateZ(side * angle));
-            gfx.drawBox(viewProj, m4multiply(arm, m4translate(0, -0.11, 0)), [0.045, 0.22, 0.045], body);
-            gfx.drawBox(viewProj, m4multiply(arm, m4translate(0, -0.23, 0)), [0.06, 0.04, 0.06], light);
+            const angle = (elev + 1) * 0.5 * Math.PI;
+            const shoulderPos = m4multiply(torso, m4translate(side * 0.14, 0.24, 0));
+
+            gfx.drawCylinder(viewProj, shoulderPos, 0.038, 0.05, darkChassis);
+            gfx.drawBox(viewProj, m4multiply(shoulderPos, m4translate(0, 0.02, 0)), [0.075, 0.055, 0.085], whiteArmor);
+
+            const arm = m4multiply(shoulderPos, m4rotateZ(side * angle));
+
+            gfx.drawCylinder(viewProj, m4multiply(arm, m4translate(0, -0.06, 0)), 0.030, 0.085, whiteArmor);
+            gfx.drawCylinder(viewProj, m4multiply(arm, m4translate(0, -0.06, 0)), 0.018, 0.10, jointAccent);
+            gfx.drawCylinder(viewProj, m4multiply(m4multiply(arm, m4translate(0, -0.115, 0)), m4rotateX(Math.PI / 2)), 0.028, 0.045, darkChassis);
+            gfx.drawCylinder(viewProj, m4multiply(arm, m4translate(0, -0.175, 0)), 0.032, 0.095, whiteArmor);
+            gfx.drawCylinder(viewProj, m4multiply(arm, m4translate(0, -0.228, 0)), 0.030, 0.010, coreColor, 0.95, true);
+
+            // Hand / Mitten
+            gfx.drawBox(viewProj, m4multiply(arm, m4translate(0, -0.255, 0)), [0.048, 0.040, 0.026], darkChassis);
+            gfx.drawBox(viewProj, m4multiply(arm, m4translate(0, -0.285, 0.005)), [0.038, 0.025, 0.012], whiteArmor);
+            gfx.drawBox(viewProj, m4multiply(arm, m4translate(side * 0.022, -0.265, -0.008)), [0.016, 0.022, 0.014], whiteArmor);
         }
-        // Head
-        const neck = m4multiply(torso, m4translate(0, 0.34, 0));
-        gfx.drawBox(viewProj, neck, [0.05, 0.05, 0.05], dark);
+
+        // 4. Articulated Neck & Expressive Head
+        const neckBase = m4multiply(torso, m4translate(0, 0.27, 0));
+        gfx.drawCylinder(viewProj, neckBase, 0.035, 0.045, darkChassis);
+        gfx.drawCylinder(viewProj, m4multiply(torso, m4translate(0, 0.29, 0)), 0.022, 0.035, jointAccent);
+
+        const neck = m4multiply(torso, m4translate(0, 0.31, 0));
         const head = m4multiply(m4multiply(neck, m4rotateY(p.head_pan * 0.9)), m4rotateX(-p.head_tilt * 0.6));
-        gfx.drawBox(viewProj, m4multiply(head, m4translate(0, 0.11, 0)), [0.22, 0.18, 0.18], body);
-        const eyeH = eyesClosed ? 0.008 : 0.04;
+
+        gfx.drawBox(viewProj, m4multiply(head, m4translate(0, 0.11, -0.01)), [0.23, 0.18, 0.20], whiteArmor);
+        gfx.drawCylinder(viewProj, m4multiply(m4multiply(head, m4translate(0, 0.185, -0.01)), m4rotateZ(Math.PI / 2)), 0.045, 0.18, whiteArmor);
+        gfx.drawBox(viewProj, m4multiply(head, m4translate(0, 0.035, 0.025)), [0.16, 0.04, 0.14], darkChassis);
+        gfx.drawBox(viewProj, m4multiply(head, m4translate(0, 0.11, 0.092)), [0.20, 0.125, 0.025], visorGlass);
+
+        // Expressive Glowing Cyan Digital Eyes (OLED)
+        const isHappy = mood > 0.65 || (telemetry && (telemetry.animation === "dance" || telemetry.animation === "cheer"));
         for (const side of [-1, 1]) {
-            gfx.drawBox(viewProj, m4multiply(head, m4translate(side * 0.05, 0.12, 0.095)), [0.045, eyeH, 0.01], [0.1, 0.12, 0.16]);
-            if (!eyesClosed) gfx.drawBox(viewProj, m4multiply(head, m4translate(side * 0.05, 0.12, 0.1)), [0.02, 0.02, 0.005], light);
+            const eyeX = side * 0.052;
+            const eyeY = 0.11;
+            const eyeZ = 0.106;
+
+            if (eyesClosed) {
+                gfx.drawBox(viewProj, m4multiply(head, m4translate(eyeX, eyeY, eyeZ)), [0.042, 0.007, 0.004], cyanGlow, 1.0, true);
+            } else if (isHappy) {
+                gfx.drawBox(viewProj, m4multiply(head, m4translate(eyeX, eyeY + 0.012, eyeZ)), [0.042, 0.010, 0.004], cyanGlow, 1.0, true);
+                gfx.drawBox(viewProj, m4multiply(head, m4translate(eyeX + side * 0.018, eyeY - 0.004, eyeZ)), [0.010, 0.018, 0.004], cyanGlow, 1.0, true);
+                gfx.drawBox(viewProj, m4multiply(head, m4translate(eyeX - side * 0.018, eyeY - 0.004, eyeZ)), [0.010, 0.018, 0.004], cyanGlow, 1.0, true);
+            } else {
+                gfx.drawBox(viewProj, m4multiply(head, m4translate(eyeX, eyeY, eyeZ)), [0.044, 0.048, 0.004], cyanGlow, 0.95, true);
+                gfx.drawBox(viewProj, m4multiply(head, m4translate(eyeX, eyeY, eyeZ + 0.003)), [0.022, 0.025, 0.003], [1, 1, 1], 1.0, true);
+            }
         }
-        // Antenna
-        gfx.drawBox(viewProj, m4multiply(head, m4translate(0, 0.23, 0)), [0.012, 0.08, 0.012], dark);
-        gfx.drawBox(viewProj, m4multiply(head, m4translate(0, 0.275, 0)), [0.03, 0.03, 0.03], light);
+
+        // Side Ear Headphones (Audio Sensors)
+        const hasSound = telemetry && telemetry.hearing && telemetry.hearing.level > 0.15;
+        const earGlow = hasSound ? amberGlow : cyanGlow;
+        for (const side of [-1, 1]) {
+            gfx.drawCylinder(viewProj, m4multiply(m4multiply(head, m4translate(side * 0.125, 0.11, -0.01)), m4rotateZ(Math.PI / 2)), 0.055, 0.025, darkChassis);
+            gfx.drawCylinder(viewProj, m4multiply(m4multiply(head, m4translate(side * 0.138, 0.11, -0.01)), m4rotateZ(Math.PI / 2)), 0.045, 0.012, whiteArmor);
+            gfx.drawCylinder(viewProj, m4multiply(m4multiply(head, m4translate(side * 0.145, 0.11, -0.01)), m4rotateZ(Math.PI / 2)), 0.030, 0.008, earGlow, 0.95, true);
+        }
+
+        // Antenna with Glowing Sensor Beacon
+        gfx.drawCylinder(viewProj, m4multiply(head, m4translate(0, 0.22, -0.01)), 0.007, 0.075, darkChassis);
+        gfx.drawCylinder(viewProj, m4multiply(head, m4translate(0, 0.19, -0.01)), 0.018, 0.018, jointAccent);
+        gfx.drawCylinder(viewProj, m4multiply(head, m4translate(0, 0.265, -0.01)), 0.018, 0.022, cyanGlow, 1.0, true);
+        gfx.drawBox(viewProj, m4multiply(head, m4translate(0, 0.265, -0.01)), [0.010, 0.010, 0.010], [1, 1, 1], 1.0, true);
     }
 
     function companionRender() {
@@ -4210,9 +4330,9 @@
         const view = m4lookAt(eye, [0, 0.3, 0], [0, 1, 0]);
         const proj = m4perspective(0.8, canvas.width / canvas.height, 0.05, 20);
         const viewProj = m4multiply(proj, view);
-        gfx.drawGrid(viewProj, [0.22, 0.25, 0.32]);
+        gfx.drawGrid(viewProj, [0.15, 0.20, 0.28]);
         const t = companion.telemetry;
-        companionDraw(gfx, viewProj, companion.shown || companionDefaultPose(), !!(t && t.eyes_closed));
+        companionDraw(gfx, viewProj, companion.shown || companionDefaultPose(), !!(t && t.eyes_closed), t);
     }
 
     function companionAnimate() {
@@ -4539,15 +4659,15 @@
         const ctx = canvas.getContext("2d");
         const w = canvas.width, h = canvas.height;
         ctx.clearRect(0, 0, w, h);
-        ctx.fillStyle = "#000";
+        ctx.fillStyle = "#06090e";
         ctx.fillRect(0, 0, w, h);
-        ctx.strokeStyle = "rgba(255,255,255,0.12)";
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
         ctx.beginPath();
         ctx.moveTo(0, h / 2);
         ctx.lineTo(w, h / 2);
         ctx.stroke();
         if (!points || !points.length) return;
-        ctx.fillStyle = color || "#4ade80";
+        ctx.fillStyle = color || "#22c55e";
         const bw = w / points.length;
         points.forEach((v, i) => {
             const bh = Math.max(1, v * (h - 6));
@@ -5488,16 +5608,64 @@
         const ctx = canvas.getContext("2d");
         const w = canvas.width, h = canvas.height;
         ctx.clearRect(0, 0, w, h);
-        ctx.fillStyle = "#000"; ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = "#06090e";
+        ctx.fillRect(0, 0, w, h);
+
+        // Subtle background grid
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 4]);
+        for (let yPct of [0.25, 0.5, 0.75]) {
+            const gy = Math.round(h * yPct);
+            ctx.beginPath();
+            ctx.moveTo(0, gy);
+            ctx.lineTo(w, gy);
+            ctx.stroke();
+        }
+        ctx.setLineDash([]);
+
         const s = world.spark;
         if (s.length < 2) return;
-        ctx.strokeStyle = "#f59e0b"; ctx.lineWidth = 1.5; ctx.beginPath();
+
+        // Gradient under graph
+        const grad = ctx.createLinearGradient(0, 0, 0, h);
+        grad.addColorStop(0, "rgba(245, 158, 11, 0.3)");
+        grad.addColorStop(1, "rgba(245, 158, 11, 0.0)");
+
+        ctx.beginPath();
         s.forEach((v, i) => {
             const x = (i / (s.length - 1)) * w;
-            const y = h - Math.max(0, Math.min(1, v)) * (h - 4) - 2;
+            const y = h - Math.max(0, Math.min(1, v)) * (h - 6) - 3;
             if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
         });
+        ctx.lineTo(w, h);
+        ctx.lineTo(0, h);
+        ctx.closePath();
+        ctx.fillStyle = grad;
+        ctx.fill();
+
+        // Stroke line
+        ctx.strokeStyle = "#f59e0b";
+        ctx.lineWidth = 2;
+        ctx.shadowColor = "rgba(245, 158, 11, 0.5)";
+        ctx.shadowBlur = 6;
+        ctx.beginPath();
+        let lastX = 0, lastY = h / 2;
+        s.forEach((v, i) => {
+            const x = (i / (s.length - 1)) * w;
+            const y = h - Math.max(0, Math.min(1, v)) * (h - 6) - 3;
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            lastX = x;
+            lastY = y;
+        });
         ctx.stroke();
+        ctx.shadowBlur = 0;
+
+        // Current tip marker
+        ctx.fillStyle = "#fbbf24";
+        ctx.beginPath();
+        ctx.arc(lastX, lastY, 3, 0, Math.PI * 2);
+        ctx.fill();
     }
 
     function worldUpdateCameraButton() {

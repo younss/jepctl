@@ -484,166 +484,389 @@
                 </div>
             </section>
 
-            <!-- SECTION 6: SECURITY & API KEYS -->
-            <section class="content-section" id="section-security" tabindex="0" role="tabpanel" aria-labelledby="tab-security">
+            <!-- SECTION: GESTURES -->
+            <section class="content-section" id="section-gestures" tabindex="0" role="tabpanel" aria-labelledby="tab-gestures">
                 <div class="section-title">
-                    <h2>Integration &amp; API keys</h2>
-                    <p>Everything you need to call this daemon from your own application: base URL, tokens, working examples.</p>
+                    <h2>Gestures</h2>
+                    <p>Teach a few poses. See what the model recognizes and understand every decision.</p>
                 </div>
 
-                <!-- Integration quick start -->
-                <div class="card">
-                    <div class="card-header-actions">
-                        <h3>Quick start</h3>
-                        <div class="snippet-lang-tabs" role="tablist" aria-label="Example language">
-                            <button class="snippet-lang active" role="tab" aria-selected="true" data-lang="curl">curl</button>
-                            <button class="snippet-lang" role="tab" aria-selected="false" data-lang="js">JavaScript</button>
-                            <button class="snippet-lang" role="tab" aria-selected="false" data-lang="python">Python</button>
+
+                <div class="card gesture-model-bar">
+                    <div class="gesture-model-bar-row">
+                        <div class="gesture-model-bar-left">
+                            <label for="select-gesture-active-model">Model</label>
+                            <select id="select-gesture-active-model" class="select-input">
+                                <option value="">Loading models...</option>
+                            </select>
+                            <button class="btn btn-sm btn-primary" id="btn-gesture-load-model">Load</button>
+                            <button class="btn btn-sm btn-outline" id="btn-gesture-unload-model">Unload</button>
+                            <button class="btn btn-sm btn-api" id="btn-api-load-model" title="Show the API request">{ } API</button>
+                        </div>
+                        <div class="gesture-model-bar-right">
+                            <button class="btn btn-sm btn-primary" id="btn-gesture-camera-toggle">
+                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-video"></use></svg> <span id="gesture-cam-btn-text">Start camera</span>
+                            </button>
+                            <span class="status-indicator status-idle" id="gesture-model-indicator"></span>
+                            <span id="gesture-model-name-text" class="gesture-model-name">No model loaded</span>
+                            <span class="weights-badge" id="gesture-weights-badge" title="Tensors loaded from the checkpoint / expected">weights: --</span>
                         </div>
                     </div>
-                    <div class="integration-facts">
-                        <div><span class="fact-label">Base URL</span><code id="integration-base-url">http://127.0.0.1:11435</code></div>
-                        <div><span class="fact-label">Auth</span><code id="integration-auth-mode">Bearer token</code></div>
-                        <div><span class="fact-label">Active model</span><code id="integration-model">none</code></div>
-                        <div><span class="fact-label">Cross-origin</span><code>same-origin only: start with <span class="mono">--cors-origins</span> to allow a browser app</code></div>
-                    </div>
-                    <p class="integration-hint">Every action button in this app has an <strong>API</strong> control that shows the exact request it sends. Generate an <em>inference</em> token below and replace <code>$JEPA_TOKEN</code>.</p>
-                    <pre class="code-block" id="integration-example" tabindex="0"></pre>
-                    <div class="snippet-actions">
-                        <button class="btn btn-sm btn-outline" id="btn-copy-integration">Copy example</button>
-                    </div>
+                    <p class="gesture-model-hint">Gestures are bound to the model that encoded them; switching models shows that model's gestures. DINOv2-small is the recommended default.</p>
                 </div>
 
-                <!-- Network Binding Policy -->
-                <div class="card">
-                    <h3>Network access</h3>
-                    <div class="policy-row">
-                        <div class="policy-info">
-                            <strong>Local Loopback Only (127.0.0.1)</strong>
-                            <p>Restrict runtime access exclusively to localhost connections. Maximum security.</p>
+                <div class="scenario-picker" role="group" aria-label="Scenario">
+                    <button class="scenario-card active" id="scenario-qc" data-scenario="qc">
+                        <span class="scenario-title">Industrial quality control</span>
+                        <span class="scenario-sub">Bottle: capped or not</span>
+                        <span class="scenario-desc">Two five-second captures replace the thousands of annotated photos a detector would need. The latent space ignores the changing glare on glass and keeps the geometry of the neck and cap.</span>
+                    </button>
+                    <button class="scenario-card" id="scenario-sandbox" data-scenario="sandbox">
+                        <span class="scenario-title">Gesture sandbox</span>
+                        <span class="scenario-sub">Hand poses and teleoperation</span>
+                        <span class="scenario-desc">Open hand, fist, victory: the same engine, used to drive the Robot Twin or the Companion.</span>
+                    </button>
+                </div>
+
+                <ol class="flow-guide" aria-label="Gesture setup"><li><span>1</span> Load a model</li><li><span>2</span> Start the camera</li><li><span>3</span> Capture neutral, then gestures</li><li><span>4</span> Tune &amp; export</li></ol>
+                <div class="gesture-sandbox-layout">
+                    <div class="gesture-main-col" tabindex="0" role="region" aria-label="Gesture preview and analysis">
+                        <div class="card gesture-preview-card" id="gesture-preview-card">
+                            <div class="gesture-card-header">
+                                <div>
+                                    <h3>Model view</h3>
+                                    <p class="card-subtitle">The camera frame as your active model sees it, with the current crop applied.</p>
+                                </div>
+                                <div class="gesture-header-actions">
+                                    <label class="toggle-label compact" for="toggle-gesture-heatmap">
+                                        <input type="checkbox" id="toggle-gesture-heatmap" class="checkbox-input" checked>
+                                        <span>Difference map</span>
+                                    </label>
+
+                                </div>
+                            </div>
+
+                            <div class="gesture-video-wrapper" id="gesture-video-wrapper">
+                                <div class="model-view-stage">
+                                    <img id="gesture-model-view" alt="Current model input frame" width="224" height="224">
+                                    <canvas id="gesture-heatmap" width="224" height="224" role="img" aria-label="Per-patch difference map against the best matching gesture"></canvas>
+                                    <div class="model-view-placeholder" id="gesture-view-placeholder">Camera stopped</div>
+                                </div>
+
+                                <div class="gesture-overlay">
+                                    <div class="gesture-badge gesture-badge-idle" id="gesture-detection-badge" role="status" aria-live="polite">
+                                        <span class="badge-status-dot" aria-hidden="true"></span>
+                                        <span id="gesture-badge-text">No gesture registered</span>
+                                    </div>
+                                    <div class="gesture-confidence-box">
+                                        <div class="confidence-header">
+                                            <span class="confidence-title">Combined score (smoothed)</span>
+                                            <span class="confidence-val" id="gesture-confidence-text">0.0%</span>
+                                        </div>
+                                        <div class="confidence-bar-track">
+                                            <div class="confidence-bar-fill" id="gesture-confidence-bar" style="width: 0%;"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="qc-console" id="qc-console">
+                                <div class="qc-status" id="qc-status">
+                                    <span class="qc-status-label" id="qc-status-label">Waiting for a capture</span>
+                                    <span class="qc-status-score" id="qc-status-score"></span>
+                                </div>
+                                <div class="qc-meta">
+                                    <span>Bottles packaged <strong id="qc-counter">0</strong></span>
+                                    <span>Non-conformities <strong id="qc-defects">0</strong></span>
+                                    <span>Alarm after <strong>3 s</strong> open</span>
+                                    <button class="btn btn-sm btn-outline" id="btn-qc-reset">Reset counters</button>
+                                </div>
+                                <ul class="world-incident-log" id="qc-log" aria-live="polite"></ul>
+                            </div>
                         </div>
-                        <label class="switch">
-                            <input type="checkbox" id="toggle-lan-access" aria-label="Enable LAN access">
-                            <span class="slider-round"></span>
-                        </label>
-                    </div>
-                    <div class="lan-warning" id="lan-warning-box" style="display: none;">
-                        &#9888; Warning: Enabling LAN access (0.0.0.0) permits external devices on your network to invoke inference. Authentication is strictly enforced.
-                    </div>
-                </div>
 
-                <!-- Active API Keys Table -->
-                <div class="card">
-                    <div class="card-header-actions">
-                        <h3>API keys</h3>
-                        <button class="btn btn-primary" id="btn-open-create-key">Generate New API Token</button>
-                    </div>
-                    <div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable data table"><table class="data-table" id="table-api-keys">
-                        <thead>
-                            <tr>
-                                <th>Key Prefix</th>
-                                <th>Name</th>
-                                <th>Assigned Role</th>
-                                <th>Created</th>
-                                <th>Expires</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="api-keys-tbody">
-                            <tr>
-                                <td colspan="6" class="text-center">Loading API tokens...</td>
-                            </tr>
-                        </tbody>
-                    </table></div>
-                </div>
+                        <div class="card gesture-reasoning-card">
+                            <div class="gesture-card-header">
+                                <div>
+                                    <h3>Why this decision</h3>
+                                    <p class="card-subtitle">Frame-by-frame breakdown of the match. The same fields come back from <code>/api/gestures/match</code>.</p>
+                                </div>
+                                <div class="gesture-header-actions">
+                                    <span class="method-badge" id="gesture-method-badge">method: --</span>
+                                    <button class="btn btn-sm btn-api" id="btn-api-match" title="Show the API request">{ } API</button>
+                                </div>
+                            </div>
 
-                <!-- Rolling Audit Log -->
-                <div class="card">
-                    <div class="card-header-actions">
-                        <h3>Recent API activity</h3>
-                        <button class="btn btn-sm btn-outline" id="btn-refresh-audit">Refresh Log</button>
+                            <details class="reasoning-explainer">
+                                <summary>How the scores are computed</summary>
+                                <p><strong>Raw cosine</strong>: direct similarity between the frame and the prototype. With the same background, face and lighting it saturates near 1.0 for <em>every</em> gesture and discriminates nothing.</p>
+                                <p><strong>Contrastive</strong>: the centroid of all prototypes (the shared part: background, torso, light) is removed, then what remains is compared. That is the gesture's own signature.</p>
+                                <p><strong>Combined</strong> = 0.35 &times; raw + 0.65 &times; contrastive. Detected when combined &ge; threshold <em>and</em> the lead over the runner-up &ge; margin. A winning Neutral slot blocks detection.</p>
+                            </details>
+
+                            <div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable data table"><table class="reasoning-table" id="gesture-reasoning-table">
+                                <thead>
+                                    <tr>
+                                        <th scope="col">Gesture</th>
+                                        <th scope="col">Samples</th>
+                                        <th scope="col">Raw cos.</th>
+                                        <th scope="col">Contrastive</th>
+                                        <th scope="col">Combined</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="gesture-reasoning-body">
+                                    <tr><td colspan="5" class="reasoning-empty">Waiting for the stream and at least one registered gesture.</td></tr>
+                                </tbody>
+                            </table></div>
+
+                            <div class="reasoning-decision" id="gesture-reasoning-decision" role="status" aria-live="polite">Decision: --</div>
+
+                            <div class="reasoning-meta">
+                                <span>Margin <strong id="reason-margin">--</strong></span>
+                                <span>Server threshold <strong id="reason-threshold">--</strong></span>
+                                <span>Latency <strong id="reason-latency">--</strong></span>
+                                <span>Frame <strong id="reason-frame">--</strong></span>
+                                <span>Grid <strong id="reason-grid">--</strong></span>
+                            </div>
+                            <p class="reasoning-heatmap-hint">Difference map: each cell is a ViT patch; the warmer, the more it differs from the best-ranked prototype. A moving hand should light up, a static background stay dark.</p>
+                        </div>
+
+                        <div class="card gesture-actions-card">
+                            <h3>Live actions</h3>
+                            <div class="gesture-actions-grid">
+                                <div class="action-item">
+                                    <div class="action-item-header">
+                                        <svg class="ui-icon action-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-sound"></use></svg>
+                                        <label class="toggle-label" for="toggle-gesture-audio">
+                                            <span>Audio cue</span>
+                                            <input type="checkbox" id="toggle-gesture-audio" checked class="checkbox-input">
+                                        </label>
+                                    </div>
+                                    <p class="action-desc">One tone per slot (523 / 659 / 784 Hz).</p>
+                                </div>
+                                <div class="action-item">
+                                    <div class="action-item-header">
+                                        <svg class="ui-icon action-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-palette"></use></svg>
+                                        <span class="action-name">Visual theme</span>
+                                    </div>
+                                    <div class="theme-pill-preview" id="gesture-theme-pill">
+                                        <span id="gesture-theme-text">Neutral palette</span>
+                                    </div>
+                                </div>
+                                <div class="action-item">
+                                    <div class="action-item-header">
+                                        <svg class="ui-icon action-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-clock"></use></svg>
+                                        <span class="action-name">Hold (&gt; 1 s)</span>
+                                    </div>
+                                    <div class="hold-progress-box">
+                                        <div class="hold-timer-text" id="gesture-hold-timer-text">Hold: 0.0s / 1.0s</div>
+                                        <div class="hold-track"><div class="hold-fill" id="gesture-hold-bar" style="width: 0%;"></div></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                    <div class="audit-log-table-wrap">
-                        <div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable data table"><table class="data-table" id="table-audit-log">
-                            <thead>
-                                <tr>
-                                    <th>Timestamp</th>
-                                    <th>Method</th>
-                                    <th>Endpoint</th>
-                                    <th>Client IP</th>
-                                    <th>Status</th>
-                                    <th>Latency</th>
-                                </tr>
-                            </thead>
-                            <tbody id="audit-log-tbody">
-                                <tr>
-                                    <td colspan="6" class="text-center">No API calls recorded yet.</td>
-                                </tr>
-                            </tbody>
-                        </table></div>
+
+                    <div class="gesture-slots-col" tabindex="0" role="region" aria-label="Reference gestures">
+                        
+                        <div class="card gesture-sensitivity-card" id="gesture-sensitivity-card">
+                            <h3>Sensitivity &amp; Detection</h3>
+                            <div class="sensitivity-row">
+                                    <div class="sensitivity-label-row">
+                                        <label for="slider-gesture-threshold">Detection threshold (combined score)</label>
+                                        <span class="threshold-badge" id="val-gesture-threshold">0.70</span>
+                                    </div>
+                                    <input type="range" id="slider-gesture-threshold" min="0.30" max="0.95" step="0.01" value="0.70" class="range-slider">
+                                </div>
+                                <div class="sensitivity-row">
+                                    <div class="sensitivity-label-row">
+                                        <label for="slider-gesture-margin">Minimum lead over the runner-up</label>
+                                        <span class="threshold-badge" id="val-gesture-margin">0.04</span>
+                                    </div>
+                                    <input type="range" id="slider-gesture-margin" min="0" max="0.30" step="0.01" value="0.04" class="range-slider">
+                                </div>
+                                <div class="sensitivity-row">
+                                    <div class="sensitivity-label-row">
+                                        <label for="slider-gesture-smoothing">Temporal smoothing (frames)</label>
+                                        <span class="threshold-badge" id="val-gesture-smoothing">3</span>
+                                    </div>
+                                    <input type="range" id="slider-gesture-smoothing" min="1" max="10" step="1" value="3" class="range-slider">
+                                </div>
+                                <p class="sensitivity-note">These values are recorded in the exported bundle and shown in the <strong>API</strong> snippets so your application matches with the same settings.</p>
+                        </div>
+
+
+                        <details class="card roi-card" id="roi-card">
+                            <summary class="roi-summary">
+                                <span><strong>Region of interest</strong> <span class="card-subtitle-inline" id="roi-status-text">full frame</span></span>
+                                <span class="roi-summary-hint">Crop the camera to the hand so it fills the model input</span>
+                            </summary>
+                            <p class="card-subtitle">Drag a rectangle on the full frame. The model view, live matching and captured samples all use this crop; it is saved with exported bundles.</p>
+                            <div class="roi-stage" id="roi-stage" role="application" aria-label="Region of interest editor: drag to draw a rectangle">
+                                <img id="roi-full-frame" alt="Full camera frame" draggable="false">
+                                <div class="roi-box" id="roi-box" style="display: none;"></div>
+                                <div class="model-view-placeholder" id="roi-placeholder">Start the camera to edit the region</div>
+                            </div>
+                            <div class="roi-actions">
+                                <code id="roi-values">none</code>
+                                <button class="btn btn-sm btn-outline" id="btn-roi-clear">Use full frame</button>
+                                <button class="btn btn-sm btn-api" id="btn-api-roi" title="Show the API request">{ } API</button>
+                            </div>
+                        </details>
+
+                        <div class="card gesture-slots-card">
+                            <div class="slots-header">
+                                <h3>Reference gestures</h3>
+                                <span class="slots-badge" id="gesture-count-badge">0 gestures</span>
+                            </div>
+                            <div class="slots-tips">
+                                <strong>For reliable detection</strong>
+                                <ol>
+                                    <li>Start the camera and stand as you will in real use.</li>
+                                    <li>Register the <em>Neutral</em> slot first (hands down).</li>
+                                    <li>For each gesture, click <em>Capture</em> 3 to 5 times while moving slightly.</li>
+                                    <li>Read the breakdown: if contrastive stays below 0.3 the hand is too small in the frame: move closer.</li>
+                                </ol>
+                            </div>
+
+                            <div class="slots-container">
+                                <div class="slot-card slot-neutral" id="slot-card-4" data-slot="4">
+                                    <div class="slot-header">
+                                        <span class="slot-number">Neutral · start here</span>
+                                        <span class="slot-state-badge" id="slot-state-4">Empty</span>
+                                    </div>
+                                    <div class="slot-body">
+                                        <label class="visually-hidden" for="gesture-name-4">Gesture name</label>
+                                        <input type="text" id="gesture-name-4" class="input-text slot-name-input" value="Rest" placeholder="Gesture name" maxlength="64">
+                                        <div class="slot-thumb-box" id="slot-thumb-box-4">
+                                            <img id="slot-img-4" src="" alt="" style="display: none;">
+                                            <div class="slot-empty-placeholder" id="slot-empty-4">No capture yet</div>
+                                        </div>
+                                        <div class="slot-meta" id="slot-meta-4">Rest pose: absorbs frames with no intentional gesture. Never reported as a detection.</div>
+                                        <div class="slot-buttons">
+                                            <button class="btn btn-sm btn-primary btn-capture-slot" id="btn-capture-4" data-slot="4">
+                                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-camera"></use></svg> Capture
+                                            </button>
+                                            <button class="btn btn-sm btn-outline-danger btn-delete-slot" id="btn-delete-4" data-slot="4" style="display: none;">
+                                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-delete"></use></svg> Delete
+                                            </button>
+                                        </div>
+                                        <div class="slot-live-meter" id="slot-live-meter-4">
+                                            <div class="slot-live-meter-row">
+                                                <span>Combined score</span>
+                                                <strong id="slot-score-val-4" class="mono">--%</strong>
+                                            </div>
+                                            <div class="slot-live-track"><div id="slot-score-bar-4" class="slot-live-fill"></div></div>
+                                        </div>
+
+                                    </div>
+                                </div>
+                                <div class="slot-card" id="slot-card-1" data-slot="1">
+                                    <div class="slot-header">
+                                        <span class="slot-number">Slot 1 (gesture A)</span>
+                                        <span class="slot-state-badge" id="slot-state-1">Empty</span>
+                                    </div>
+                                    <div class="slot-body">
+                                        <label class="visually-hidden" for="gesture-name-1">Gesture name</label>
+                                        <input type="text" id="gesture-name-1" class="input-text slot-name-input" value="Open Hand" placeholder="Gesture name" maxlength="64">
+                                        <div class="slot-thumb-box" id="slot-thumb-box-1">
+                                            <img id="slot-img-1" src="" alt="" style="display: none;">
+                                            <div class="slot-empty-placeholder" id="slot-empty-1">No capture yet</div>
+                                        </div>
+                                        <div class="slot-meta" id="slot-meta-1">Capture 3 to 5 samples while moving slightly.</div>
+                                        <div class="slot-buttons">
+                                            <button class="btn btn-sm btn-primary btn-capture-slot" id="btn-capture-1" data-slot="1">
+                                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-camera"></use></svg> Capture
+                                            </button>
+                                            <button class="btn btn-sm btn-outline-danger btn-delete-slot" id="btn-delete-1" data-slot="1" style="display: none;">
+                                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-delete"></use></svg> Delete
+                                            </button>
+                                        </div>
+                                        <div class="slot-live-meter" id="slot-live-meter-1">
+                                            <div class="slot-live-meter-row">
+                                                <span>Combined score</span>
+                                                <strong id="slot-score-val-1" class="mono">--%</strong>
+                                            </div>
+                                            <div class="slot-live-track"><div id="slot-score-bar-1" class="slot-live-fill"></div></div>
+                                        </div>
+                                        <div class="slot-counter-badge">Held triggers: <strong id="slot-counter-1">0</strong></div>
+                                    </div>
+                                </div>
+                                <div class="slot-card" id="slot-card-2" data-slot="2">
+                                    <div class="slot-header">
+                                        <span class="slot-number">Slot 2 (gesture B)</span>
+                                        <span class="slot-state-badge" id="slot-state-2">Empty</span>
+                                    </div>
+                                    <div class="slot-body">
+                                        <label class="visually-hidden" for="gesture-name-2">Gesture name</label>
+                                        <input type="text" id="gesture-name-2" class="input-text slot-name-input" value="Fist" placeholder="Gesture name" maxlength="64">
+                                        <div class="slot-thumb-box" id="slot-thumb-box-2">
+                                            <img id="slot-img-2" src="" alt="" style="display: none;">
+                                            <div class="slot-empty-placeholder" id="slot-empty-2">No capture yet</div>
+                                        </div>
+                                        <div class="slot-meta" id="slot-meta-2">Capture 3 to 5 samples while moving slightly.</div>
+                                        <div class="slot-buttons">
+                                            <button class="btn btn-sm btn-primary btn-capture-slot" id="btn-capture-2" data-slot="2">
+                                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-camera"></use></svg> Capture
+                                            </button>
+                                            <button class="btn btn-sm btn-outline-danger btn-delete-slot" id="btn-delete-2" data-slot="2" style="display: none;">
+                                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-delete"></use></svg> Delete
+                                            </button>
+                                        </div>
+                                        <div class="slot-live-meter" id="slot-live-meter-2">
+                                            <div class="slot-live-meter-row">
+                                                <span>Combined score</span>
+                                                <strong id="slot-score-val-2" class="mono">--%</strong>
+                                            </div>
+                                            <div class="slot-live-track"><div id="slot-score-bar-2" class="slot-live-fill"></div></div>
+                                        </div>
+                                        <div class="slot-counter-badge">Held triggers: <strong id="slot-counter-2">0</strong></div>
+                                    </div>
+                                </div>
+                                <div class="slot-card" id="slot-card-3" data-slot="3">
+                                    <div class="slot-header">
+                                        <span class="slot-number">Slot 3 (gesture C)</span>
+                                        <span class="slot-state-badge" id="slot-state-3">Empty</span>
+                                    </div>
+                                    <div class="slot-body">
+                                        <label class="visually-hidden" for="gesture-name-3">Gesture name</label>
+                                        <input type="text" id="gesture-name-3" class="input-text slot-name-input" value="Victory" placeholder="Gesture name" maxlength="64">
+                                        <div class="slot-thumb-box" id="slot-thumb-box-3">
+                                            <img id="slot-img-3" src="" alt="" style="display: none;">
+                                            <div class="slot-empty-placeholder" id="slot-empty-3">No capture yet</div>
+                                        </div>
+                                        <div class="slot-meta" id="slot-meta-3">Capture 3 to 5 samples while moving slightly.</div>
+                                        <div class="slot-buttons">
+                                            <button class="btn btn-sm btn-primary btn-capture-slot" id="btn-capture-3" data-slot="3">
+                                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-camera"></use></svg> Capture
+                                            </button>
+                                            <button class="btn btn-sm btn-outline-danger btn-delete-slot" id="btn-delete-3" data-slot="3" style="display: none;">
+                                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-delete"></use></svg> Delete
+                                            </button>
+                                        </div>
+                                        <div class="slot-live-meter" id="slot-live-meter-3">
+                                            <div class="slot-live-meter-row">
+                                                <span>Combined score</span>
+                                                <strong id="slot-score-val-3" class="mono">--%</strong>
+                                            </div>
+                                            <div class="slot-live-track"><div id="slot-score-bar-3" class="slot-live-fill"></div></div>
+                                        </div>
+                                        <div class="slot-counter-badge">Held triggers: <strong id="slot-counter-3">0</strong></div>
+                                    </div>
+                                </div>
+
+                            </div>
+                            <div class="slots-footer">
+                                <button class="btn btn-sm btn-outline" id="btn-gestures-export" title="Download a bundle to deploy elsewhere">Export bundle</button>
+                                <button class="btn btn-sm btn-outline" id="btn-gestures-import">Import bundle</button>
+                                <input type="file" id="input-gestures-import" accept="application/json" class="visually-hidden" aria-label="Bundle file">
+                                <button class="btn btn-sm btn-api" id="btn-api-register" title="Show the API request">{ } API</button>
+                                <button class="btn btn-sm btn-outline-danger" id="btn-gestures-clear">Clear all for this model</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </section>
-
-            <!-- SECTION 7: SETTINGS -->
-            <section class="content-section" id="section-settings" tabindex="0" role="tabpanel" aria-labelledby="tab-settings">
-                <div class="section-title">
-                    <h2>Settings</h2>
-                    <p>Compute backend, memory ceiling and storage paths. Backend changes need a daemon restart.</p>
-                </div>
-
-                <div class="card">
-                    <h3>Runtime preferences</h3>
-                    <div class="form-grid">
-                        <div class="form-group">
-                            <label for="settings-backend">Compute Acceleration Backend:</label>
-                            <select id="settings-backend" class="select-input">
-                                <option value="auto">Auto-Detect (Metal -> CUDA -> CPU)</option>
-                                <option value="metal">Force Apple Silicon Metal</option>
-                                <option value="cuda">Force NVIDIA CUDA</option>
-                                <option value="cpu">Force CPU Fallback</option>
-                            </select>
-                            <span class="field-hint">Requires daemon restart to apply backend switches.</span>
-                        </div>
-
-                        <div class="form-group">
-                            <label for="settings-mem-watermark">GPU Memory High-Watermark Ratio:</label>
-                            <input type="number" id="settings-mem-watermark" min="0.1" max="0.95" step="0.05" value="0.80" class="input-text">
-                            <span class="field-hint">Fraction of total unified memory/VRAM allowed before eviction (e.g. 0.80 = 80%).</span>
-                        </div>
-
-                        <div class="form-group">
-                            <label for="settings-idle-timeout">Idle Model Unload Timeout:</label>
-                            <select id="settings-idle-timeout" class="select-input">
-                                <option value="5">5 Minutes</option>
-                                <option value="15">15 Minutes</option>
-                                <option value="30" selected>30 Minutes</option>
-                                <option value="0">Never Unload</option>
-                            </select>
-                        </div>
-
-                        <div class="form-group">
-                            <label for="settings-storage-dir">Local Storage Directory (~/.jepctl):</label>
-                            <input type="text" id="settings-storage-dir" class="input-text" readonly value="~/.jepctl">
-                            <span class="field-hint">Configured via dirs cross-platform resolution.</span>
-                        </div>
-                    </div>
-
-                    <div class="form-group settings-network-group">
-                        <span class="fact-label">Network access</span>
-                        <label class="toggle-label" for="settings-allow-lan">
-                            <input type="checkbox" id="settings-allow-lan" class="checkbox-input">
-                            <span>Allow access from other machines on the local network</span>
-                        </label>
-                        <span class="field-hint" id="settings-allow-lan-hint">Off: the daemon answers only this computer (127.0.0.1). On: it binds all interfaces (0.0.0.0) so other devices on your network can reach it. Requires a daemon restart, and authentication stays mandatory for network access. An explicit <code>--host</code> on the command line overrides this.</span>
-                    </div>
-
-                    <div class="form-actions">
-                        <button class="btn btn-primary" id="btn-save-settings">Save Settings</button>
-                    </div>
-                </div>
-            </section>
-
 
             <!-- SECTION: ROBOT TWIN -->
             <section class="content-section" id="section-robot" tabindex="0" role="tabpanel" aria-labelledby="tab-robot">
@@ -718,7 +941,8 @@
                 </div>
 
                 <div class="robot-layout">
-                    <div class="card robot-scene-card">
+                    <div class="robot-main-col" tabindex="0" role="region" aria-label="Robot digital twin and visual missions">
+                        <div class="card robot-scene-card">
                         <div class="gesture-card-header">
                             <div>
                                 <h3>Digital twin</h3>
@@ -738,22 +962,6 @@
                         <div class="robot-explain" id="robot-explain">Pick what the robot should do above. Mirror mode copies your posture; Visual mission makes it reach a target image on its own.</div>
                     </div>
 
-                    <div class="robot-side-col" tabindex="0" role="region" aria-label="Robot inspector">
-                        <div class="card">
-                            <h3>Joints</h3>
-                            <div class="joint-sliders" id="robot-joint-sliders"></div>
-                            <div class="sensitivity-row">
-                                <div class="sensitivity-label-row">
-                                    <label for="slider-robot-gripper">Gripper opening</label>
-                                    <span class="threshold-badge" id="val-robot-gripper">50%</span>
-                                </div>
-                                <input type="range" id="slider-robot-gripper" min="0" max="1" step="0.01" value="0.5" class="range-slider">
-                            </div>
-                            <div class="robot-side-actions">
-                                <button class="btn btn-sm btn-outline" id="btn-robot-home">Home pose</button>
-                                <span class="card-subtitle-inline" id="robot-ramp-text">max 1.50 rad/s</span>
-                            </div>
-                        </div>
 
                         <div class="card" id="robot-goal-card">
                             <h3>Learning from the camera</h3>
@@ -820,7 +1028,25 @@
                             </div>
                         </div>
 
-                        <div class="card" id="robot-mirror-card">
+                        
+                    </div>
+
+                    <div class="robot-side-col" tabindex="0" role="region" aria-label="Robot inspector">
+                        <div class="card">
+                            <h3>Joints</h3>
+                            <div class="joint-sliders" id="robot-joint-sliders"></div>
+                            <div class="sensitivity-row">
+                                <div class="sensitivity-label-row">
+                                    <label for="slider-robot-gripper">Gripper opening</label>
+                                    <span class="threshold-badge" id="val-robot-gripper">50%</span>
+                                </div>
+                                <input type="range" id="slider-robot-gripper" min="0" max="1" step="0.01" value="0.5" class="range-slider">
+                            </div>
+                            <div class="robot-side-actions">
+                                <button class="btn btn-sm btn-outline" id="btn-robot-home">Home pose</button>
+                                <span class="card-subtitle-inline" id="robot-ramp-text">max 1.50 rad/s</span>
+                            </div>
+                        </div><div class="card" id="robot-mirror-card">
                             <h3>Teach by showing</h3>
                             <p class="card-subtitle">Set the arm with the sliders, strike the matching pose in front of the camera, then teach it. In Mirror mode the arm blends every taught pose by how much you look like each one, so it follows you between them. Teach a rest pose too.</p>
                             <div class="robot-side-actions">
@@ -1153,383 +1379,162 @@
                 </div>
             </section>
 
-            <!-- SECTION: GESTURES -->
-            <section class="content-section" id="section-gestures" tabindex="0" role="tabpanel" aria-labelledby="tab-gestures">
+            <!-- SECTION 6: SECURITY & API KEYS -->
+            <section class="content-section" id="section-security" tabindex="0" role="tabpanel" aria-labelledby="tab-security">
                 <div class="section-title">
-                    <h2>Gestures</h2>
-                    <p>Teach a few poses. See what the model recognizes and understand every decision.</p>
+                    <h2>Integration &amp; API keys</h2>
+                    <p>Everything you need to call this daemon from your own application: base URL, tokens, working examples.</p>
                 </div>
 
+                <!-- Integration quick start -->
+                <div class="card">
+                    <div class="card-header-actions">
+                        <h3>Quick start</h3>
+                        <div class="snippet-lang-tabs" role="tablist" aria-label="Example language">
+                            <button class="snippet-lang active" role="tab" aria-selected="true" data-lang="curl">curl</button>
+                            <button class="snippet-lang" role="tab" aria-selected="false" data-lang="js">JavaScript</button>
+                            <button class="snippet-lang" role="tab" aria-selected="false" data-lang="python">Python</button>
+                        </div>
+                    </div>
+                    <div class="integration-facts">
+                        <div><span class="fact-label">Base URL</span><code id="integration-base-url">http://127.0.0.1:11435</code></div>
+                        <div><span class="fact-label">Auth</span><code id="integration-auth-mode">Bearer token</code></div>
+                        <div><span class="fact-label">Active model</span><code id="integration-model">none</code></div>
+                        <div><span class="fact-label">Cross-origin</span><code>same-origin only: start with <span class="mono">--cors-origins</span> to allow a browser app</code></div>
+                    </div>
+                    <p class="integration-hint">Every action button in this app has an <strong>API</strong> control that shows the exact request it sends. Generate an <em>inference</em> token below and replace <code>$JEPA_TOKEN</code>.</p>
+                    <pre class="code-block" id="integration-example" tabindex="0"></pre>
+                    <div class="snippet-actions">
+                        <button class="btn btn-sm btn-outline" id="btn-copy-integration">Copy example</button>
+                    </div>
+                </div>
 
-                <div class="card gesture-model-bar">
-                    <div class="gesture-model-bar-row">
-                        <div class="gesture-model-bar-left">
-                            <label for="select-gesture-active-model">Model</label>
-                            <select id="select-gesture-active-model" class="select-input">
-                                <option value="">Loading models...</option>
+                <!-- Network Binding Policy -->
+                <div class="card">
+                    <h3>Network access</h3>
+                    <div class="policy-row">
+                        <div class="policy-info">
+                            <strong>Local Loopback Only (127.0.0.1)</strong>
+                            <p>Restrict runtime access exclusively to localhost connections. Maximum security.</p>
+                        </div>
+                        <label class="switch">
+                            <input type="checkbox" id="toggle-lan-access" aria-label="Enable LAN access">
+                            <span class="slider-round"></span>
+                        </label>
+                    </div>
+                    <div class="lan-warning" id="lan-warning-box" style="display: none;">
+                        &#9888; Warning: Enabling LAN access (0.0.0.0) permits external devices on your network to invoke inference. Authentication is strictly enforced.
+                    </div>
+                </div>
+
+                <!-- Active API Keys Table -->
+                <div class="card">
+                    <div class="card-header-actions">
+                        <h3>API keys</h3>
+                        <button class="btn btn-primary" id="btn-open-create-key">Generate New API Token</button>
+                    </div>
+                    <div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable data table"><table class="data-table" id="table-api-keys">
+                        <thead>
+                            <tr>
+                                <th>Key Prefix</th>
+                                <th>Name</th>
+                                <th>Assigned Role</th>
+                                <th>Created</th>
+                                <th>Expires</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="api-keys-tbody">
+                            <tr>
+                                <td colspan="6" class="text-center">Loading API tokens...</td>
+                            </tr>
+                        </tbody>
+                    </table></div>
+                </div>
+
+                <!-- Rolling Audit Log -->
+                <div class="card">
+                    <div class="card-header-actions">
+                        <h3>Recent API activity</h3>
+                        <button class="btn btn-sm btn-outline" id="btn-refresh-audit">Refresh Log</button>
+                    </div>
+                    <div class="audit-log-table-wrap">
+                        <div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable data table"><table class="data-table" id="table-audit-log">
+                            <thead>
+                                <tr>
+                                    <th>Timestamp</th>
+                                    <th>Method</th>
+                                    <th>Endpoint</th>
+                                    <th>Client IP</th>
+                                    <th>Status</th>
+                                    <th>Latency</th>
+                                </tr>
+                            </thead>
+                            <tbody id="audit-log-tbody">
+                                <tr>
+                                    <td colspan="6" class="text-center">No API calls recorded yet.</td>
+                                </tr>
+                            </tbody>
+                        </table></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SECTION 7: SETTINGS -->
+            <section class="content-section" id="section-settings" tabindex="0" role="tabpanel" aria-labelledby="tab-settings">
+                <div class="section-title">
+                    <h2>Settings</h2>
+                    <p>Compute backend, memory ceiling and storage paths. Backend changes need a daemon restart.</p>
+                </div>
+
+                <div class="card">
+                    <h3>Runtime preferences</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="settings-backend">Compute Acceleration Backend:</label>
+                            <select id="settings-backend" class="select-input">
+                                <option value="auto">Auto-Detect (Metal -> CUDA -> CPU)</option>
+                                <option value="metal">Force Apple Silicon Metal</option>
+                                <option value="cuda">Force NVIDIA CUDA</option>
+                                <option value="cpu">Force CPU Fallback</option>
                             </select>
-                            <button class="btn btn-sm btn-primary" id="btn-gesture-load-model">Load</button>
-                            <button class="btn btn-sm btn-outline" id="btn-gesture-unload-model">Unload</button>
-                            <button class="btn btn-sm btn-api" id="btn-api-load-model" title="Show the API request">{ } API</button>
-                        </div>
-                        <div class="gesture-model-bar-right">
-                            <button class="btn btn-sm btn-primary" id="btn-gesture-camera-toggle">
-                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-video"></use></svg> <span id="gesture-cam-btn-text">Start camera</span>
-                            </button>
-                            <span class="status-indicator status-idle" id="gesture-model-indicator"></span>
-                            <span id="gesture-model-name-text" class="gesture-model-name">No model loaded</span>
-                            <span class="weights-badge" id="gesture-weights-badge" title="Tensors loaded from the checkpoint / expected">weights: --</span>
-                        </div>
-                    </div>
-                    <p class="gesture-model-hint">Gestures are bound to the model that encoded them; switching models shows that model's gestures. DINOv2-small is the recommended default.</p>
-                </div>
-
-                <div class="scenario-picker" role="group" aria-label="Scenario">
-                    <button class="scenario-card active" id="scenario-qc" data-scenario="qc">
-                        <span class="scenario-title">Industrial quality control</span>
-                        <span class="scenario-sub">Bottle: capped or not</span>
-                        <span class="scenario-desc">Two five-second captures replace the thousands of annotated photos a detector would need. The latent space ignores the changing glare on glass and keeps the geometry of the neck and cap.</span>
-                    </button>
-                    <button class="scenario-card" id="scenario-sandbox" data-scenario="sandbox">
-                        <span class="scenario-title">Gesture sandbox</span>
-                        <span class="scenario-sub">Hand poses and teleoperation</span>
-                        <span class="scenario-desc">Open hand, fist, victory: the same engine, used to drive the Robot Twin or the Companion.</span>
-                    </button>
-                </div>
-
-                <ol class="flow-guide" aria-label="Gesture setup"><li><span>1</span> Load a model</li><li><span>2</span> Start the camera</li><li><span>3</span> Capture neutral, then gestures</li><li><span>4</span> Tune &amp; export</li></ol>
-                <div class="gesture-sandbox-layout">
-                    <div class="gesture-main-col" tabindex="0" role="region" aria-label="Gesture preview and analysis">
-                        <div class="card gesture-preview-card" id="gesture-preview-card">
-                            <div class="gesture-card-header">
-                                <div>
-                                    <h3>Model view</h3>
-                                    <p class="card-subtitle">The camera frame as your active model sees it, with the current crop applied.</p>
-                                </div>
-                                <div class="gesture-header-actions">
-                                    <label class="toggle-label compact" for="toggle-gesture-heatmap">
-                                        <input type="checkbox" id="toggle-gesture-heatmap" class="checkbox-input" checked>
-                                        <span>Difference map</span>
-                                    </label>
-
-                                </div>
-                            </div>
-
-                            <div class="gesture-video-wrapper" id="gesture-video-wrapper">
-                                <div class="model-view-stage">
-                                    <img id="gesture-model-view" alt="Current model input frame" width="224" height="224">
-                                    <canvas id="gesture-heatmap" width="224" height="224" role="img" aria-label="Per-patch difference map against the best matching gesture"></canvas>
-                                    <div class="model-view-placeholder" id="gesture-view-placeholder">Camera stopped</div>
-                                </div>
-
-                                <div class="gesture-overlay">
-                                    <div class="gesture-badge gesture-badge-idle" id="gesture-detection-badge" role="status" aria-live="polite">
-                                        <span class="badge-status-dot" aria-hidden="true"></span>
-                                        <span id="gesture-badge-text">No gesture registered</span>
-                                    </div>
-                                    <div class="gesture-confidence-box">
-                                        <div class="confidence-header">
-                                            <span class="confidence-title">Combined score (smoothed)</span>
-                                            <span class="confidence-val" id="gesture-confidence-text">0.0%</span>
-                                        </div>
-                                        <div class="confidence-bar-track">
-                                            <div class="confidence-bar-fill" id="gesture-confidence-bar" style="width: 0%;"></div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="qc-console" id="qc-console">
-                                <div class="qc-status" id="qc-status">
-                                    <span class="qc-status-label" id="qc-status-label">Waiting for a capture</span>
-                                    <span class="qc-status-score" id="qc-status-score"></span>
-                                </div>
-                                <div class="qc-meta">
-                                    <span>Bottles packaged <strong id="qc-counter">0</strong></span>
-                                    <span>Non-conformities <strong id="qc-defects">0</strong></span>
-                                    <span>Alarm after <strong>3 s</strong> open</span>
-                                    <button class="btn btn-sm btn-outline" id="btn-qc-reset">Reset counters</button>
-                                </div>
-                                <ul class="world-incident-log" id="qc-log" aria-live="polite"></ul>
-                            </div>
-
-                            <div class="gesture-sensitivity-panel">
-                                <div class="sensitivity-row">
-                                    <div class="sensitivity-label-row">
-                                        <label for="slider-gesture-threshold">Detection threshold (combined score)</label>
-                                        <span class="threshold-badge" id="val-gesture-threshold">0.70</span>
-                                    </div>
-                                    <input type="range" id="slider-gesture-threshold" min="0.30" max="0.95" step="0.01" value="0.70" class="range-slider">
-                                </div>
-                                <div class="sensitivity-row">
-                                    <div class="sensitivity-label-row">
-                                        <label for="slider-gesture-margin">Minimum lead over the runner-up</label>
-                                        <span class="threshold-badge" id="val-gesture-margin">0.04</span>
-                                    </div>
-                                    <input type="range" id="slider-gesture-margin" min="0" max="0.30" step="0.01" value="0.04" class="range-slider">
-                                </div>
-                                <div class="sensitivity-row">
-                                    <div class="sensitivity-label-row">
-                                        <label for="slider-gesture-smoothing">Temporal smoothing (frames)</label>
-                                        <span class="threshold-badge" id="val-gesture-smoothing">3</span>
-                                    </div>
-                                    <input type="range" id="slider-gesture-smoothing" min="1" max="10" step="1" value="3" class="range-slider">
-                                </div>
-                                <p class="sensitivity-note">These values are recorded in the exported bundle and shown in the <strong>API</strong> snippets so your application matches with the same settings.</p>
-                            </div>
+                            <span class="field-hint">Requires daemon restart to apply backend switches.</span>
                         </div>
 
-                        <details class="card roi-card" id="roi-card">
-                            <summary class="roi-summary">
-                                <span><strong>Region of interest</strong> <span class="card-subtitle-inline" id="roi-status-text">full frame</span></span>
-                                <span class="roi-summary-hint">Crop the camera to the hand so it fills the model input</span>
-                            </summary>
-                            <p class="card-subtitle">Drag a rectangle on the full frame. The model view, live matching and captured samples all use this crop; it is saved with exported bundles.</p>
-                            <div class="roi-stage" id="roi-stage" role="application" aria-label="Region of interest editor: drag to draw a rectangle">
-                                <img id="roi-full-frame" alt="Full camera frame" draggable="false">
-                                <div class="roi-box" id="roi-box" style="display: none;"></div>
-                                <div class="model-view-placeholder" id="roi-placeholder">Start the camera to edit the region</div>
-                            </div>
-                            <div class="roi-actions">
-                                <code id="roi-values">none</code>
-                                <button class="btn btn-sm btn-outline" id="btn-roi-clear">Use full frame</button>
-                                <button class="btn btn-sm btn-api" id="btn-api-roi" title="Show the API request">{ } API</button>
-                            </div>
-                        </details>
-
-                        <div class="card gesture-reasoning-card">
-                            <div class="gesture-card-header">
-                                <div>
-                                    <h3>Why this decision</h3>
-                                    <p class="card-subtitle">Frame-by-frame breakdown of the match. The same fields come back from <code>/api/gestures/match</code>.</p>
-                                </div>
-                                <div class="gesture-header-actions">
-                                    <span class="method-badge" id="gesture-method-badge">method: --</span>
-                                    <button class="btn btn-sm btn-api" id="btn-api-match" title="Show the API request">{ } API</button>
-                                </div>
-                            </div>
-
-                            <details class="reasoning-explainer">
-                                <summary>How the scores are computed</summary>
-                                <p><strong>Raw cosine</strong>: direct similarity between the frame and the prototype. With the same background, face and lighting it saturates near 1.0 for <em>every</em> gesture and discriminates nothing.</p>
-                                <p><strong>Contrastive</strong>: the centroid of all prototypes (the shared part: background, torso, light) is removed, then what remains is compared. That is the gesture's own signature.</p>
-                                <p><strong>Combined</strong> = 0.35 &times; raw + 0.65 &times; contrastive. Detected when combined &ge; threshold <em>and</em> the lead over the runner-up &ge; margin. A winning Neutral slot blocks detection.</p>
-                            </details>
-
-                            <div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable data table"><table class="reasoning-table" id="gesture-reasoning-table">
-                                <thead>
-                                    <tr>
-                                        <th scope="col">Gesture</th>
-                                        <th scope="col">Samples</th>
-                                        <th scope="col">Raw cos.</th>
-                                        <th scope="col">Contrastive</th>
-                                        <th scope="col">Combined</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="gesture-reasoning-body">
-                                    <tr><td colspan="5" class="reasoning-empty">Waiting for the stream and at least one registered gesture.</td></tr>
-                                </tbody>
-                            </table></div>
-
-                            <div class="reasoning-decision" id="gesture-reasoning-decision" role="status" aria-live="polite">Decision: --</div>
-
-                            <div class="reasoning-meta">
-                                <span>Margin <strong id="reason-margin">--</strong></span>
-                                <span>Server threshold <strong id="reason-threshold">--</strong></span>
-                                <span>Latency <strong id="reason-latency">--</strong></span>
-                                <span>Frame <strong id="reason-frame">--</strong></span>
-                                <span>Grid <strong id="reason-grid">--</strong></span>
-                            </div>
-                            <p class="reasoning-heatmap-hint">Difference map: each cell is a ViT patch; the warmer, the more it differs from the best-ranked prototype. A moving hand should light up, a static background stay dark.</p>
+                        <div class="form-group">
+                            <label for="settings-mem-watermark">GPU Memory High-Watermark Ratio:</label>
+                            <input type="number" id="settings-mem-watermark" min="0.1" max="0.95" step="0.05" value="0.80" class="input-text">
+                            <span class="field-hint">Fraction of total unified memory/VRAM allowed before eviction (e.g. 0.80 = 80%).</span>
                         </div>
 
-                        <div class="card gesture-actions-card">
-                            <h3>Live actions</h3>
-                            <div class="gesture-actions-grid">
-                                <div class="action-item">
-                                    <div class="action-item-header">
-                                        <svg class="ui-icon action-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-sound"></use></svg>
-                                        <label class="toggle-label" for="toggle-gesture-audio">
-                                            <span>Audio cue</span>
-                                            <input type="checkbox" id="toggle-gesture-audio" checked class="checkbox-input">
-                                        </label>
-                                    </div>
-                                    <p class="action-desc">One tone per slot (523 / 659 / 784 Hz).</p>
-                                </div>
-                                <div class="action-item">
-                                    <div class="action-item-header">
-                                        <svg class="ui-icon action-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-palette"></use></svg>
-                                        <span class="action-name">Visual theme</span>
-                                    </div>
-                                    <div class="theme-pill-preview" id="gesture-theme-pill">
-                                        <span id="gesture-theme-text">Neutral palette</span>
-                                    </div>
-                                </div>
-                                <div class="action-item">
-                                    <div class="action-item-header">
-                                        <svg class="ui-icon action-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-clock"></use></svg>
-                                        <span class="action-name">Hold (&gt; 1 s)</span>
-                                    </div>
-                                    <div class="hold-progress-box">
-                                        <div class="hold-timer-text" id="gesture-hold-timer-text">Hold: 0.0s / 1.0s</div>
-                                        <div class="hold-track"><div class="hold-fill" id="gesture-hold-bar" style="width: 0%;"></div></div>
-                                    </div>
-                                </div>
-                            </div>
+                        <div class="form-group">
+                            <label for="settings-idle-timeout">Idle Model Unload Timeout:</label>
+                            <select id="settings-idle-timeout" class="select-input">
+                                <option value="5">5 Minutes</option>
+                                <option value="15">15 Minutes</option>
+                                <option value="30" selected>30 Minutes</option>
+                                <option value="0">Never Unload</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="settings-storage-dir">Local Storage Directory (~/.jepctl):</label>
+                            <input type="text" id="settings-storage-dir" class="input-text" readonly value="~/.jepctl">
+                            <span class="field-hint">Configured via dirs cross-platform resolution.</span>
                         </div>
                     </div>
 
-                    <div class="gesture-slots-col" tabindex="0" role="region" aria-label="Reference gestures">
-                        <div class="card gesture-slots-card">
-                            <div class="slots-header">
-                                <h3>Reference gestures</h3>
-                                <span class="slots-badge" id="gesture-count-badge">0 gestures</span>
-                            </div>
-                            <div class="slots-tips">
-                                <strong>For reliable detection</strong>
-                                <ol>
-                                    <li>Start the camera and stand as you will in real use.</li>
-                                    <li>Register the <em>Neutral</em> slot first (hands down).</li>
-                                    <li>For each gesture, click <em>Capture</em> 3 to 5 times while moving slightly.</li>
-                                    <li>Read the breakdown: if contrastive stays below 0.3 the hand is too small in the frame: move closer.</li>
-                                </ol>
-                            </div>
+                    <div class="form-group settings-network-group">
+                        <span class="fact-label">Network access</span>
+                        <label class="toggle-label" for="settings-allow-lan">
+                            <input type="checkbox" id="settings-allow-lan" class="checkbox-input">
+                            <span>Allow access from other machines on the local network</span>
+                        </label>
+                        <span class="field-hint" id="settings-allow-lan-hint">Off: the daemon answers only this computer (127.0.0.1). On: it binds all interfaces (0.0.0.0) so other devices on your network can reach it. Requires a daemon restart, and authentication stays mandatory for network access. An explicit <code>--host</code> on the command line overrides this.</span>
+                    </div>
 
-                            <div class="slots-container">
-                                <div class="slot-card slot-neutral" id="slot-card-4" data-slot="4">
-                                    <div class="slot-header">
-                                        <span class="slot-number">Neutral · start here</span>
-                                        <span class="slot-state-badge" id="slot-state-4">Empty</span>
-                                    </div>
-                                    <div class="slot-body">
-                                        <label class="visually-hidden" for="gesture-name-4">Gesture name</label>
-                                        <input type="text" id="gesture-name-4" class="input-text slot-name-input" value="Rest" placeholder="Gesture name" maxlength="64">
-                                        <div class="slot-thumb-box" id="slot-thumb-box-4">
-                                            <img id="slot-img-4" src="" alt="" style="display: none;">
-                                            <div class="slot-empty-placeholder" id="slot-empty-4">No capture yet</div>
-                                        </div>
-                                        <div class="slot-meta" id="slot-meta-4">Rest pose: absorbs frames with no intentional gesture. Never reported as a detection.</div>
-                                        <div class="slot-buttons">
-                                            <button class="btn btn-sm btn-primary btn-capture-slot" id="btn-capture-4" data-slot="4">
-                                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-camera"></use></svg> Capture
-                                            </button>
-                                            <button class="btn btn-sm btn-outline-danger btn-delete-slot" id="btn-delete-4" data-slot="4" style="display: none;">
-                                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-delete"></use></svg> Delete
-                                            </button>
-                                        </div>
-                                        <div class="slot-live-meter" id="slot-live-meter-4">
-                                            <div class="slot-live-meter-row">
-                                                <span>Combined score</span>
-                                                <strong id="slot-score-val-4" class="mono">--%</strong>
-                                            </div>
-                                            <div class="slot-live-track"><div id="slot-score-bar-4" class="slot-live-fill"></div></div>
-                                        </div>
-
-                                    </div>
-                                </div>
-                                <div class="slot-card" id="slot-card-1" data-slot="1">
-                                    <div class="slot-header">
-                                        <span class="slot-number">Slot 1 (gesture A)</span>
-                                        <span class="slot-state-badge" id="slot-state-1">Empty</span>
-                                    </div>
-                                    <div class="slot-body">
-                                        <label class="visually-hidden" for="gesture-name-1">Gesture name</label>
-                                        <input type="text" id="gesture-name-1" class="input-text slot-name-input" value="Open Hand" placeholder="Gesture name" maxlength="64">
-                                        <div class="slot-thumb-box" id="slot-thumb-box-1">
-                                            <img id="slot-img-1" src="" alt="" style="display: none;">
-                                            <div class="slot-empty-placeholder" id="slot-empty-1">No capture yet</div>
-                                        </div>
-                                        <div class="slot-meta" id="slot-meta-1">Capture 3 to 5 samples while moving slightly.</div>
-                                        <div class="slot-buttons">
-                                            <button class="btn btn-sm btn-primary btn-capture-slot" id="btn-capture-1" data-slot="1">
-                                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-camera"></use></svg> Capture
-                                            </button>
-                                            <button class="btn btn-sm btn-outline-danger btn-delete-slot" id="btn-delete-1" data-slot="1" style="display: none;">
-                                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-delete"></use></svg> Delete
-                                            </button>
-                                        </div>
-                                        <div class="slot-live-meter" id="slot-live-meter-1">
-                                            <div class="slot-live-meter-row">
-                                                <span>Combined score</span>
-                                                <strong id="slot-score-val-1" class="mono">--%</strong>
-                                            </div>
-                                            <div class="slot-live-track"><div id="slot-score-bar-1" class="slot-live-fill"></div></div>
-                                        </div>
-                                        <div class="slot-counter-badge">Held triggers: <strong id="slot-counter-1">0</strong></div>
-                                    </div>
-                                </div>
-                                <div class="slot-card" id="slot-card-2" data-slot="2">
-                                    <div class="slot-header">
-                                        <span class="slot-number">Slot 2 (gesture B)</span>
-                                        <span class="slot-state-badge" id="slot-state-2">Empty</span>
-                                    </div>
-                                    <div class="slot-body">
-                                        <label class="visually-hidden" for="gesture-name-2">Gesture name</label>
-                                        <input type="text" id="gesture-name-2" class="input-text slot-name-input" value="Fist" placeholder="Gesture name" maxlength="64">
-                                        <div class="slot-thumb-box" id="slot-thumb-box-2">
-                                            <img id="slot-img-2" src="" alt="" style="display: none;">
-                                            <div class="slot-empty-placeholder" id="slot-empty-2">No capture yet</div>
-                                        </div>
-                                        <div class="slot-meta" id="slot-meta-2">Capture 3 to 5 samples while moving slightly.</div>
-                                        <div class="slot-buttons">
-                                            <button class="btn btn-sm btn-primary btn-capture-slot" id="btn-capture-2" data-slot="2">
-                                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-camera"></use></svg> Capture
-                                            </button>
-                                            <button class="btn btn-sm btn-outline-danger btn-delete-slot" id="btn-delete-2" data-slot="2" style="display: none;">
-                                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-delete"></use></svg> Delete
-                                            </button>
-                                        </div>
-                                        <div class="slot-live-meter" id="slot-live-meter-2">
-                                            <div class="slot-live-meter-row">
-                                                <span>Combined score</span>
-                                                <strong id="slot-score-val-2" class="mono">--%</strong>
-                                            </div>
-                                            <div class="slot-live-track"><div id="slot-score-bar-2" class="slot-live-fill"></div></div>
-                                        </div>
-                                        <div class="slot-counter-badge">Held triggers: <strong id="slot-counter-2">0</strong></div>
-                                    </div>
-                                </div>
-                                <div class="slot-card" id="slot-card-3" data-slot="3">
-                                    <div class="slot-header">
-                                        <span class="slot-number">Slot 3 (gesture C)</span>
-                                        <span class="slot-state-badge" id="slot-state-3">Empty</span>
-                                    </div>
-                                    <div class="slot-body">
-                                        <label class="visually-hidden" for="gesture-name-3">Gesture name</label>
-                                        <input type="text" id="gesture-name-3" class="input-text slot-name-input" value="Victory" placeholder="Gesture name" maxlength="64">
-                                        <div class="slot-thumb-box" id="slot-thumb-box-3">
-                                            <img id="slot-img-3" src="" alt="" style="display: none;">
-                                            <div class="slot-empty-placeholder" id="slot-empty-3">No capture yet</div>
-                                        </div>
-                                        <div class="slot-meta" id="slot-meta-3">Capture 3 to 5 samples while moving slightly.</div>
-                                        <div class="slot-buttons">
-                                            <button class="btn btn-sm btn-primary btn-capture-slot" id="btn-capture-3" data-slot="3">
-                                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-camera"></use></svg> Capture
-                                            </button>
-                                            <button class="btn btn-sm btn-outline-danger btn-delete-slot" id="btn-delete-3" data-slot="3" style="display: none;">
-                                                <svg class="ui-icon btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-delete"></use></svg> Delete
-                                            </button>
-                                        </div>
-                                        <div class="slot-live-meter" id="slot-live-meter-3">
-                                            <div class="slot-live-meter-row">
-                                                <span>Combined score</span>
-                                                <strong id="slot-score-val-3" class="mono">--%</strong>
-                                            </div>
-                                            <div class="slot-live-track"><div id="slot-score-bar-3" class="slot-live-fill"></div></div>
-                                        </div>
-                                        <div class="slot-counter-badge">Held triggers: <strong id="slot-counter-3">0</strong></div>
-                                    </div>
-                                </div>
-
-                            </div>
-                            <div class="slots-footer">
-                                <button class="btn btn-sm btn-outline" id="btn-gestures-export" title="Download a bundle to deploy elsewhere">Export bundle</button>
-                                <button class="btn btn-sm btn-outline" id="btn-gestures-import">Import bundle</button>
-                                <input type="file" id="input-gestures-import" accept="application/json" class="visually-hidden" aria-label="Bundle file">
-                                <button class="btn btn-sm btn-api" id="btn-api-register" title="Show the API request">{ } API</button>
-                                <button class="btn btn-sm btn-outline-danger" id="btn-gestures-clear">Clear all for this model</button>
-                            </div>
-                        </div>
+                    <div class="form-actions">
+                        <button class="btn btn-primary" id="btn-save-settings">Save Settings</button>
                     </div>
                 </div>
             </section>

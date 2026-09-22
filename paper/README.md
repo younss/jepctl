@@ -66,7 +66,7 @@ an A4 print, the artwork itself has to be regenerated at a larger type scale.
 
 ## Figures
 
-- **Figure 1** — `figures/jepa-overview.jpg`, the author's own overview infographic
+- **Figure 1** - `figures/jepa-overview.jpg`, the author's own overview infographic
   (1400x764 JPEG, downloaded from the author's blog). Since it is your own work there is
   no third-party rights question; arXiv only requires that you hold the rights.
   The artwork carried three garbled strings from the image generator; they are covered in
@@ -79,7 +79,7 @@ an A4 print, the artwork itself has to be regenerated at a larger type scale.
   you ever regenerate the artwork you only need to re-measure those three rectangles.
   Note: some venues ask authors to disclose AI-generated figures. arXiv does not currently
   require it, but a line in the caption costs nothing and pre-empts the question.
-- **Figures 2 to 8** — all TikZ vector graphics: the module dependency graph, the runtime
+- **Figures 2 to 8** - all TikZ vector graphics: the module dependency graph, the runtime
   view (threads, tasks and shared state), the dataflow, three sequence diagrams (model
   pull and load, the detection stream, the closed control loop) and the World loop.
 

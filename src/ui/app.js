@@ -5071,6 +5071,8 @@
         raf: null,
         field: null,
         heightScale: 1.5,
+        holoGlow: 1.0,
+        wireframe: false,
         aspect: 1,
         rateHz: 6,
         shade: true,
@@ -5096,10 +5098,15 @@
         varying vec2 v_uv;
         varying vec3 v_normal;
         varying float v_height;
+        varying vec3 v_world_pos;
+        varying vec3 v_model_pos;
         void main() {
             v_uv = a_uv;
             v_normal = mat3(u_model) * a_normal;
             v_height = a_height;
+            vec4 wp = u_model * vec4(a_pos, 1.0);
+            v_world_pos = wp.xyz;
+            v_model_pos = a_pos;
             gl_Position = u_mvp * vec4(a_pos, 1.0);
         }`;
 
@@ -5108,38 +5115,106 @@
         uniform sampler2D u_tex;
         uniform sampler2D u_surprise;
         uniform float u_shade;
-        uniform float u_mode;   // 0 hologram, 1 depth, 2 anomaly, 3 solid room geometry
+        uniform float u_mode;   // 0: hologram, 1: depth, 2: anomaly, 3: solid room lines, 4: latent predict
         uniform vec3 u_solid;
+        uniform float u_time;
+        uniform vec3 u_view_pos;
+        uniform float u_holo_glow;
+        uniform float u_wireframe;
+
         varying vec2 v_uv;
         varying vec3 v_normal;
         varying float v_height;
+        varying vec3 v_world_pos;
+        varying vec3 v_model_pos;
+
         vec3 depthColor(float t) {
             t = clamp(t, 0.0, 1.0);
-            float r = smoothstep(0.45, 0.95, t);
-            float g = smoothstep(0.0, 0.45, t) - smoothstep(0.85, 1.0, t) * 0.4;
-            float b = 1.0 - smoothstep(0.15, 0.6, t);
-            return vec3(r, g, b);
+            vec3 c0 = vec3(0.06, 0.10, 0.28);
+            vec3 c1 = vec3(0.02, 0.62, 0.95);
+            vec3 c2 = vec3(0.08, 0.85, 0.45);
+            vec3 c3 = vec3(1.00, 0.80, 0.12);
+            vec3 col = mix(c0, c1, smoothstep(0.0, 0.33, t));
+            col = mix(col, c2, smoothstep(0.33, 0.66, t));
+            col = mix(col, c3, smoothstep(0.66, 1.0, t));
+            return col;
         }
+
         void main() {
-            if (u_mode > 2.5) {                                    // room geometry: flat colour
+            if (u_mode > 2.5 && u_mode < 3.5) {
                 gl_FragColor = vec4(u_solid, 1.0);
                 return;
             }
             vec3 base = texture2D(u_tex, v_uv).rgb;
-            vec3 n = normalize(v_normal);
-            float d = max(dot(n, normalize(vec3(0.3, 0.5, 0.8))), 0.0);
-            float sh = mix(1.0, 0.45 + 0.65 * d, u_shade);
-            // The steep sides of an extruded object face away from the light: darken
-            // them so the foreground reads as a solid volume, not a bent sheet.
-            float side = 1.0 - clamp(abs(n.z), 0.0, 1.0);
+            vec3 N = normalize(v_normal);
+            vec3 V = normalize(u_view_pos - v_world_pos);
+            float ndotv = clamp(dot(N, V), 0.0, 1.0);
+            float fresnel = pow(1.0 - ndotv, 2.6);
+
+            vec3 lightDir = normalize(vec3(0.35, 0.65, 0.75));
+            float diff = max(dot(N, lightDir), 0.0);
+            float sh = mix(1.0, 0.50 + 0.50 * diff, u_shade);
+            float side = 1.0 - clamp(abs(N.z), 0.0, 1.0);
+
+            // Dynamic scanlines undulating along the vertical axis
+            float scan = 0.90 + 0.10 * sin(v_model_pos.y * 70.0 - u_time * 3.5);
+
+            // Laser sweep: vertical scanning beam passing through the hologram
+            float sweepY = mod(u_time * 0.9, 3.2) - 1.6;
+            float sweep = smoothstep(0.09, 0.0, abs(v_model_pos.y - sweepY));
+
+            // ViT patch lattice (16x16 token grid)
+            vec2 gridCoord = fract(v_uv * 16.0);
+            float edgeDist = min(min(gridCoord.x, 1.0 - gridCoord.x), min(gridCoord.y, 1.0 - gridCoord.y));
+            float patchGrid = smoothstep(0.045, 0.0, edgeDist);
+
+            // Wireframe mesh lines (64x64)
+            vec2 fineCoord = fract(v_uv * 64.0);
+            float fineDist = min(min(fineCoord.x, 1.0 - fineCoord.x), min(fineCoord.y, 1.0 - fineCoord.y));
+            float fineGrid = smoothstep(0.065, 0.0, fineDist);
+
             vec3 col;
             if (u_mode < 0.5) {
-                col = base * sh * (1.0 - 0.45 * side);             // realistic hologram / prediction
+                // Realistic Cyber Hologram
+                vec3 holoCyan = vec3(0.22, 0.78, 1.0);
+                col = base * sh * (1.0 - 0.35 * side);
+                float glow = (fresnel * 0.65 + sweep * 0.35 + patchGrid * 0.14 * v_height) * u_holo_glow;
+                col = mix(col, holoCyan, glow * 0.32);
+                col += holoCyan * glow * 0.48;
+                col += holoCyan * fineGrid * 0.28 * u_wireframe;
+                col *= scan;
+                col += vec3(0.015, 0.04, 0.07) * (1.0 - v_height);
             } else if (u_mode < 1.5) {
-                col = depthColor(v_height) * (0.6 + 0.4 * d);      // JEPA depth false colour
+                // JEPA Depth Map with elevation isolines and cyber contours
+                float iso = sin(v_height * 36.0);
+                float isoLine = smoothstep(0.92, 0.98, iso) * 0.40;
+                col = depthColor(v_height) * (0.65 + 0.35 * diff);
+                col += vec3(1.0) * isoLine;
+                col += vec3(0.25, 0.82, 1.0) * fresnel * 0.45 * u_holo_glow;
+                col += vec3(0.25, 0.82, 1.0) * (patchGrid * 0.15 + fineGrid * 0.35 * u_wireframe);
+                col *= scan;
+            } else if (u_mode < 2.5) {
+                // Anomaly / Surprise Map with radar pulse
+                float su = clamp(texture2D(u_surprise, v_uv).r, 0.0, 1.0);
+                vec3 darkBase = mix(base * 0.15, vec3(0.03, 0.06, 0.12), 0.75);
+                darkBase += vec3(0.12, 0.35, 0.65) * patchGrid * 0.15;
+                float pulse = 0.82 + 0.18 * sin(u_time * 8.0);
+                vec3 alarmCol = mix(vec3(0.95, 0.55, 0.05), vec3(1.0, 0.12, 0.1), smoothstep(0.3, 0.7, su)) * pulse;
+                float ripple = sin(su * 28.0 - u_time * 7.0);
+                float rippleLine = smoothstep(0.8, 0.98, ripple) * step(0.15, su) * 0.5;
+                col = mix(darkBase, alarmCol, clamp(su * 1.6, 0.0, 1.0));
+                col += vec3(1.0, 0.25, 0.15) * rippleLine;
+                col += vec3(1.0, 0.2, 0.1) * fresnel * step(0.2, su) * u_holo_glow;
+                col *= scan;
             } else {
-                float su = texture2D(u_surprise, v_uv).r;         // anomaly: dark, red where divergent
-                col = mix(base * 0.22, vec3(1.0, 0.13, 0.08), clamp(su, 0.0, 1.0));
+                // Latent Prediction Mode (Amber/Gold predictive hologram)
+                vec3 predAmber = vec3(1.0, 0.72, 0.18);
+                float phase = sin(v_model_pos.x * 16.0 + v_model_pos.y * 16.0 + u_time * 4.0);
+                col = mix(base * 0.55, predAmber * (0.55 + 0.45 * diff), 0.50);
+                float predGlow = (fresnel * 0.70 + sweep * 0.40 + abs(phase) * 0.18 + patchGrid * 0.20 * v_height) * u_holo_glow;
+                col += predAmber * predGlow;
+                col += predAmber * fineGrid * 0.32 * u_wireframe;
+                col *= (0.91 + 0.09 * sin(v_model_pos.y * 85.0 + u_time * 5.0));
             }
             gl_FragColor = vec4(col, 1.0);
         }`;
@@ -5167,7 +5242,11 @@
             surprise: gl.getUniformLocation(program, "u_surprise"),
             shade: gl.getUniformLocation(program, "u_shade"),
             mode: gl.getUniformLocation(program, "u_mode"),
-            solid: gl.getUniformLocation(program, "u_solid")
+            solid: gl.getUniformLocation(program, "u_solid"),
+            time: gl.getUniformLocation(program, "u_time"),
+            viewPos: gl.getUniformLocation(program, "u_view_pos"),
+            holoGlow: gl.getUniformLocation(program, "u_holo_glow"),
+            wireframe: gl.getUniformLocation(program, "u_wireframe")
         };
         world.aspect = 1;
         world.mesh = worldBuildMesh(gl, WORLD_RES, world.aspect);
@@ -5236,26 +5315,63 @@
         const idxBuf = gl.createBuffer();
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(idx), gl.STATIC_DRAW);
-        // Room: a floor grid receding from the wall toward the viewer, plus the wall
-        // frame. Pure lines, drawn in the solid-colour mode.
-        const room = [];
+        // Cyber Holodeck Stage:
+        // 1. Floor grid receding from the screen plane toward the viewer.
+        const floor = [];
         const y0 = -spanH / 2;
-        const zNear = 1.3, zFar = -0.05, step = 0.12;
+        const zNear = 1.4, zFar = -0.05, step = 0.12;
         for (let x = -spanW / 2; x <= spanW / 2 + 1e-6; x += step) {
-            room.push(x, y0, zFar, x, y0, zNear);
+            floor.push(x, y0, zFar, x, y0, zNear);
         }
         for (let z = zFar; z <= zNear + 1e-6; z += step) {
-            room.push(-spanW / 2, y0, z, spanW / 2, y0, z);
+            floor.push(-spanW / 2, y0, z, spanW / 2, y0, z);
         }
-        // Wall frame at z = 0.
+        // Center floor crosshair
+        const zMid = (zNear + zFar) / 2;
+        floor.push(-0.16, y0, zMid, 0.16, y0, zMid);
+        floor.push(0, y0, zMid - 0.16, 0, y0, zMid + 0.16);
+
+        // 2. Cyber accents: Pedestal border, 4 projector emitter laser lines, and HUD viewfinder brackets
+        const accents = [];
         const x0 = -spanW / 2, x1 = spanW / 2, y1 = spanH / 2;
-        room.push(x0, y0, 0, x1, y0, 0, x1, y0, 0, x1, y1, 0, x1, y1, 0, x0, y1, 0, x0, y1, 0, x0, y0, 0);
+        // Pedestal base frame on floor
+        accents.push(x0 - 0.05, y0, zFar - 0.02, x1 + 0.05, y0, zFar - 0.02);
+        accents.push(x1 + 0.05, y0, zFar - 0.02, x1 + 0.05, y0, zNear + 0.05);
+        accents.push(x1 + 0.05, y0, zNear + 0.05, x0 - 0.05, y0, zNear + 0.05);
+        accents.push(x0 - 0.05, y0, zNear + 0.05, x0 - 0.05, y0, zFar - 0.02);
+
+        // 4 Projector laser beams projecting up to the 4 corners of the hologram frame
+        accents.push(x0, y0, zNear, x0, y1, 0);
+        accents.push(x1, y0, zNear, x1, y1, 0);
+        accents.push(x0, y0, zNear, x0, y0, 0);
+        accents.push(x1, y0, zNear, x1, y0, 0);
+
+        // 4 Viewfinder corner brackets at the perimeter of the hologram frame (z = 0)
+        const tick = 0.18;
+        // Top-left
+        accents.push(x0, y1, 0, x0 + tick, y1, 0);
+        accents.push(x0, y1, 0, x0, y1 - tick, 0);
+        // Top-right
+        accents.push(x1, y1, 0, x1 - tick, y1, 0);
+        accents.push(x1, y1, 0, x1, y1 - tick, 0);
+        // Bottom-left
+        accents.push(x0, y0, 0, x0 + tick, y0, 0);
+        accents.push(x0, y0, 0, x0, y0 + tick, 0);
+        // Bottom-right
+        accents.push(x1, y0, 0, x1 - tick, y0, 0);
+        accents.push(x1, y0, 0, x1, y0 + tick, 0);
+
+        // Combine into room buffer
+        const room = floor.concat(accents);
         const roomBuf = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, roomBuf);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(room), gl.STATIC_DRAW);
         return {
             n, verts, positions, normals, heights, uvs, posBuf, normBuf, heightBuf, uvBuf, idxBuf,
-            count: idx.length, spanW, spanH, roomBuf, roomCount: room.length / 3
+            count: idx.length, spanW, spanH, roomBuf,
+            gridCount: floor.length / 3,
+            accentCount: accents.length / 3,
+            roomCount: room.length / 3
         };
     }
 
@@ -5401,8 +5517,13 @@
         gl.uniformMatrix4fv(world.loc.mvp, false, mvp);
         gl.uniformMatrix4fv(world.loc.model, false, model);
         gl.uniform1f(world.loc.shade, world.shade ? 1 : 0);
-        const modeVal = world.mode === "depth" ? 1 : (world.mode === "surprise" ? 2 : 0);
+        const modeVal = world.mode === "depth" ? 1 : (world.mode === "surprise" ? 2 : (world.mode === "predict" ? 4 : 0));
         gl.uniform1f(world.loc.mode, modeVal);
+        const nowSec = (Date.now() % 1000000) * 0.001;
+        gl.uniform1f(world.loc.time, nowSec);
+        gl.uniform3f(world.loc.viewPos, eye[0], eye[1], eye[2]);
+        gl.uniform1f(world.loc.holoGlow, world.holoGlow != null ? world.holoGlow : 1.0);
+        gl.uniform1f(world.loc.wireframe, world.wireframe ? 1.0 : 0.0);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, world.tex);
         gl.uniform1i(world.loc.tex, 0);
@@ -5424,16 +5545,22 @@
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, m.idxBuf);
         gl.drawElements(gl.TRIANGLES, m.count, gl.UNSIGNED_SHORT, 0);
 
-        // Room geometry (floor grid + wall frame): flat colour, position only.
+        // Cyber Holodeck stage: floor grid + glowing emitter lasers + HUD brackets
         if (m.roomBuf && m.roomCount) {
             gl.disableVertexAttribArray(world.loc.uv);
             gl.disableVertexAttribArray(world.loc.normal);
             gl.disableVertexAttribArray(world.loc.height);
             gl.uniform1f(world.loc.mode, 3);
-            gl.uniform3f(world.loc.solid, 0.30, 0.35, 0.44);
             gl.bindBuffer(gl.ARRAY_BUFFER, m.roomBuf);
             gl.vertexAttribPointer(world.loc.pos, 3, gl.FLOAT, false, 0, 0);
-            gl.drawArrays(gl.LINES, 0, m.roomCount);
+
+            // Subtle dark cyan / slate floor grid
+            gl.uniform3f(world.loc.solid, 0.10, 0.16, 0.25);
+            gl.drawArrays(gl.LINES, 0, m.gridCount);
+
+            // Glowing electric cyan emitter lasers and corner brackets
+            gl.uniform3f(world.loc.solid, 0.22, 0.78, 1.0);
+            gl.drawArrays(gl.LINES, m.gridCount, m.accentCount);
         }
     }
 
@@ -5787,6 +5914,16 @@
             const v = document.getElementById("val-world-rate"); if (v) v.textContent = `${world.rateHz} Hz`;
             if (world.pollTimer) worldStartPoll();
         });
+        const glow = document.getElementById("slider-world-glow");
+        if (glow) glow.addEventListener("input", () => {
+            world.holoGlow = parseFloat(glow.value);
+            const v = document.getElementById("val-world-glow"); if (v) v.textContent = `${world.holoGlow.toFixed(1)}x`;
+        });
+        const wire = document.getElementById("toggle-world-wireframe");
+        if (wire) {
+            world.wireframe = wire.checked;
+            wire.addEventListener("change", () => { world.wireframe = wire.checked; });
+        }
         bind("btn-api-world", () => {
             showApiDialog("Reconstruct the scene", "Inference role. Embeds the current camera frame and returns, per ViT patch, a foreground relief (from JEPA's background separation) plus the aligned frame as a texture. The UI drapes the frame over the relief. Poll it while the camera runs.",
                 { method: "GET", path: "/api/world/frame" });

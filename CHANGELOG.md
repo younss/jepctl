@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.4.0]: 2026-09-22
 
 ### Changed
 - Gestures leads with an industrial use case (per design review): a scenario picker offers **Industrial quality control** (bottle capped or not, the default) or the gesture sandbox, pre-filling the four slots; the quality console reports the live status with colour coding, counts packaged units and non-conformities, raises a flashing three-second alarm with a beep and an incident log, and the difference map boxes the diverging patches so the defect is localised without any object detector.

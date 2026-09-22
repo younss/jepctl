@@ -5071,6 +5071,8 @@
         raf: null,
         field: null,
         heightScale: 1.5,
+        renderStyle: "points",
+        pointSize: 4.5,
         holoGlow: 1.0,
         wireframe: false,
         aspect: 1,
@@ -5095,6 +5097,7 @@
         attribute float a_height;
         uniform mat4 u_mvp;
         uniform mat4 u_model;
+        uniform float u_point_size;
         varying vec2 v_uv;
         varying vec3 v_normal;
         varying float v_height;
@@ -5107,7 +5110,9 @@
             vec4 wp = u_model * vec4(a_pos, 1.0);
             v_world_pos = wp.xyz;
             v_model_pos = a_pos;
-            gl_Position = u_mvp * vec4(a_pos, 1.0);
+            vec4 p = u_mvp * vec4(a_pos, 1.0);
+            gl_Position = p;
+            gl_PointSize = clamp(u_point_size * (3.8 / max(0.4, p.w)), 1.5, 24.0);
         }`;
 
     const WORLD_FS = `
@@ -5121,6 +5126,7 @@
         uniform vec3 u_view_pos;
         uniform float u_holo_glow;
         uniform float u_wireframe;
+        uniform float u_is_points;
 
         varying vec2 v_uv;
         varying vec3 v_normal;
@@ -5145,6 +5151,17 @@
                 gl_FragColor = vec4(u_solid, 1.0);
                 return;
             }
+
+            float ptAlpha = 1.0;
+            float ptGlow = 0.0;
+            if (u_is_points > 0.5) {
+                vec2 pc = gl_PointCoord - vec2(0.5);
+                float dist = length(pc);
+                if (dist > 0.5) discard;
+                ptAlpha = smoothstep(0.5, 0.12, dist);
+                ptGlow = smoothstep(0.35, 0.0, dist) * 0.5;
+            }
+
             vec3 base = texture2D(u_tex, v_uv).rgb;
             vec3 N = normalize(v_normal);
             vec3 V = normalize(u_view_pos - v_world_pos);
@@ -5155,6 +5172,11 @@
             float diff = max(dot(N, lightDir), 0.0);
             float sh = mix(1.0, 0.50 + 0.50 * diff, u_shade);
             float side = 1.0 - clamp(abs(N.z), 0.0, 1.0);
+
+            // Cut off steep stretched sidewalls in surface mode to prevent broken paper
+            if (u_is_points < 0.5 && side > 0.72) {
+                discard;
+            }
 
             // Dynamic scanlines undulating along the vertical axis
             float scan = 0.90 + 0.10 * sin(v_model_pos.y * 70.0 - u_time * 3.5);
@@ -5177,11 +5199,17 @@
             if (u_mode < 0.5) {
                 // Realistic Cyber Hologram
                 vec3 holoCyan = vec3(0.22, 0.78, 1.0);
-                col = base * sh * (1.0 - 0.35 * side);
+                col = base * sh;
                 float glow = (fresnel * 0.65 + sweep * 0.35 + patchGrid * 0.14 * v_height) * u_holo_glow;
                 col = mix(col, holoCyan, glow * 0.32);
                 col += holoCyan * glow * 0.48;
-                col += holoCyan * fineGrid * 0.28 * u_wireframe;
+                if (u_is_points > 0.5) {
+                    col += vec3(0.4, 0.8, 1.0) * ptGlow * v_height;
+                    col *= mix(0.70, 1.15, v_height);
+                } else {
+                    col += holoCyan * fineGrid * 0.28 * u_wireframe;
+                    col *= (1.0 - 0.35 * side);
+                }
                 col *= scan;
                 col += vec3(0.015, 0.04, 0.07) * (1.0 - v_height);
             } else if (u_mode < 1.5) {
@@ -5191,7 +5219,11 @@
                 col = depthColor(v_height) * (0.65 + 0.35 * diff);
                 col += vec3(1.0) * isoLine;
                 col += vec3(0.25, 0.82, 1.0) * fresnel * 0.45 * u_holo_glow;
-                col += vec3(0.25, 0.82, 1.0) * (patchGrid * 0.15 + fineGrid * 0.35 * u_wireframe);
+                if (u_is_points > 0.5) {
+                    col += vec3(1.0) * ptGlow * v_height;
+                } else {
+                    col += vec3(0.25, 0.82, 1.0) * (patchGrid * 0.15 + fineGrid * 0.35 * u_wireframe);
+                }
                 col *= scan;
             } else if (u_mode < 2.5) {
                 // Anomaly / Surprise Map with radar pulse
@@ -5205,6 +5237,9 @@
                 col = mix(darkBase, alarmCol, clamp(su * 1.6, 0.0, 1.0));
                 col += vec3(1.0, 0.25, 0.15) * rippleLine;
                 col += vec3(1.0, 0.2, 0.1) * fresnel * step(0.2, su) * u_holo_glow;
+                if (u_is_points > 0.5) {
+                    col += alarmCol * ptGlow * step(0.2, su);
+                }
                 col *= scan;
             } else {
                 // Latent Prediction Mode (Amber/Gold predictive hologram)
@@ -5213,10 +5248,14 @@
                 col = mix(base * 0.55, predAmber * (0.55 + 0.45 * diff), 0.50);
                 float predGlow = (fresnel * 0.70 + sweep * 0.40 + abs(phase) * 0.18 + patchGrid * 0.20 * v_height) * u_holo_glow;
                 col += predAmber * predGlow;
-                col += predAmber * fineGrid * 0.32 * u_wireframe;
+                if (u_is_points > 0.5) {
+                    col += vec3(1.0, 0.9, 0.4) * ptGlow * v_height;
+                } else {
+                    col += predAmber * fineGrid * 0.32 * u_wireframe;
+                }
                 col *= (0.91 + 0.09 * sin(v_model_pos.y * 85.0 + u_time * 5.0));
             }
-            gl_FragColor = vec4(col, 1.0);
+            gl_FragColor = vec4(col, ptAlpha);
         }`;
 
     function worldInitGl(canvas) {
@@ -5229,6 +5268,8 @@
         if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
         gl.useProgram(program);
         gl.enable(gl.DEPTH_TEST);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
         world.gl = gl;
         world.program = program;
         world.loc = {
@@ -5246,7 +5287,9 @@
             time: gl.getUniformLocation(program, "u_time"),
             viewPos: gl.getUniformLocation(program, "u_view_pos"),
             holoGlow: gl.getUniformLocation(program, "u_holo_glow"),
-            wireframe: gl.getUniformLocation(program, "u_wireframe")
+            wireframe: gl.getUniformLocation(program, "u_wireframe"),
+            pointSize: gl.getUniformLocation(program, "u_point_size"),
+            isPoints: gl.getUniformLocation(program, "u_is_points")
         };
         world.aspect = 1;
         world.mesh = worldBuildMesh(gl, WORLD_RES, world.aspect);
@@ -5524,6 +5567,8 @@
         gl.uniform3f(world.loc.viewPos, eye[0], eye[1], eye[2]);
         gl.uniform1f(world.loc.holoGlow, world.holoGlow != null ? world.holoGlow : 1.0);
         gl.uniform1f(world.loc.wireframe, world.wireframe ? 1.0 : 0.0);
+        gl.uniform1f(world.loc.isPoints, world.renderStyle === "points" ? 1.0 : 0.0);
+        gl.uniform1f(world.loc.pointSize, world.pointSize || 4.5);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, world.tex);
         gl.uniform1i(world.loc.tex, 0);
@@ -5542,8 +5587,13 @@
         gl.bindBuffer(gl.ARRAY_BUFFER, m.heightBuf);
         gl.enableVertexAttribArray(world.loc.height);
         gl.vertexAttribPointer(world.loc.height, 1, gl.FLOAT, false, 0, 0);
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, m.idxBuf);
-        gl.drawElements(gl.TRIANGLES, m.count, gl.UNSIGNED_SHORT, 0);
+
+        if (world.renderStyle === "points") {
+            gl.drawArrays(gl.POINTS, 0, m.verts);
+        } else {
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, m.idxBuf);
+            gl.drawElements(gl.TRIANGLES, m.count, gl.UNSIGNED_SHORT, 0);
+        }
 
         // Cyber Holodeck stage: floor grid + glowing emitter lasers + HUD brackets
         if (m.roomBuf && m.roomCount) {
@@ -5924,6 +5974,24 @@
             world.wireframe = wire.checked;
             wire.addEventListener("change", () => { world.wireframe = wire.checked; });
         }
+        function worldSetStyle(style) {
+            world.renderStyle = style;
+            const isPts = style === "points";
+            const btnPts = document.getElementById("btn-world-style-points");
+            const btnMesh = document.getElementById("btn-world-style-mesh");
+            if (btnPts) btnPts.classList.toggle("active", isPts);
+            if (btnMesh) btnMesh.classList.toggle("active", !isPts);
+            const ptRow = document.getElementById("row-world-point-size");
+            if (ptRow) ptRow.style.display = isPts ? "flex" : "none";
+        }
+        bind("btn-world-style-points", () => worldSetStyle("points"));
+        bind("btn-world-style-mesh", () => worldSetStyle("mesh"));
+        const ptSlider = document.getElementById("slider-world-point-size");
+        if (ptSlider) ptSlider.addEventListener("input", () => {
+            world.pointSize = parseFloat(ptSlider.value);
+            const v = document.getElementById("val-world-point-size");
+            if (v) v.textContent = `${world.pointSize.toFixed(1)}px`;
+        });
         bind("btn-api-world", () => {
             showApiDialog("Reconstruct the scene", "Inference role. Embeds the current camera frame and returns, per ViT patch, a foreground relief (from JEPA's background separation) plus the aligned frame as a texture. The UI drapes the frame over the relief. Poll it while the camera runs.",
                 { method: "GET", path: "/api/world/frame" });

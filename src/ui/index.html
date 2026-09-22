@@ -1260,6 +1260,13 @@
                             <span>Auto-rotate</span>
                         </label>
                     </div>
+                    <div class="robot-topbar-group">
+                        <span class="fact-label">Style</span>
+                        <div class="segmented" role="group" aria-label="Render style">
+                            <button class="seg-btn active" id="btn-world-style-points">Point cloud</button>
+                            <button class="seg-btn" id="btn-world-style-mesh">Surface</button>
+                        </div>
+                    </div>
                     <div class="robot-topbar-group robot-topbar-right">
                         <span class="status-chip" id="world-model-chip"><span id="world-model-text">no model</span></span>
                         <button class="btn btn-sm btn-api" id="btn-api-world" title="Show the API request">{ } API</button>
@@ -1365,6 +1372,13 @@
                                     <span class="threshold-badge" id="val-world-rate">6 Hz</span>
                                 </div>
                                 <input type="range" id="slider-world-rate" min="1" max="12" step="1" value="6" class="range-slider">
+                            </div>
+                            <div class="sensitivity-row" id="row-world-point-size">
+                                <div class="sensitivity-label-row">
+                                    <label for="slider-world-point-size">Point size</label>
+                                    <span class="threshold-badge" id="val-world-point-size">4.5px</span>
+                                </div>
+                                <input type="range" id="slider-world-point-size" min="1.5" max="10" step="0.5" value="4.5" class="range-slider">
                             </div>
                             <div class="sensitivity-row">
                                 <div class="sensitivity-label-row">

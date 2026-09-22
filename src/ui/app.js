@@ -5067,7 +5067,7 @@
         tex: null,
         texReady: false,
         pendingImg: null,
-        orbit: { yaw: 0.45, pitch: 0.30, dist: 3.6, dragging: false, lastX: 0, lastY: 0 },
+        orbit: { yaw: 0.60, pitch: 0.35, dist: 4.8, dragging: false, lastX: 0, lastY: 0 },
         raf: null,
         field: null,
         heightScale: 1.5,
@@ -5358,62 +5358,135 @@
         const idxBuf = gl.createBuffer();
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(idx), gl.STATIC_DRAW);
-        // Cyber Holodeck Stage:
-        // 1. Floor grid receding from the screen plane toward the viewer.
-        const floor = [];
-        const y0 = -spanH / 2;
-        const zNear = 1.4, zFar = -0.05, step = 0.12;
-        for (let x = -spanW / 2; x <= spanW / 2 + 1e-6; x += step) {
-            floor.push(x, y0, zFar, x, y0, zNear);
-        }
-        for (let z = zFar; z <= zNear + 1e-6; z += step) {
-            floor.push(-spanW / 2, y0, z, spanW / 2, y0, z);
-        }
-        // Center floor crosshair
-        const zMid = (zNear + zFar) / 2;
-        floor.push(-0.16, y0, zMid, 0.16, y0, zMid);
-        floor.push(0, y0, zMid - 0.16, 0, y0, zMid + 0.16);
-
-        // 2. Cyber accents: Pedestal border, 4 projector emitter laser lines, and HUD viewfinder brackets
-        const accents = [];
+        // Spatial Room & Camera Frustum Geometry:
+        // Physical sensor positioned at zCam looking toward the scene (z = 0)
+        const zCam = 2.4;
+        const y0 = -spanH / 2; // Room floor level
         const x0 = -spanW / 2, x1 = spanW / 2, y1 = spanH / 2;
-        // Pedestal base frame on floor
-        accents.push(x0 - 0.05, y0, zFar - 0.02, x1 + 0.05, y0, zFar - 0.02);
-        accents.push(x1 + 0.05, y0, zFar - 0.02, x1 + 0.05, y0, zNear + 0.05);
-        accents.push(x1 + 0.05, y0, zNear + 0.05, x0 - 0.05, y0, zNear + 0.05);
-        accents.push(x0 - 0.05, y0, zNear + 0.05, x0 - 0.05, y0, zFar - 0.02);
 
-        // 4 Projector laser beams projecting up to the 4 corners of the hologram frame
-        accents.push(x0, y0, zNear, x0, y1, 0);
-        accents.push(x1, y0, zNear, x1, y1, 0);
-        accents.push(x0, y0, zNear, x0, y0, 0);
-        accents.push(x1, y0, zNear, x1, y0, 0);
+        // 1. Room Floor Grid & Back Wall (Subtle slate cyber grid)
+        const roomBase = [];
+        const flW = spanW * 0.95;
+        const zBack = -0.55;
+        const zFront = zCam + 0.55;
+        const step = 0.20;
 
-        // 4 Viewfinder corner brackets at the perimeter of the hologram frame (z = 0)
+        // Extended floor grid lines along Z
+        for (let x = -flW; x <= flW + 1e-5; x += step) {
+            roomBase.push(x, y0, zBack, x, y0, zFront);
+        }
+        // Extended floor grid lines along X
+        for (let z = zBack; z <= zFront + 1e-5; z += step) {
+            roomBase.push(-flW, y0, z, flW, y0, z);
+        }
+
+        // Room Back Wall grid at z = zBack
+        for (let x = -flW; x <= flW + 1e-5; x += step * 2) {
+            roomBase.push(x, y0, zBack, x, y0 + spanH * 1.15, zBack);
+        }
+        for (let y = y0; y <= y0 + spanH * 1.15 + 1e-5; y += step * 2) {
+            roomBase.push(-flW, y, zBack, flW, y, zBack);
+        }
+
+        // 2. Cyber spatial accents (Camera body, tripod, optical frustum beams, range rings)
+        const roomAccents = [];
+
+        // Distance range arcs on the floor centered on camera (0.8m, 1.6m, 2.4m)
+        const arcRadii = [0.8, 1.6, 2.4];
+        for (let r = 0; r < arcRadii.length; r++) {
+            const rad = arcRadii[r];
+            const segs = 32;
+            for (let s = 0; s < segs; s++) {
+                const a1 = (s / segs) * Math.PI;
+                const a2 = ((s + 1) / segs) * Math.PI;
+                const px1 = rad * Math.cos(a1), pz1 = zCam - rad * Math.sin(a1);
+                const px2 = rad * Math.cos(a2), pz2 = zCam - rad * Math.sin(a2);
+                if (pz1 >= zBack && pz2 >= zBack && Math.abs(px1) <= flW && Math.abs(px2) <= flW) {
+                    roomAccents.push(px1, y0, pz1, px2, y0, pz2);
+                }
+            }
+        }
+
+        // Distance marks along center line on floor
+        for (let dz = 0.5; dz <= 2.0; dz += 0.5) {
+            const zTick = zCam - dz;
+            roomAccents.push(-0.08, y0, zTick, 0.08, y0, zTick);
+        }
+
+        // Physical camera on tripod at zCam
+        const zLens = zCam - 0.08;
+        // Tripod legs and post
+        roomAccents.push(0, y0, zCam, 0, 0, zCam); // vertical post
+        roomAccents.push(0, y0, zCam + 0.32, 0, 0, zCam); // rear leg
+        roomAccents.push(-0.24, y0, zCam - 0.16, 0, 0, zCam); // front-left leg
+        roomAccents.push(0.24, y0, zCam - 0.16, 0, 0, zCam); // front-right leg
+
+        // Camera body box at (0, 0, zCam)
+        const bw = 0.10, bh = 0.06, bd = 0.14;
+        // Front face
+        roomAccents.push(-bw, -bh, zCam, bw, -bh, zCam);
+        roomAccents.push(bw, -bh, zCam, bw, bh, zCam);
+        roomAccents.push(bw, bh, zCam, -bw, bh, zCam);
+        roomAccents.push(-bw, bh, zCam, -bw, -bh, zCam);
+        // Back face
+        roomAccents.push(-bw, -bh, zCam + bd, bw, -bh, zCam + bd);
+        roomAccents.push(bw, -bh, zCam + bd, bw, bh, zCam + bd);
+        roomAccents.push(bw, bh, zCam + bd, -bw, bh, zCam + bd);
+        roomAccents.push(-bw, bh, zCam + bd, -bw, -bh, zCam + bd);
+        // Connecting edges
+        roomAccents.push(-bw, -bh, zCam, -bw, -bh, zCam + bd);
+        roomAccents.push(bw, -bh, zCam, bw, -bh, zCam + bd);
+        roomAccents.push(bw, bh, zCam, bw, bh, zCam + bd);
+        roomAccents.push(-bw, bh, zCam, -bw, bh, zCam + bd);
+
+        // Cylindrical lens ring
+        const lr = 0.05;
+        for (let s = 0; s < 12; s++) {
+            const a1 = (s / 12) * Math.PI * 2;
+            const a2 = ((s + 1) / 12) * Math.PI * 2;
+            roomAccents.push(lr * Math.cos(a1), lr * Math.sin(a1), zLens, lr * Math.cos(a2), lr * Math.sin(a2), zLens);
+        }
+
+        // 4 Pyramidal Frustum Beams from lens out to frame corners at z = 0
+        roomAccents.push(0, 0, zLens, x0, y1, 0); // top-left
+        roomAccents.push(0, 0, zLens, x1, y1, 0); // top-right
+        roomAccents.push(0, 0, zLens, x0, y0, 0); // bottom-left
+        roomAccents.push(0, 0, zLens, x1, y0, 0); // bottom-right
+
+        // Intermediate frustum cross-section rectangle at z = zCam - 0.7
+        const tNear = 0.7 / zCam;
+        const nw = spanW * tNear, nh = spanH * tNear;
+        const nz = zCam - 0.7;
+        roomAccents.push(-nw / 2, nh / 2, nz, nw / 2, nh / 2, nz);
+        roomAccents.push(nw / 2, nh / 2, nz, nw / 2, -nh / 2, nz);
+        roomAccents.push(nw / 2, -nh / 2, nz, -nw / 2, -nh / 2, nz);
+        roomAccents.push(-nw / 2, -nh / 2, nz, -nw / 2, nh / 2, nz);
+
+        // 4 Viewfinder corner brackets at the perimeter of the hologram frame at z = 0
         const tick = 0.18;
         // Top-left
-        accents.push(x0, y1, 0, x0 + tick, y1, 0);
-        accents.push(x0, y1, 0, x0, y1 - tick, 0);
+        roomAccents.push(x0, y1, 0, x0 + tick, y1, 0);
+        roomAccents.push(x0, y1, 0, x0, y1 - tick, 0);
         // Top-right
-        accents.push(x1, y1, 0, x1 - tick, y1, 0);
-        accents.push(x1, y1, 0, x1, y1 - tick, 0);
+        roomAccents.push(x1, y1, 0, x1 - tick, y1, 0);
+        roomAccents.push(x1, y1, 0, x1, y1 - tick, 0);
         // Bottom-left
-        accents.push(x0, y0, 0, x0 + tick, y0, 0);
-        accents.push(x0, y0, 0, x0, y0 + tick, 0);
+        roomAccents.push(x0, y0, 0, x0 + tick, y0, 0);
+        roomAccents.push(x0, y0, 0, x0, y0 + tick, 0);
         // Bottom-right
-        accents.push(x1, y0, 0, x1 - tick, y0, 0);
-        accents.push(x1, y0, 0, x1, y0 + tick, 0);
+        roomAccents.push(x1, y0, 0, x1 - tick, y0, 0);
+        roomAccents.push(x1, y0, 0, x1, y0 + tick, 0);
 
         // Combine into room buffer
-        const room = floor.concat(accents);
+        const room = roomBase.concat(roomAccents);
         const roomBuf = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, roomBuf);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(room), gl.STATIC_DRAW);
         return {
             n, verts, positions, normals, heights, uvs, posBuf, normBuf, heightBuf, uvBuf, idxBuf,
             count: idx.length, spanW, spanH, roomBuf,
-            gridCount: floor.length / 3,
-            accentCount: accents.length / 3,
+            gridCount: roomBase.length / 3,
+            accentCount: roomAccents.length / 3,
             roomCount: room.length / 3
         };
     }
@@ -5547,12 +5620,13 @@
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
         if (!world.field) return;
         const o = world.orbit;
+        const target = [0, 0, 0.6];
         const eye = [
-            o.dist * Math.cos(o.pitch) * Math.sin(o.yaw),
-            o.dist * Math.sin(o.pitch),
-            o.dist * Math.cos(o.pitch) * Math.cos(o.yaw)
+            target[0] + o.dist * Math.cos(o.pitch) * Math.sin(o.yaw),
+            target[1] + o.dist * Math.sin(o.pitch),
+            target[2] + o.dist * Math.cos(o.pitch) * Math.cos(o.yaw)
         ];
-        const view = m4lookAt(eye, [0, 0, 0], [0, 1, 0]);
+        const view = m4lookAt(eye, target, [0, 1, 0]);
         const proj = m4perspective(0.8, canvas.width / canvas.height, 0.05, 30);
         const mvp = m4multiply(proj, view);
         const model = m4identity();
@@ -5595,7 +5669,7 @@
             gl.drawElements(gl.TRIANGLES, m.count, gl.UNSIGNED_SHORT, 0);
         }
 
-        // Cyber Holodeck stage: floor grid + glowing emitter lasers + HUD brackets
+        // Cyber room stage: floor grid + back wall + physical camera on tripod + optical frustum
         if (m.roomBuf && m.roomCount) {
             gl.disableVertexAttribArray(world.loc.uv);
             gl.disableVertexAttribArray(world.loc.normal);
@@ -5604,11 +5678,11 @@
             gl.bindBuffer(gl.ARRAY_BUFFER, m.roomBuf);
             gl.vertexAttribPointer(world.loc.pos, 3, gl.FLOAT, false, 0, 0);
 
-            // Subtle dark cyan / slate floor grid
-            gl.uniform3f(world.loc.solid, 0.10, 0.16, 0.25);
+            // Room floor grid and back wall (dark slate)
+            gl.uniform3f(world.loc.solid, 0.08, 0.13, 0.20);
             gl.drawArrays(gl.LINES, 0, m.gridCount);
 
-            // Glowing electric cyan emitter lasers and corner brackets
+            // Glowing cyan camera body, tripod, frustum beams, and range arcs
             gl.uniform3f(world.loc.solid, 0.22, 0.78, 1.0);
             gl.drawArrays(gl.LINES, m.gridCount, m.accentCount);
         }
@@ -5771,9 +5845,9 @@
     }
 
     function worldSetView(name) {
-        if (name === "iso") { world.orbit.yaw = 0.45; world.orbit.pitch = 0.30; world.orbit.dist = 3.6; }
-        else if (name === "profile") { world.orbit.yaw = 1.32; world.orbit.pitch = 0.10; world.orbit.dist = 3.4; }
-        else if (name === "face") { world.orbit.yaw = 0.0; world.orbit.pitch = 0.04; world.orbit.dist = 3.0; }
+        if (name === "iso") { world.orbit.yaw = 0.60; world.orbit.pitch = 0.35; world.orbit.dist = 4.8; }
+        else if (name === "profile") { world.orbit.yaw = 1.45; world.orbit.pitch = 0.10; world.orbit.dist = 4.5; }
+        else if (name === "face") { world.orbit.yaw = 0.0; world.orbit.pitch = 0.04; world.orbit.dist = 3.8; }
         document.querySelectorAll("#btn-world-view-iso,#btn-world-view-profile,#btn-world-view-face").forEach((b) => b.classList.remove("active"));
         const active = document.getElementById(`btn-world-view-${name}`);
         if (active) active.classList.add("active");

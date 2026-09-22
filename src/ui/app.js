@@ -5067,11 +5067,15 @@
         tex: null,
         texReady: false,
         pendingImg: null,
-        orbit: { yaw: 0.60, pitch: 0.35, dist: 4.8, dragging: false, lastX: 0, lastY: 0 },
+        // Start nearly face on. The mesh is the camera frame draped over its own
+        // relief, so it only reads as the real room when seen from roughly where the
+        // camera stands; a small yaw is enough to show that it has depth. The
+        // isometric and profile presets stay one click away.
+        orbit: { yaw: 0.13, pitch: 0.06, dist: 2.25, dragging: false, lastX: 0, lastY: 0 },
         raf: null,
         field: null,
-        heightScale: 1.5,
-        renderStyle: "points",
+        heightScale: 0.7,
+        renderStyle: "mesh",
         pointSize: 4.5,
         holoGlow: 1.0,
         wireframe: false,
@@ -5080,6 +5084,7 @@
         shade: true,
         mode: "shaded",
         spin: false,
+        modeBeforeAlarm: null,
         spark: [],
         pollTimer: null,
         busy: false,
@@ -5173,10 +5178,10 @@
             float sh = mix(1.0, 0.50 + 0.50 * diff, u_shade);
             float side = 1.0 - clamp(abs(N.z), 0.0, 1.0);
 
-            // Cut off steep stretched sidewalls in surface mode to prevent broken paper
-            if (u_is_points < 0.5 && side > 0.72) {
-                discard;
-            }
+            // Steep sidewalls carry badly stretched texture, but discarding them
+            // punches visible holes through the surface. Keep the geometry and just
+            // darken it instead, so an extruded object reads as having sides.
+            float sideFade = smoothstep(0.70, 0.96, side);
 
             // Dynamic scanlines undulating along the vertical axis
             float scan = 0.90 + 0.10 * sin(v_model_pos.y * 70.0 - u_time * 3.5);
@@ -5197,21 +5202,19 @@
 
             vec3 col;
             if (u_mode < 0.5) {
-                // Realistic Cyber Hologram
-                vec3 holoCyan = vec3(0.22, 0.78, 1.0);
-                col = base * sh;
-                float glow = (fresnel * 0.65 + sweep * 0.35 + patchGrid * 0.14 * v_height) * u_holo_glow;
-                col = mix(col, holoCyan, glow * 0.32);
-                col += holoCyan * glow * 0.48;
+                // Realistic view: show the camera frame as close to its own colour as
+                // possible. No scanlines, no laser sweep, no cyan wash: every one of
+                // those fights the one thing this mode is for, which is recognising
+                // the actual room. Relief is conveyed by lighting alone.
+                col = base * mix(1.0, sh, 0.65);
+                col *= mix(1.0, 0.42, sideFade);
                 if (u_is_points > 0.5) {
-                    col += vec3(0.4, 0.8, 1.0) * ptGlow * v_height;
-                    col *= mix(0.70, 1.15, v_height);
+                    col += vec3(0.4, 0.8, 1.0) * ptGlow * v_height * 0.5;
                 } else {
-                    col += holoCyan * fineGrid * 0.28 * u_wireframe;
-                    col *= (1.0 - 0.35 * side);
+                    col += vec3(0.22, 0.78, 1.0) * fineGrid * 0.28 * u_wireframe;
                 }
-                col *= scan;
-                col += vec3(0.015, 0.04, 0.07) * (1.0 - v_height);
+                // A touch of rim light so the silhouette separates from the backdrop.
+                col += vec3(0.16, 0.34, 0.52) * fresnel * 0.22 * u_holo_glow;
             } else if (u_mode < 1.5) {
                 // JEPA Depth Map with elevation isolines and cyber contours
                 float iso = sin(v_height * 36.0);
@@ -5682,9 +5685,13 @@
             gl.uniform3f(world.loc.solid, 0.08, 0.13, 0.20);
             gl.drawArrays(gl.LINES, 0, m.gridCount);
 
-            // Glowing cyan camera body, tripod, frustum beams, and range arcs
-            gl.uniform3f(world.loc.solid, 0.22, 0.78, 1.0);
-            gl.drawArrays(gl.LINES, m.gridCount, m.accentCount);
+            // The camera body, tripod, frustum beams and range arcs explain where the
+            // view comes from, which is useful while reading a diagnostic map and pure
+            // clutter across the realistic view, where they cross the scene itself.
+            if (world.mode !== "shaded") {
+                gl.uniform3f(world.loc.solid, 0.22, 0.78, 1.0);
+                gl.drawArrays(gl.LINES, m.gridCount, m.accentCount);
+            }
         }
     }
 
@@ -5790,7 +5797,10 @@
             world.alarming = true;
             if (wrap) wrap.classList.add("alarm");
             if (badge) badge.style.display = "block";
-            // Snap to the anomaly map so the divergent zone glows.
+            // Snap to the anomaly map so the divergent zone glows, remembering what
+            // the user was looking at so the alarm borrows the view rather than
+            // keeping it: a single spike must not silently redefine the default.
+            if (world.mode !== "surprise") world.modeBeforeAlarm = world.mode;
             worldSetMode("surprise");
             const now = Date.now();
             if (now - world.lastAlarmAt > 1500) {
@@ -5803,6 +5813,10 @@
             world.alarming = false;
             if (wrap) wrap.classList.remove("alarm");
             if (badge) badge.style.display = "none";
+            if (world.modeBeforeAlarm && world.mode === "surprise") {
+                worldSetMode(world.modeBeforeAlarm);
+            }
+            world.modeBeforeAlarm = null;
         }
     }
 
@@ -5845,9 +5859,9 @@
     }
 
     function worldSetView(name) {
-        if (name === "iso") { world.orbit.yaw = 0.60; world.orbit.pitch = 0.35; world.orbit.dist = 4.8; }
-        else if (name === "profile") { world.orbit.yaw = 1.45; world.orbit.pitch = 0.10; world.orbit.dist = 4.5; }
-        else if (name === "face") { world.orbit.yaw = 0.0; world.orbit.pitch = 0.04; world.orbit.dist = 3.8; }
+        if (name === "iso") { world.orbit.yaw = 0.55; world.orbit.pitch = 0.30; world.orbit.dist = 3.2; }
+        else if (name === "profile") { world.orbit.yaw = 1.30; world.orbit.pitch = 0.10; world.orbit.dist = 3.0; }
+        else if (name === "face") { world.orbit.yaw = 0.13; world.orbit.pitch = 0.06; world.orbit.dist = 2.25; }
         document.querySelectorAll("#btn-world-view-iso,#btn-world-view-profile,#btn-world-view-face").forEach((b) => b.classList.remove("active"));
         const active = document.getElementById(`btn-world-view-${name}`);
         if (active) active.classList.add("active");
@@ -5981,7 +5995,7 @@
         canvas.addEventListener("pointercancel", stop);
         canvas.addEventListener("wheel", (e) => {
             e.preventDefault();
-            world.orbit.dist = Math.max(1.2, Math.min(9, world.orbit.dist * (e.deltaY > 0 ? 1.1 : 0.9)));
+            world.orbit.dist = Math.max(0.9, Math.min(9, world.orbit.dist * (e.deltaY > 0 ? 1.1 : 0.9)));
         }, { passive: false });
 
         const bind = (id, fn) => { const n = document.getElementById(id); if (n) n.addEventListener("click", fn); };

@@ -1251,9 +1251,9 @@
                     <div class="robot-topbar-group">
                         <span class="fact-label">View</span>
                         <div class="segmented" role="group" aria-label="Camera view">
-                            <button class="seg-btn active" id="btn-world-view-iso">Isometric</button>
+                            <button class="seg-btn" id="btn-world-view-iso">Isometric</button>
                             <button class="seg-btn" id="btn-world-view-profile">Profile</button>
-                            <button class="seg-btn" id="btn-world-view-face">Face</button>
+                            <button class="seg-btn active" id="btn-world-view-face">Face</button>
                         </div>
                         <label class="toggle-label compact" for="toggle-world-spin">
                             <input type="checkbox" id="toggle-world-spin" class="checkbox-input">
@@ -1263,8 +1263,8 @@
                     <div class="robot-topbar-group">
                         <span class="fact-label">Style</span>
                         <div class="segmented" role="group" aria-label="Render style">
-                            <button class="seg-btn active" id="btn-world-style-points">Point cloud</button>
-                            <button class="seg-btn" id="btn-world-style-mesh">Surface</button>
+                            <button class="seg-btn" id="btn-world-style-points">Point cloud</button>
+                            <button class="seg-btn active" id="btn-world-style-mesh">Surface</button>
                         </div>
                     </div>
                     <div class="robot-topbar-group robot-topbar-right">
@@ -1280,7 +1280,7 @@
                 <div class="robot-layout">
                     <div class="card robot-scene-card">
                         <div class="world-mode-tabs" role="tablist" aria-label="Render mode">
-                            <button class="world-mode-tab active" id="btn-world-mode-hologram" data-mode="shaded" role="tab" aria-selected="true">Realistic hologram</button>
+                            <button class="world-mode-tab active" id="btn-world-mode-hologram" data-mode="shaded" role="tab" aria-selected="true">Realistic view</button>
                             <button class="world-mode-tab" id="btn-world-mode-depth" data-mode="depth" role="tab" aria-selected="false">JEPA depth map</button>
                             <button class="world-mode-tab" id="btn-world-mode-anomaly" data-mode="surprise" role="tab" aria-selected="false">Anomaly map</button>
                             <button class="world-mode-tab" id="btn-world-mode-predict" data-mode="predict" role="tab" aria-selected="false">Latent prediction</button>
@@ -1362,9 +1362,9 @@
                             <div class="sensitivity-row">
                                 <div class="sensitivity-label-row">
                                     <label for="slider-world-height">Relief height</label>
-                                    <span class="threshold-badge" id="val-world-height">1.5x</span>
+                                    <span class="threshold-badge" id="val-world-height">0.7x</span>
                                 </div>
-                                <input type="range" id="slider-world-height" min="0.2" max="3" step="0.1" value="1.5" class="range-slider">
+                                <input type="range" id="slider-world-height" min="0.2" max="3" step="0.1" value="0.7" class="range-slider">
                             </div>
                             <div class="sensitivity-row">
                                 <div class="sensitivity-label-row">

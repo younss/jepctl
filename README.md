@@ -10,7 +10,11 @@ It targets *non-generative* encoders whose output is an embedding, not text: **I
 - an explainable **few-shot gesture sandbox**: register a few reference poses from your webcam, then watch, frame by frame, *why* the model does or does not recognise them;
 - a **robot twin**: a 6 DOF arm that learns a latent world model from what the camera sees and plans inside it, previewed in WebGL and gated before it touches hardware.
 
-> **Status:** early (0.2). Every model in the catalog loads with verified checkpoint coverage and every entry point is tested; see [Verification](#verification) for what is and is not checked numerically.
+> **Status:** early (0.3). Every model in the catalog loads with verified checkpoint coverage and every entry point is tested; see [Verification](#verification) for what is and is not checked numerically.
+
+<p align="center">
+  <img src="docs/assets/jepctl_desktop_gestures.jpg" alt="jepctl native desktop application - Few-Shot Industrial Inspection" width="900">
+</p>
 
 ---
 
@@ -235,6 +239,10 @@ Tips for good detections: register the neutral pose first, take 3-5 samples per 
 
 `jepctl` can drive a 6 DOF arm with a gripper. Everything is previewed on a WebGL twin rendered in the desktop window (raw WebGL, no library, works offline) and gated before it reaches hardware.
 
+<p align="center">
+  <img src="docs/assets/jepctl_desktop_robot.jpg" alt="jepctl Robot Twin - Visual Goal Reaching and Teleoperation" width="900">
+</p>
+
 ```bash
 cargo run --release --features metal              # virtual arm only
 cargo run --release --features "metal serial"     # plus the physical arm over USB serial
@@ -299,6 +307,10 @@ Serial settings (port, baud, servo IDs, tick calibration, direction) live under 
 
 The Companion tab is a second WebGL character (head that pans and tilts, two arms, lean, a mood light) meant to be taught by a person rather than by moving hardware. It does not need an arm: it learns from **you**, through the camera and the microphone. Nothing is trained; every lesson is one embedding added to a few-shot prototype, exactly like the gesture sandbox, in two modalities.
 
+<p align="center">
+  <img src="docs/assets/jepctl_desktop_companion.jpg" alt="jepctl Companion - Multimodal Social Robot" width="900">
+</p>
+
 **One-click start.** Press **Wake the companion**: it loads the vision and audio
 models, opens the camera and the microphone, learns the room's silence as a neutral
 sound, switches to interactive and greets you. Then **Teach a trick** gives three
@@ -356,6 +368,10 @@ error is a reliable "surprise" signal for implausible events. The difference, st
 plainly: LeWM trains the encoder and predictor end to end from pixels with the SIGReg
 anti-collapse regulariser; here the encoder is the frozen catalogue model and only the
 predictor is fit, online, on your live stream (no training run, no checkpoint).
+
+<p align="center">
+  <img src="docs/assets/jepctl_desktop_world.jpg" alt="jepctl World - Live Scene Reconstruction and Prediction" width="900">
+</p>
 
 What you see and can do:
 

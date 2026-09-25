@@ -1238,7 +1238,7 @@
             <section class="content-section" id="section-world" tabindex="0" role="tabpanel" aria-labelledby="tab-world">
                 <div class="section-title">
                     <h2>World</h2>
-                    <p>A live world model: it reconstructs the scene in 3D, predicts what comes next, and raises the alarm on the unexpected.</p>
+                    <p>A live world model: it learns what this scene normally looks like, predicts what comes next in latent space, and raises the alarm on the unexpected.</p>
                 </div>
 
                 <div class="robot-topbar card">
@@ -1249,23 +1249,10 @@
                         <span class="status-chip" id="world-chip"><span class="chip-dot" id="world-dot"></span><span id="world-chip-text">idle</span></span>
                     </div>
                     <div class="robot-topbar-group">
-                        <span class="fact-label">View</span>
-                        <div class="segmented" role="group" aria-label="Camera view">
-                            <button class="seg-btn" id="btn-world-view-iso">Isometric</button>
-                            <button class="seg-btn" id="btn-world-view-profile">Profile</button>
-                            <button class="seg-btn active" id="btn-world-view-face">Face</button>
-                        </div>
                         <label class="toggle-label compact" for="toggle-world-spin">
                             <input type="checkbox" id="toggle-world-spin" class="checkbox-input">
-                            <span>Auto-rotate</span>
+                            <span>Auto-rotate latent</span>
                         </label>
-                    </div>
-                    <div class="robot-topbar-group">
-                        <span class="fact-label">Style</span>
-                        <div class="segmented" role="group" aria-label="Render style">
-                            <button class="seg-btn" id="btn-world-style-points">Point cloud</button>
-                            <button class="seg-btn active" id="btn-world-style-mesh">Surface</button>
-                        </div>
                     </div>
                     <div class="robot-topbar-group robot-topbar-right">
                         <span class="status-chip" id="world-model-chip"><span id="world-model-text">no model</span></span>
@@ -1280,14 +1267,22 @@
                 <div class="robot-layout">
                     <div class="card robot-scene-card">
                         <div class="world-mode-tabs" role="tablist" aria-label="Render mode">
-                            <button class="world-mode-tab active" id="btn-world-mode-hologram" data-mode="shaded" role="tab" aria-selected="true">Realistic view</button>
-                            <button class="world-mode-tab" id="btn-world-mode-depth" data-mode="depth" role="tab" aria-selected="false">JEPA depth map</button>
+                            <button class="world-mode-tab active" id="btn-world-mode-camera" data-mode="camera" role="tab" aria-selected="true">Camera</button>
+                            <button class="world-mode-tab" id="btn-world-mode-salience" data-mode="salience" role="tab" aria-selected="false">Foreground salience</button>
                             <button class="world-mode-tab" id="btn-world-mode-anomaly" data-mode="surprise" role="tab" aria-selected="false">Anomaly map</button>
-                            <button class="world-mode-tab" id="btn-world-mode-predict" data-mode="predict" role="tab" aria-selected="false">Latent prediction</button>
+                            <button class="world-mode-tab" id="btn-world-mode-predict" data-mode="predict" role="tab" aria-selected="false">Predicted next</button>
                         </div>
                         <div class="world-canvas-wrap" id="world-canvas-wrap">
-                            <canvas id="world-canvas" width="720" height="440" role="img" aria-label="Live 3D reconstruction of the camera scene"></canvas>
+                            <canvas id="world-frame-canvas" width="720" height="420" role="img" aria-label="Live camera frame with the selected per-patch overlay"></canvas>
                             <div class="world-anomaly-badge" id="world-anomaly-badge" role="alert" style="display: none;">ANOMALY DETECTED &middot; unexpected event</div>
+                        </div>
+                        <div class="world-latent-block">
+                            <div class="gesture-card-header">
+                                <h3>Latent space</h3>
+                                <span class="card-subtitle-inline">drag to rotate</span>
+                            </div>
+                            <p class="card-subtitle">The scene as a point in the predictor's own space, under the same random projection it works in, cut to three dimensions. Grey dots are remembered states, blue dots are states you named, the amber ring is where the model expects the next frame to land, and the amber line is that expectation. This one is safe to rotate: it is a projection of a real vector space, not a guess at the room's geometry.</p>
+                            <canvas id="world-canvas" width="720" height="300" role="img" aria-label="Latent space of the world model, rotatable"></canvas>
                         </div>
                         <div class="robot-readout" id="world-readout">Start the camera to begin.</div>
                         <div class="world-incident-card">
@@ -1361,10 +1356,10 @@
                             <h3>Perception</h3>
                             <div class="sensitivity-row">
                                 <div class="sensitivity-label-row">
-                                    <label for="slider-world-height">Relief height</label>
-                                    <span class="threshold-badge" id="val-world-height">0.7x</span>
+                                    <label for="slider-world-overlay">Overlay strength</label>
+                                    <span class="threshold-badge" id="val-world-overlay">70%</span>
                                 </div>
-                                <input type="range" id="slider-world-height" min="0.2" max="3" step="0.1" value="0.7" class="range-slider">
+                                <input type="range" id="slider-world-overlay" min="0" max="1" step="0.05" value="0.7" class="range-slider">
                             </div>
                             <div class="sensitivity-row">
                                 <div class="sensitivity-label-row">
@@ -1373,24 +1368,10 @@
                                 </div>
                                 <input type="range" id="slider-world-rate" min="1" max="12" step="1" value="6" class="range-slider">
                             </div>
-                            <div class="sensitivity-row" id="row-world-point-size">
-                                <div class="sensitivity-label-row">
-                                    <label for="slider-world-point-size">Point size</label>
-                                    <span class="threshold-badge" id="val-world-point-size">4.5px</span>
-                                </div>
-                                <input type="range" id="slider-world-point-size" min="1.5" max="10" step="0.5" value="4.5" class="range-slider">
-                            </div>
                             <div class="sensitivity-row">
-                                <div class="sensitivity-label-row">
-                                    <label for="slider-world-glow">Hologram glow</label>
-                                    <span class="threshold-badge" id="val-world-glow">1.0x</span>
-                                </div>
-                                <input type="range" id="slider-world-glow" min="0" max="2.5" step="0.1" value="1.0" class="range-slider">
-                            </div>
-                            <div class="sensitivity-row">
-                                <label class="toggle-label compact" for="toggle-world-wireframe">
-                                    <input type="checkbox" id="toggle-world-wireframe" class="checkbox-input">
-                                    <span>Wireframe matrix</span>
+                                <label class="toggle-label compact" for="toggle-world-patchgrid">
+                                    <input type="checkbox" id="toggle-world-patchgrid" class="checkbox-input">
+                                    <span>Show the ViT patch grid</span>
                                 </label>
                             </div>
                             <div class="gesture-card-header" style="margin-top:8px;">

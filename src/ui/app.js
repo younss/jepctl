@@ -5057,33 +5057,46 @@
     // real scene, given shape by what the model perceives.
     // ------------------------------------------------------------------
 
-    const WORLD_RES = 96; // mesh grid resolution (vertices are RES+1 per side)
+    // The World screen shows two things, and keeps them apart on purpose.
+    //
+    // The camera panel stays FLAT. The per-patch field the model produces is the
+    // distance between a patch embedding and a learned background prototype: a
+    // semantic quantity, not a depth. A poster on the far wall can score higher than
+    // a chair standing in front of it. Extruding that field into a surface and
+    // letting it be rotated claims a geometry the encoder never computes, and the
+    // rotation is exactly what exposes it: no occlusion, no parallax, nothing behind.
+    // So the field is drawn as an overlay on the real frame, where it is honest and
+    // easier to read.
+    //
+    // The latent panel is the one that rotates. It plots the scene as a point in the
+    // predictor's own space, under the same fixed random projection the predictor
+    // works in, truncated to three dimensions. Turning that is meaningful: it is a
+    // real projection of a real vector space, and the distance between two points on
+    // screen corresponds to a distance the model actually uses.
+
+    const WORLD_TRAIL = 140;
 
     const world = {
-        gl: null,
-        program: null,
-        loc: null,
-        mesh: null,
-        tex: null,
-        texReady: false,
-        pendingImg: null,
-        // Start nearly face on. The mesh is the camera frame draped over its own
-        // relief, so it only reads as the real room when seen from roughly where the
-        // camera stands; a small yaw is enough to show that it has depth. The
-        // isometric and profile presets stay one click away.
-        orbit: { yaw: 0.13, pitch: 0.06, dist: 2.25, dragging: false, lastX: 0, lastY: 0 },
+        frameCanvas: null,
+        frameCtx: null,
+        latentCanvas: null,
+        latentCtx: null,
+        overlayCanvas: null, // offscreen, grid sized, upscaled smoothly
+        img: null,
+        imgReady: false,
+        pendingSrc: null,
         raf: null,
         field: null,
-        heightScale: 0.7,
-        renderStyle: "mesh",
-        pointSize: 4.5,
-        holoGlow: 1.0,
-        wireframe: false,
         aspect: 1,
         rateHz: 6,
-        shade: true,
-        mode: "shaded",
+        mode: "camera",
+        overlayAlpha: 0.7,
+        showGrid: false,
+        orbit: { yaw: 0.7, pitch: 0.32, dragging: false, lastX: 0, lastY: 0 },
         spin: false,
+        trail: [],
+        latentScale: null,
+        latentCentre: [0, 0, 0],
         modeBeforeAlarm: null,
         spark: [],
         pollTimer: null,
@@ -5094,427 +5107,6 @@
         lastAlarmAt: 0,
         alarming: false
     };
-
-    const WORLD_VS = `
-        attribute vec3 a_pos;
-        attribute vec2 a_uv;
-        attribute vec3 a_normal;
-        attribute float a_height;
-        uniform mat4 u_mvp;
-        uniform mat4 u_model;
-        uniform float u_point_size;
-        varying vec2 v_uv;
-        varying vec3 v_normal;
-        varying float v_height;
-        varying vec3 v_world_pos;
-        varying vec3 v_model_pos;
-        void main() {
-            v_uv = a_uv;
-            v_normal = mat3(u_model) * a_normal;
-            v_height = a_height;
-            vec4 wp = u_model * vec4(a_pos, 1.0);
-            v_world_pos = wp.xyz;
-            v_model_pos = a_pos;
-            vec4 p = u_mvp * vec4(a_pos, 1.0);
-            gl_Position = p;
-            gl_PointSize = clamp(u_point_size * (3.8 / max(0.4, p.w)), 1.5, 24.0);
-        }`;
-
-    const WORLD_FS = `
-        precision mediump float;
-        uniform sampler2D u_tex;
-        uniform sampler2D u_surprise;
-        uniform float u_shade;
-        uniform float u_mode;   // 0: hologram, 1: depth, 2: anomaly, 3: solid room lines, 4: latent predict
-        uniform vec3 u_solid;
-        uniform float u_time;
-        uniform vec3 u_view_pos;
-        uniform float u_holo_glow;
-        uniform float u_wireframe;
-        uniform float u_is_points;
-
-        varying vec2 v_uv;
-        varying vec3 v_normal;
-        varying float v_height;
-        varying vec3 v_world_pos;
-        varying vec3 v_model_pos;
-
-        vec3 depthColor(float t) {
-            t = clamp(t, 0.0, 1.0);
-            vec3 c0 = vec3(0.06, 0.10, 0.28);
-            vec3 c1 = vec3(0.02, 0.62, 0.95);
-            vec3 c2 = vec3(0.08, 0.85, 0.45);
-            vec3 c3 = vec3(1.00, 0.80, 0.12);
-            vec3 col = mix(c0, c1, smoothstep(0.0, 0.33, t));
-            col = mix(col, c2, smoothstep(0.33, 0.66, t));
-            col = mix(col, c3, smoothstep(0.66, 1.0, t));
-            return col;
-        }
-
-        void main() {
-            if (u_mode > 2.5 && u_mode < 3.5) {
-                gl_FragColor = vec4(u_solid, 1.0);
-                return;
-            }
-
-            float ptAlpha = 1.0;
-            float ptGlow = 0.0;
-            if (u_is_points > 0.5) {
-                vec2 pc = gl_PointCoord - vec2(0.5);
-                float dist = length(pc);
-                if (dist > 0.5) discard;
-                ptAlpha = smoothstep(0.5, 0.12, dist);
-                ptGlow = smoothstep(0.35, 0.0, dist) * 0.5;
-            }
-
-            vec3 base = texture2D(u_tex, v_uv).rgb;
-            vec3 N = normalize(v_normal);
-            vec3 V = normalize(u_view_pos - v_world_pos);
-            float ndotv = clamp(dot(N, V), 0.0, 1.0);
-            float fresnel = pow(1.0 - ndotv, 2.6);
-
-            vec3 lightDir = normalize(vec3(0.35, 0.65, 0.75));
-            float diff = max(dot(N, lightDir), 0.0);
-            float sh = mix(1.0, 0.50 + 0.50 * diff, u_shade);
-            float side = 1.0 - clamp(abs(N.z), 0.0, 1.0);
-
-            // Steep sidewalls carry badly stretched texture, but discarding them
-            // punches visible holes through the surface. Keep the geometry and just
-            // darken it instead, so an extruded object reads as having sides.
-            float sideFade = smoothstep(0.70, 0.96, side);
-
-            // Dynamic scanlines undulating along the vertical axis
-            float scan = 0.90 + 0.10 * sin(v_model_pos.y * 70.0 - u_time * 3.5);
-
-            // Laser sweep: vertical scanning beam passing through the hologram
-            float sweepY = mod(u_time * 0.9, 3.2) - 1.6;
-            float sweep = smoothstep(0.09, 0.0, abs(v_model_pos.y - sweepY));
-
-            // ViT patch lattice (16x16 token grid)
-            vec2 gridCoord = fract(v_uv * 16.0);
-            float edgeDist = min(min(gridCoord.x, 1.0 - gridCoord.x), min(gridCoord.y, 1.0 - gridCoord.y));
-            float patchGrid = smoothstep(0.045, 0.0, edgeDist);
-
-            // Wireframe mesh lines (64x64)
-            vec2 fineCoord = fract(v_uv * 64.0);
-            float fineDist = min(min(fineCoord.x, 1.0 - fineCoord.x), min(fineCoord.y, 1.0 - fineCoord.y));
-            float fineGrid = smoothstep(0.065, 0.0, fineDist);
-
-            vec3 col;
-            if (u_mode < 0.5) {
-                // Realistic view: show the camera frame as close to its own colour as
-                // possible. No scanlines, no laser sweep, no cyan wash: every one of
-                // those fights the one thing this mode is for, which is recognising
-                // the actual room. Relief is conveyed by lighting alone.
-                col = base * mix(1.0, sh, 0.65);
-                col *= mix(1.0, 0.42, sideFade);
-                if (u_is_points > 0.5) {
-                    col += vec3(0.4, 0.8, 1.0) * ptGlow * v_height * 0.5;
-                } else {
-                    col += vec3(0.22, 0.78, 1.0) * fineGrid * 0.28 * u_wireframe;
-                }
-                // A touch of rim light so the silhouette separates from the backdrop.
-                col += vec3(0.16, 0.34, 0.52) * fresnel * 0.22 * u_holo_glow;
-            } else if (u_mode < 1.5) {
-                // JEPA Depth Map with elevation isolines and cyber contours
-                float iso = sin(v_height * 36.0);
-                float isoLine = smoothstep(0.92, 0.98, iso) * 0.40;
-                col = depthColor(v_height) * (0.65 + 0.35 * diff);
-                col += vec3(1.0) * isoLine;
-                col += vec3(0.25, 0.82, 1.0) * fresnel * 0.45 * u_holo_glow;
-                if (u_is_points > 0.5) {
-                    col += vec3(1.0) * ptGlow * v_height;
-                } else {
-                    col += vec3(0.25, 0.82, 1.0) * (patchGrid * 0.15 + fineGrid * 0.35 * u_wireframe);
-                }
-                col *= scan;
-            } else if (u_mode < 2.5) {
-                // Anomaly / Surprise Map with radar pulse
-                float su = clamp(texture2D(u_surprise, v_uv).r, 0.0, 1.0);
-                vec3 darkBase = mix(base * 0.15, vec3(0.03, 0.06, 0.12), 0.75);
-                darkBase += vec3(0.12, 0.35, 0.65) * patchGrid * 0.15;
-                float pulse = 0.82 + 0.18 * sin(u_time * 8.0);
-                vec3 alarmCol = mix(vec3(0.95, 0.55, 0.05), vec3(1.0, 0.12, 0.1), smoothstep(0.3, 0.7, su)) * pulse;
-                float ripple = sin(su * 28.0 - u_time * 7.0);
-                float rippleLine = smoothstep(0.8, 0.98, ripple) * step(0.15, su) * 0.5;
-                col = mix(darkBase, alarmCol, clamp(su * 1.6, 0.0, 1.0));
-                col += vec3(1.0, 0.25, 0.15) * rippleLine;
-                col += vec3(1.0, 0.2, 0.1) * fresnel * step(0.2, su) * u_holo_glow;
-                if (u_is_points > 0.5) {
-                    col += alarmCol * ptGlow * step(0.2, su);
-                }
-                col *= scan;
-            } else {
-                // Latent Prediction Mode (Amber/Gold predictive hologram)
-                vec3 predAmber = vec3(1.0, 0.72, 0.18);
-                float phase = sin(v_model_pos.x * 16.0 + v_model_pos.y * 16.0 + u_time * 4.0);
-                col = mix(base * 0.55, predAmber * (0.55 + 0.45 * diff), 0.50);
-                float predGlow = (fresnel * 0.70 + sweep * 0.40 + abs(phase) * 0.18 + patchGrid * 0.20 * v_height) * u_holo_glow;
-                col += predAmber * predGlow;
-                if (u_is_points > 0.5) {
-                    col += vec3(1.0, 0.9, 0.4) * ptGlow * v_height;
-                } else {
-                    col += predAmber * fineGrid * 0.32 * u_wireframe;
-                }
-                col *= (0.91 + 0.09 * sin(v_model_pos.y * 85.0 + u_time * 5.0));
-            }
-            gl_FragColor = vec4(col, ptAlpha);
-        }`;
-
-    function worldInitGl(canvas) {
-        const gl = canvas.getContext("webgl", { antialias: true, preserveDrawingBuffer: true });
-        if (!gl) return null;
-        const program = gl.createProgram();
-        gl.attachShader(program, robotCompile(gl, gl.VERTEX_SHADER, WORLD_VS));
-        gl.attachShader(program, robotCompile(gl, gl.FRAGMENT_SHADER, WORLD_FS));
-        gl.linkProgram(program);
-        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
-        gl.useProgram(program);
-        gl.enable(gl.DEPTH_TEST);
-        gl.enable(gl.BLEND);
-        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-        world.gl = gl;
-        world.program = program;
-        world.loc = {
-            pos: gl.getAttribLocation(program, "a_pos"),
-            uv: gl.getAttribLocation(program, "a_uv"),
-            normal: gl.getAttribLocation(program, "a_normal"),
-            mvp: gl.getUniformLocation(program, "u_mvp"),
-            model: gl.getUniformLocation(program, "u_model"),
-            height: gl.getAttribLocation(program, "a_height"),
-            tex: gl.getUniformLocation(program, "u_tex"),
-            surprise: gl.getUniformLocation(program, "u_surprise"),
-            shade: gl.getUniformLocation(program, "u_shade"),
-            mode: gl.getUniformLocation(program, "u_mode"),
-            solid: gl.getUniformLocation(program, "u_solid"),
-            time: gl.getUniformLocation(program, "u_time"),
-            viewPos: gl.getUniformLocation(program, "u_view_pos"),
-            holoGlow: gl.getUniformLocation(program, "u_holo_glow"),
-            wireframe: gl.getUniformLocation(program, "u_wireframe"),
-            pointSize: gl.getUniformLocation(program, "u_point_size"),
-            isPoints: gl.getUniformLocation(program, "u_is_points")
-        };
-        world.aspect = 1;
-        world.mesh = worldBuildMesh(gl, WORLD_RES, world.aspect);
-        // Placeholder texture until the first frame arrives.
-        world.tex = gl.createTexture();
-        gl.bindTexture(gl.TEXTURE_2D, world.tex);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([40, 44, 52, 255]));
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-        // A small luminance texture holding the per-patch surprise map.
-        world.surpriseTex = gl.createTexture();
-        gl.bindTexture(gl.TEXTURE_2D, world.surpriseTex);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, 1, 1, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, new Uint8Array([0]));
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-        return gl;
-    }
-
-    function worldUploadSurprise(f) {
-        const gl = world.gl;
-        if (!gl || !f.surprise_map || f.surprise_map.length !== f.grid_w * f.grid_h) return;
-        const px = new Uint8Array(f.surprise_map.map((v) => Math.max(0, Math.min(255, Math.round(v * 255)))));
-        gl.bindTexture(gl.TEXTURE_2D, world.surpriseTex);
-        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, f.grid_w, f.grid_h, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, px);
-    }
-
-    function worldBuildMesh(gl, res, aspect) {
-        const n = res + 1;
-        const verts = n * n;
-        const positions = new Float32Array(verts * 3); // updated per frame (z displaced)
-        const normals = new Float32Array(verts * 3);   // updated per frame
-        const uvs = new Float32Array(verts * 2);
-        // Match the real camera field of view: wider than tall for a 16:9 sensor.
-        const spanW = 1.8 * Math.max(1, aspect || 1);
-        const spanH = 1.8 / Math.max(1, 1 / (aspect || 1));
-        for (let y = 0; y < n; y++) {
-            for (let x = 0; x < n; x++) {
-                const i = y * n + x;
-                const u = x / res, v = y / res;
-                positions[i * 3] = -spanW / 2 + u * spanW;     // right
-                positions[i * 3 + 1] = spanH / 2 - v * spanH;  // up (image top at top)
-                positions[i * 3 + 2] = 0;                      // toward camera, set per frame
-                uvs[i * 2] = u;
-                uvs[i * 2 + 1] = v;                            // texture: v=0 is image top
-            }
-        }
-        const idx = [];
-        for (let y = 0; y < res; y++) {
-            for (let x = 0; x < res; x++) {
-                const a = y * n + x, b = a + 1, c = a + n, d = c + 1;
-                idx.push(a, c, b, b, c, d);
-            }
-        }
-        const heights = new Float32Array(verts); // foreground mask 0..1, updated per frame
-        const posBuf = gl.createBuffer();
-        const normBuf = gl.createBuffer();
-        const heightBuf = gl.createBuffer();
-        const uvBuf = gl.createBuffer();
-        gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf);
-        gl.bufferData(gl.ARRAY_BUFFER, uvs, gl.STATIC_DRAW);
-        const idxBuf = gl.createBuffer();
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
-        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(idx), gl.STATIC_DRAW);
-        // Spatial Room & Camera Frustum Geometry:
-        // Physical sensor positioned at zCam looking toward the scene (z = 0)
-        const zCam = 2.4;
-        const y0 = -spanH / 2; // Room floor level
-        const x0 = -spanW / 2, x1 = spanW / 2, y1 = spanH / 2;
-
-        // 1. Room Floor Grid & Back Wall (Subtle slate cyber grid)
-        const roomBase = [];
-        const flW = spanW * 0.95;
-        const zBack = -0.55;
-        const zFront = zCam + 0.55;
-        const step = 0.20;
-
-        // Extended floor grid lines along Z
-        for (let x = -flW; x <= flW + 1e-5; x += step) {
-            roomBase.push(x, y0, zBack, x, y0, zFront);
-        }
-        // Extended floor grid lines along X
-        for (let z = zBack; z <= zFront + 1e-5; z += step) {
-            roomBase.push(-flW, y0, z, flW, y0, z);
-        }
-
-        // Room Back Wall grid at z = zBack
-        for (let x = -flW; x <= flW + 1e-5; x += step * 2) {
-            roomBase.push(x, y0, zBack, x, y0 + spanH * 1.15, zBack);
-        }
-        for (let y = y0; y <= y0 + spanH * 1.15 + 1e-5; y += step * 2) {
-            roomBase.push(-flW, y, zBack, flW, y, zBack);
-        }
-
-        // 2. Cyber spatial accents (Camera body, tripod, optical frustum beams, range rings)
-        const roomAccents = [];
-
-        // Distance range arcs on the floor centered on camera (0.8m, 1.6m, 2.4m)
-        const arcRadii = [0.8, 1.6, 2.4];
-        for (let r = 0; r < arcRadii.length; r++) {
-            const rad = arcRadii[r];
-            const segs = 32;
-            for (let s = 0; s < segs; s++) {
-                const a1 = (s / segs) * Math.PI;
-                const a2 = ((s + 1) / segs) * Math.PI;
-                const px1 = rad * Math.cos(a1), pz1 = zCam - rad * Math.sin(a1);
-                const px2 = rad * Math.cos(a2), pz2 = zCam - rad * Math.sin(a2);
-                if (pz1 >= zBack && pz2 >= zBack && Math.abs(px1) <= flW && Math.abs(px2) <= flW) {
-                    roomAccents.push(px1, y0, pz1, px2, y0, pz2);
-                }
-            }
-        }
-
-        // Distance marks along center line on floor
-        for (let dz = 0.5; dz <= 2.0; dz += 0.5) {
-            const zTick = zCam - dz;
-            roomAccents.push(-0.08, y0, zTick, 0.08, y0, zTick);
-        }
-
-        // Physical camera on tripod at zCam
-        const zLens = zCam - 0.08;
-        // Tripod legs and post
-        roomAccents.push(0, y0, zCam, 0, 0, zCam); // vertical post
-        roomAccents.push(0, y0, zCam + 0.32, 0, 0, zCam); // rear leg
-        roomAccents.push(-0.24, y0, zCam - 0.16, 0, 0, zCam); // front-left leg
-        roomAccents.push(0.24, y0, zCam - 0.16, 0, 0, zCam); // front-right leg
-
-        // Camera body box at (0, 0, zCam)
-        const bw = 0.10, bh = 0.06, bd = 0.14;
-        // Front face
-        roomAccents.push(-bw, -bh, zCam, bw, -bh, zCam);
-        roomAccents.push(bw, -bh, zCam, bw, bh, zCam);
-        roomAccents.push(bw, bh, zCam, -bw, bh, zCam);
-        roomAccents.push(-bw, bh, zCam, -bw, -bh, zCam);
-        // Back face
-        roomAccents.push(-bw, -bh, zCam + bd, bw, -bh, zCam + bd);
-        roomAccents.push(bw, -bh, zCam + bd, bw, bh, zCam + bd);
-        roomAccents.push(bw, bh, zCam + bd, -bw, bh, zCam + bd);
-        roomAccents.push(-bw, bh, zCam + bd, -bw, -bh, zCam + bd);
-        // Connecting edges
-        roomAccents.push(-bw, -bh, zCam, -bw, -bh, zCam + bd);
-        roomAccents.push(bw, -bh, zCam, bw, -bh, zCam + bd);
-        roomAccents.push(bw, bh, zCam, bw, bh, zCam + bd);
-        roomAccents.push(-bw, bh, zCam, -bw, bh, zCam + bd);
-
-        // Cylindrical lens ring
-        const lr = 0.05;
-        for (let s = 0; s < 12; s++) {
-            const a1 = (s / 12) * Math.PI * 2;
-            const a2 = ((s + 1) / 12) * Math.PI * 2;
-            roomAccents.push(lr * Math.cos(a1), lr * Math.sin(a1), zLens, lr * Math.cos(a2), lr * Math.sin(a2), zLens);
-        }
-
-        // 4 Pyramidal Frustum Beams from lens out to frame corners at z = 0
-        roomAccents.push(0, 0, zLens, x0, y1, 0); // top-left
-        roomAccents.push(0, 0, zLens, x1, y1, 0); // top-right
-        roomAccents.push(0, 0, zLens, x0, y0, 0); // bottom-left
-        roomAccents.push(0, 0, zLens, x1, y0, 0); // bottom-right
-
-        // Intermediate frustum cross-section rectangle at z = zCam - 0.7
-        const tNear = 0.7 / zCam;
-        const nw = spanW * tNear, nh = spanH * tNear;
-        const nz = zCam - 0.7;
-        roomAccents.push(-nw / 2, nh / 2, nz, nw / 2, nh / 2, nz);
-        roomAccents.push(nw / 2, nh / 2, nz, nw / 2, -nh / 2, nz);
-        roomAccents.push(nw / 2, -nh / 2, nz, -nw / 2, -nh / 2, nz);
-        roomAccents.push(-nw / 2, -nh / 2, nz, -nw / 2, nh / 2, nz);
-
-        // 4 Viewfinder corner brackets at the perimeter of the hologram frame at z = 0
-        const tick = 0.18;
-        // Top-left
-        roomAccents.push(x0, y1, 0, x0 + tick, y1, 0);
-        roomAccents.push(x0, y1, 0, x0, y1 - tick, 0);
-        // Top-right
-        roomAccents.push(x1, y1, 0, x1 - tick, y1, 0);
-        roomAccents.push(x1, y1, 0, x1, y1 - tick, 0);
-        // Bottom-left
-        roomAccents.push(x0, y0, 0, x0 + tick, y0, 0);
-        roomAccents.push(x0, y0, 0, x0, y0 + tick, 0);
-        // Bottom-right
-        roomAccents.push(x1, y0, 0, x1 - tick, y0, 0);
-        roomAccents.push(x1, y0, 0, x1, y0 + tick, 0);
-
-        // Combine into room buffer
-        const room = roomBase.concat(roomAccents);
-        const roomBuf = gl.createBuffer();
-        gl.bindBuffer(gl.ARRAY_BUFFER, roomBuf);
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(room), gl.STATIC_DRAW);
-        return {
-            n, verts, positions, normals, heights, uvs, posBuf, normBuf, heightBuf, uvBuf, idxBuf,
-            count: idx.length, spanW, spanH, roomBuf,
-            gridCount: roomBase.length / 3,
-            accentCount: roomAccents.length / 3,
-            roomCount: room.length / 3
-        };
-    }
-
-    // Bilinear sample of the JEPA field (grid_w x grid_h) at normalized (u, v).
-    function worldSampleField(f, u, v) {
-        const gw = f.grid_w, gh = f.grid_h;
-        const fx = u * (gw - 1), fy = v * (gh - 1);
-        const x0 = Math.floor(fx), y0 = Math.floor(fy);
-        const x1 = Math.min(x0 + 1, gw - 1), y1 = Math.min(y0 + 1, gh - 1);
-        const tx = fx - x0, ty = fy - y0;
-        const h = f.heights;
-        const h00 = h[y0 * gw + x0], h10 = h[y0 * gw + x1];
-        const h01 = h[y1 * gw + x0], h11 = h[y1 * gw + x1];
-        return (h00 * (1 - tx) + h10 * tx) * (1 - ty) + (h01 * (1 - tx) + h11 * tx) * ty;
-    }
-
-    // Which per-patch field feeds the relief: the observed relief, or the model's
-    // predicted-next relief when the user asks to see what it expects.
-    function worldReliefField(f) {
-        if (world.mode === "predict" && f.predicted_heights && f.predicted_heights.length === f.heights.length) {
-            return f.predicted_heights;
-        }
-        return f.heights;
-    }
 
     function worldCatmull(p0, p1, p2, p3, t) {
         return 0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t
@@ -5544,162 +5136,293 @@
         return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
     }
 
-    // JEPA separates foreground from background semantically, so the reconstruction
-    // should not be one continuously bent sheet: everything the model reads as
-    // background stays on a flat wall, and only the foreground is extruded, with steep
-    // sides, so it reads as a solid object standing in front of the wall.
-    const WORLD_FG_LO = 0.42;
-    const WORLD_FG_HI = 0.84;
-    const WORLD_EXTRUSION = 0.85;
-
-    function worldSmoothstep(a, b, x) {
-        const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
-        return t * t * (3 - 2 * t);
+    // Which per-patch field the overlay shows for the current mode, with the colour
+    // ramp that goes with it. Returns null when the mode draws no overlay.
+    function worldOverlayField(f) {
+        if (world.mode === "salience") {
+            return { data: f.heights, ramp: [[56, 189, 248], [250, 204, 21]], floor: 0.35 };
+        }
+        if (world.mode === "surprise") {
+            const m = f.surprise_map;
+            if (!m || m.length !== f.grid_w * f.grid_h) return null;
+            return { data: m, ramp: [[251, 146, 60], [239, 68, 68]], floor: 0.18 };
+        }
+        if (world.mode === "predict") {
+            const p = f.predicted_heights;
+            if (!p || p.length !== f.grid_w * f.grid_h) return null;
+            return { data: p, ramp: [[167, 139, 250], [245, 158, 11]], floor: 0.35 };
+        }
+        return null;
     }
 
-    function worldUpdateMesh() {
-        const f = world.field, m = world.mesh;
-        if (!f || !m) return;
-        const relief = worldReliefField(f);
-        const n = m.n, pos = m.positions, hattr = m.heights;
-        for (let y = 0; y < n; y++) {
-            for (let x = 0; x < n; x++) {
-                const i = y * n + x;
-                const u = x / (n - 1), v = y / (n - 1);
-                const raw = worldSampleSmooth(relief, f.grid_w, f.grid_h, u, v);
-                const h = worldSmoothstep(WORLD_FG_LO, WORLD_FG_HI, raw);
-                hattr[i] = h;
-                pos[i * 3 + 2] = h * world.heightScale * WORLD_EXTRUSION;
+    function worldInitCanvases(frameCanvas, latentCanvas) {
+        world.frameCanvas = frameCanvas;
+        world.frameCtx = frameCanvas ? frameCanvas.getContext("2d") : null;
+        world.latentCanvas = latentCanvas;
+        world.latentCtx = latentCanvas ? latentCanvas.getContext("2d") : null;
+        world.overlayCanvas = document.createElement("canvas");
+        world.img = new Image();
+        world.img.onload = () => { world.imgReady = true; };
+        world.img.onerror = () => { world.imgReady = false; };
+        return !!(world.frameCtx && world.latentCtx);
+    }
+
+    // Accept a new frame from the poller.
+    function worldOnField(f) {
+        world.field = f;
+        if (f.aspect) world.aspect = f.aspect;
+        if (f.image && f.image !== world.pendingSrc) {
+            world.pendingSrc = f.image;
+            world.img.src = f.image;
+        }
+        if (Array.isArray(f.latent)) {
+            world.trail.push(f.latent);
+            if (world.trail.length > WORLD_TRAIL) world.trail.shift();
+        }
+    }
+
+    // --- Camera panel: the real frame, flat, with the per-patch field on top -------
+
+    function worldDrawFrame() {
+        const ctx = world.frameCtx;
+        if (!ctx) return;
+        const cv = world.frameCanvas;
+        const W = cv.width, H = cv.height;
+        ctx.clearRect(0, 0, W, H);
+        ctx.fillStyle = "#06080c";
+        ctx.fillRect(0, 0, W, H);
+        const f = world.field;
+        if (!f || !world.imgReady) {
+            ctx.fillStyle = "rgba(148,163,184,0.55)";
+            ctx.font = "13px ui-sans-serif, system-ui, sans-serif";
+            ctx.textAlign = "center";
+            ctx.fillText("Start the camera to begin.", W / 2, H / 2);
+            ctx.textAlign = "left";
+            return;
+        }
+
+        // Fit the frame inside the canvas without distorting it.
+        const ar = world.aspect || (world.img.width / Math.max(1, world.img.height)) || 1;
+        let dw = W, dh = Math.round(W / ar);
+        if (dh > H) { dh = H; dw = Math.round(H * ar); }
+        const dx = Math.round((W - dw) / 2), dy = Math.round((H - dh) / 2);
+        ctx.drawImage(world.img, dx, dy, dw, dh);
+
+        const overlay = worldOverlayField(f);
+        if (overlay) {
+            worldDrawOverlay(ctx, overlay, f, dx, dy, dw, dh);
+        }
+        if (world.showGrid) {
+            ctx.strokeStyle = "rgba(148,163,184,0.16)";
+            ctx.lineWidth = 1;
+            for (let i = 1; i < f.grid_w; i++) {
+                const x = dx + (i / f.grid_w) * dw;
+                ctx.beginPath(); ctx.moveTo(x, dy); ctx.lineTo(x, dy + dh); ctx.stroke();
+            }
+            for (let j = 1; j < f.grid_h; j++) {
+                const y = dy + (j / f.grid_h) * dh;
+                ctx.beginPath(); ctx.moveTo(dx, y); ctx.lineTo(dx + dw, y); ctx.stroke();
             }
         }
-        // Normals from neighbouring heights (finite differences).
-        const norm = m.normals;
-        const stepX = (m.spanW || 1.8) / (n - 1);
-        const stepY = (m.spanH || 1.8) / (n - 1);
-        for (let y = 0; y < n; y++) {
-            for (let x = 0; x < n; x++) {
-                const i = y * n + x;
-                const zl = pos[(y * n + Math.max(0, x - 1)) * 3 + 2];
-                const zr = pos[(y * n + Math.min(n - 1, x + 1)) * 3 + 2];
-                const zd = pos[(Math.max(0, y - 1) * n + x) * 3 + 2];
-                const zu = pos[(Math.min(n - 1, y + 1) * n + x) * 3 + 2];
-                const nx = (zl - zr) / (2 * stepX);
-                const ny = (zd - zu) / (2 * stepY);
-                const nz = 1.0;
-                const len = Math.hypot(nx, ny, nz) || 1;
-                norm[i * 3] = nx / len; norm[i * 3 + 1] = ny / len; norm[i * 3 + 2] = nz / len;
-            }
-        }
-        const gl = world.gl;
-        gl.bindBuffer(gl.ARRAY_BUFFER, m.posBuf);
-        gl.bufferData(gl.ARRAY_BUFFER, pos, gl.DYNAMIC_DRAW);
-        gl.bindBuffer(gl.ARRAY_BUFFER, m.normBuf);
-        gl.bufferData(gl.ARRAY_BUFFER, m.normals, gl.DYNAMIC_DRAW);
-        gl.bindBuffer(gl.ARRAY_BUFFER, m.heightBuf);
-        gl.bufferData(gl.ARRAY_BUFFER, m.heights, gl.DYNAMIC_DRAW);
+        if (world.mode === "surprise") worldMarkHotspot(ctx, f, dx, dy, dw, dh);
+
+        // Frame border, brightened while the sentinel is alarming.
+        ctx.strokeStyle = world.alarming ? "rgba(239,68,68,0.85)" : "rgba(148,163,184,0.22)";
+        ctx.lineWidth = world.alarming ? 3 : 1;
+        ctx.strokeRect(dx + 0.5, dy + 0.5, dw - 1, dh - 1);
     }
 
-    function worldUploadTexture() {
-        if (!world.pendingImg || !world.gl) return;
-        const gl = world.gl;
-        gl.bindTexture(gl.TEXTURE_2D, world.tex);
-        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-        try {
-            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, world.pendingImg);
-            world.texReady = true;
-        } catch (e) {
-            console.warn("world texture upload failed", e);
+    // The field is one value per ViT patch, so it is painted at grid resolution into
+    // an offscreen canvas and scaled up with the browser's own smoothing. Drawing it
+    // per pixel in JavaScript would cost far more for the same result.
+    function worldDrawOverlay(ctx, overlay, f, dx, dy, dw, dh) {
+        const gw = f.grid_w, gh = f.grid_h;
+        const oc = world.overlayCanvas;
+        oc.width = gw; oc.height = gh;
+        const octx = oc.getContext("2d");
+        const img = octx.createImageData(gw, gh);
+        const [c0, c1] = overlay.ramp;
+        for (let i = 0; i < gw * gh; i++) {
+            const v = Math.max(0, Math.min(1, overlay.data[i] || 0));
+            // Below the floor the patch is ordinary: leave the real frame untouched.
+            const t = v <= overlay.floor ? 0 : (v - overlay.floor) / (1 - overlay.floor);
+            const s = t * t * (3 - 2 * t);
+            img.data[i * 4] = Math.round(c0[0] + (c1[0] - c0[0]) * s);
+            img.data[i * 4 + 1] = Math.round(c0[1] + (c1[1] - c0[1]) * s);
+            img.data[i * 4 + 2] = Math.round(c0[2] + (c1[2] - c0[2]) * s);
+            img.data[i * 4 + 3] = Math.round(255 * s * world.overlayAlpha);
         }
-        world.pendingImg = null;
+        octx.putImageData(img, 0, 0);
+        ctx.save();
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        ctx.globalCompositeOperation = "screen";
+        ctx.drawImage(oc, dx, dy, dw, dh);
+        ctx.restore();
     }
 
-    function worldRender() {
-        const gl = world.gl, m = world.mesh;
-        if (!gl || !m) return;
-        worldUploadTexture();
-        const canvas = gl.canvas;
-        gl.viewport(0, 0, canvas.width, canvas.height);
-        gl.clearColor(0.03, 0.04, 0.06, 1);
-        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-        if (!world.field) return;
+    // Ring the patch where the prediction is worst, so the operator knows where to
+    // look rather than only that something happened.
+    function worldMarkHotspot(ctx, f, dx, dy, dw, dh) {
+        const m = f.surprise_map;
+        if (!m || m.length !== f.grid_w * f.grid_h) return;
+        let bi = -1, bv = 0.2;
+        for (let i = 0; i < m.length; i++) if (m[i] > bv) { bv = m[i]; bi = i; }
+        if (bi < 0) return;
+        const gx = (bi % f.grid_w + 0.5) / f.grid_w, gy = (Math.floor(bi / f.grid_w) + 0.5) / f.grid_h;
+        const cx = dx + gx * dw, cy = dy + gy * dh;
+        const r = Math.max(18, Math.min(dw, dh) * 0.07);
+        const pulse = 0.55 + 0.45 * Math.sin(Date.now() * 0.006);
+        ctx.strokeStyle = `rgba(239,68,68,${0.45 + 0.4 * pulse})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(cx, cy, r * (1 + 0.35 * pulse), 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(239,68,68,${0.28 * (1 - pulse)})`;
+        ctx.stroke();
+    }
+
+    // --- Latent panel: the scene as a point in the predictor's own space ----------
+
+    function worldRotate(p, yaw, pitch) {
+        const cy = Math.cos(yaw), sy = Math.sin(yaw);
+        const x = p[0] * cy - p[2] * sy;
+        const z = p[0] * sy + p[2] * cy;
+        const cp = Math.cos(pitch), sp = Math.sin(pitch);
+        return [x, p[1] * cp - z * sp, p[1] * sp + z * cp];
+    }
+
+    function worldDrawLatent() {
+        const ctx = world.latentCtx;
+        if (!ctx) return;
+        const cv = world.latentCanvas;
+        const W = cv.width, H = cv.height;
+        ctx.clearRect(0, 0, W, H);
+        ctx.fillStyle = "#06080c";
+        ctx.fillRect(0, 0, W, H);
+        const f = world.field;
+        if (!f || !Array.isArray(f.latent)) {
+            ctx.fillStyle = "rgba(148,163,184,0.5)";
+            ctx.font = "12px ui-sans-serif, system-ui, sans-serif";
+            ctx.textAlign = "center";
+            ctx.fillText("No latent state yet.", W / 2, H / 2);
+            ctx.textAlign = "left";
+            return;
+        }
+
+        const mem = Array.isArray(f.memory_latent) ? f.memory_latent : [];
+        const snaps = Array.isArray(f.snapshot_latent) ? f.snapshot_latent : [];
+        const pred = Array.isArray(f.predicted_latent) ? f.predicted_latent : f.latent;
+        const all = [f.latent, pred].concat(mem, snaps, world.trail);
+
+        // Centre and scale follow the cloud, but slowly, so the view does not jump
+        // every time a new state is learned.
+        const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+        for (const p of all) {
+            for (let k = 0; k < 3; k++) { if (p[k] < lo[k]) lo[k] = p[k]; if (p[k] > hi[k]) hi[k] = p[k]; }
+        }
+        const centre = [0, 1, 2].map((k) => (lo[k] + hi[k]) / 2);
+        const extent = Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2], 1e-3);
+        const targetScale = (Math.min(W, H) * 0.34) / (extent / 2);
+        if (world.latentScale == null) { world.latentScale = targetScale; world.latentCentre = centre; }
+        world.latentScale += (targetScale - world.latentScale) * 0.05;
+        for (let k = 0; k < 3; k++) world.latentCentre[k] += (centre[k] - world.latentCentre[k]) * 0.05;
+
         const o = world.orbit;
-        const target = [0, 0, 0.6];
-        const eye = [
-            target[0] + o.dist * Math.cos(o.pitch) * Math.sin(o.yaw),
-            target[1] + o.dist * Math.sin(o.pitch),
-            target[2] + o.dist * Math.cos(o.pitch) * Math.cos(o.yaw)
-        ];
-        const view = m4lookAt(eye, target, [0, 1, 0]);
-        const proj = m4perspective(0.8, canvas.width / canvas.height, 0.05, 30);
-        const mvp = m4multiply(proj, view);
-        const model = m4identity();
-        gl.useProgram(world.program);
-        gl.uniformMatrix4fv(world.loc.mvp, false, mvp);
-        gl.uniformMatrix4fv(world.loc.model, false, model);
-        gl.uniform1f(world.loc.shade, world.shade ? 1 : 0);
-        const modeVal = world.mode === "depth" ? 1 : (world.mode === "surprise" ? 2 : (world.mode === "predict" ? 4 : 0));
-        gl.uniform1f(world.loc.mode, modeVal);
-        const nowSec = (Date.now() % 1000000) * 0.001;
-        gl.uniform1f(world.loc.time, nowSec);
-        gl.uniform3f(world.loc.viewPos, eye[0], eye[1], eye[2]);
-        gl.uniform1f(world.loc.holoGlow, world.holoGlow != null ? world.holoGlow : 1.0);
-        gl.uniform1f(world.loc.wireframe, world.wireframe ? 1.0 : 0.0);
-        gl.uniform1f(world.loc.isPoints, world.renderStyle === "points" ? 1.0 : 0.0);
-        gl.uniform1f(world.loc.pointSize, world.pointSize || 4.5);
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, world.tex);
-        gl.uniform1i(world.loc.tex, 0);
-        gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D, world.surpriseTex);
-        gl.uniform1i(world.loc.surprise, 1);
-        gl.bindBuffer(gl.ARRAY_BUFFER, m.posBuf);
-        gl.enableVertexAttribArray(world.loc.pos);
-        gl.vertexAttribPointer(world.loc.pos, 3, gl.FLOAT, false, 0, 0);
-        gl.bindBuffer(gl.ARRAY_BUFFER, m.normBuf);
-        gl.enableVertexAttribArray(world.loc.normal);
-        gl.vertexAttribPointer(world.loc.normal, 3, gl.FLOAT, false, 0, 0);
-        gl.bindBuffer(gl.ARRAY_BUFFER, m.uvBuf);
-        gl.enableVertexAttribArray(world.loc.uv);
-        gl.vertexAttribPointer(world.loc.uv, 2, gl.FLOAT, false, 0, 0);
-        gl.bindBuffer(gl.ARRAY_BUFFER, m.heightBuf);
-        gl.enableVertexAttribArray(world.loc.height);
-        gl.vertexAttribPointer(world.loc.height, 1, gl.FLOAT, false, 0, 0);
+        const S = world.latentScale, C = world.latentCentre;
+        const project = (p) => {
+            const r = worldRotate([p[0] - C[0], p[1] - C[1], p[2] - C[2]], o.yaw, o.pitch);
+            return { x: W / 2 + r[0] * S, y: H / 2 - r[1] * S, z: r[2] };
+        };
 
-        if (world.renderStyle === "points") {
-            gl.drawArrays(gl.POINTS, 0, m.verts);
-        } else {
-            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, m.idxBuf);
-            gl.drawElements(gl.TRIANGLES, m.count, gl.UNSIGNED_SHORT, 0);
+        worldDrawLatentCage(ctx, project, C, extent);
+
+        // Trail: where the scene has been over the last few seconds.
+        if (world.trail.length > 1) {
+            ctx.strokeStyle = "rgba(56,189,248,0.30)";
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            world.trail.forEach((p, i) => {
+                const s = project(p);
+                if (i === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
+            });
+            ctx.stroke();
         }
 
-        // Cyber room stage: floor grid + back wall + physical camera on tripod + optical frustum
-        if (m.roomBuf && m.roomCount) {
-            gl.disableVertexAttribArray(world.loc.uv);
-            gl.disableVertexAttribArray(world.loc.normal);
-            gl.disableVertexAttribArray(world.loc.height);
-            gl.uniform1f(world.loc.mode, 3);
-            gl.bindBuffer(gl.ARRAY_BUFFER, m.roomBuf);
-            gl.vertexAttribPointer(world.loc.pos, 3, gl.FLOAT, false, 0, 0);
+        // Everything drawn back to front so depth reads correctly.
+        const items = [];
+        mem.forEach((p) => items.push({ p, kind: "mem" }));
+        snaps.forEach((p, i) => items.push({ p, kind: "snap", label: (f.snapshots || [])[i] }));
+        items.push({ p: pred, kind: "pred" });
+        items.push({ p: f.latent, kind: "now" });
+        items.forEach((it) => { it.s = project(it.p); });
+        items.sort((a, b) => a.s.z - b.s.z);
 
-            // Room floor grid and back wall (dark slate)
-            gl.uniform3f(world.loc.solid, 0.08, 0.13, 0.20);
-            gl.drawArrays(gl.LINES, 0, m.gridCount);
+        // The expectation vector: from where the scene is, to where the predictor
+        // thinks it is going. Its length on screen is the prediction, not the error;
+        // the error is how far the next observed point lands from the ring.
+        const sNow = project(f.latent), sPred = project(pred);
+        ctx.strokeStyle = "rgba(245,158,11,0.75)";
+        ctx.lineWidth = 1.8;
+        ctx.beginPath(); ctx.moveTo(sNow.x, sNow.y); ctx.lineTo(sPred.x, sPred.y); ctx.stroke();
 
-            // The camera body, tripod, frustum beams and range arcs explain where the
-            // view comes from, which is useful while reading a diagnostic map and pure
-            // clutter across the realistic view, where they cross the scene itself.
-            if (world.mode !== "shaded") {
-                gl.uniform3f(world.loc.solid, 0.22, 0.78, 1.0);
-                gl.drawArrays(gl.LINES, m.gridCount, m.accentCount);
+        for (const it of items) {
+            const fade = 0.55 + 0.45 * (1 - Math.min(1, Math.abs(it.s.z) / (extent * 0.6 + 1e-3)));
+            if (it.kind === "mem") {
+                ctx.fillStyle = `rgba(148,163,184,${0.38 * fade})`;
+                ctx.beginPath(); ctx.arc(it.s.x, it.s.y, 3.2, 0, Math.PI * 2); ctx.fill();
+            } else if (it.kind === "snap") {
+                ctx.fillStyle = `rgba(56,189,248,${0.9 * fade})`;
+                ctx.beginPath(); ctx.arc(it.s.x, it.s.y, 4.6, 0, Math.PI * 2); ctx.fill();
+                if (it.label) {
+                    ctx.fillStyle = "rgba(226,232,240,0.78)";
+                    ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
+                    ctx.fillText(it.label, it.s.x + 8, it.s.y + 3);
+                }
+            } else if (it.kind === "pred") {
+                ctx.strokeStyle = "rgba(245,158,11,0.95)";
+                ctx.lineWidth = 1.8;
+                ctx.beginPath(); ctx.arc(it.s.x, it.s.y, 6.5, 0, Math.PI * 2); ctx.stroke();
+            } else {
+                const glow = ctx.createRadialGradient(it.s.x, it.s.y, 0, it.s.x, it.s.y, 16);
+                glow.addColorStop(0, "rgba(56,189,248,0.55)");
+                glow.addColorStop(1, "rgba(56,189,248,0)");
+                ctx.fillStyle = glow;
+                ctx.beginPath(); ctx.arc(it.s.x, it.s.y, 16, 0, Math.PI * 2); ctx.fill();
+                ctx.fillStyle = "#e0f2fe";
+                ctx.beginPath(); ctx.arc(it.s.x, it.s.y, 5, 0, Math.PI * 2); ctx.fill();
             }
+        }
+
+        ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
+        ctx.fillStyle = "rgba(148,163,184,0.65)";
+        ctx.fillText(`${mem.length} remembered  ·  drag to rotate`, 10, H - 10);
+    }
+
+    // A faint box around the cloud. Without a fixed reference the rotation is hard to
+    // read, and the box is honest: it is just the bounding volume of the points.
+    function worldDrawLatentCage(ctx, project, C, extent) {
+        const h = extent / 2;
+        const corners = [];
+        for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) {
+            corners.push(project([C[0] + sx * h, C[1] + sy * h, C[2] + sz * h]));
+        }
+        const edges = [[0, 1], [0, 2], [0, 4], [1, 3], [1, 5], [2, 3], [2, 6], [3, 7], [4, 5], [4, 6], [5, 7], [6, 7]];
+        ctx.strokeStyle = "rgba(100,116,139,0.20)";
+        ctx.lineWidth = 1;
+        for (const [a, b] of edges) {
+            ctx.beginPath();
+            ctx.moveTo(corners[a].x, corners[a].y);
+            ctx.lineTo(corners[b].x, corners[b].y);
+            ctx.stroke();
         }
     }
 
     function worldAnimate() {
         world.raf = null;
         if (state.activeSection !== "world") return;
-        if (world.spin && !world.orbit.dragging) world.orbit.yaw += 0.003;
-        worldRender();
+        if (world.spin && !world.orbit.dragging) world.orbit.yaw += 0.004;
+        worldDrawFrame();
+        worldDrawLatent();
         world.raf = requestAnimationFrame(worldAnimate);
     }
 
@@ -5710,18 +5433,7 @@
             const res = await apiFetch("/api/world/frame");
             if (res.ok) {
                 const f = await res.json();
-                world.field = f;
-                if (f.aspect && Math.abs((world.aspect || 1) - f.aspect) > 0.01 && world.gl) {
-                    world.aspect = f.aspect;
-                    world.mesh = worldBuildMesh(world.gl, WORLD_RES, world.aspect);
-                }
-                worldUpdateMesh();
-                if (f.image) {
-                    const img = new Image();
-                    img.onload = () => { world.pendingImg = img; };
-                    img.src = f.image;
-                }
-                worldUploadSurprise(f);
+                worldOnField(f);
                 worldUpdateMetrics(f);
                 const chip = document.getElementById("world-chip");
                 const ct = document.getElementById("world-chip-text");
@@ -5730,7 +5442,7 @@
                 const grid = document.getElementById("world-grid-text");
                 if (grid) grid.textContent = `${f.grid_w} x ${f.grid_h} patches`;
                 const readout = document.getElementById("world-readout");
-                if (readout) readout.textContent = `${f.model}: relief from ${f.grid_w * f.grid_h} patches, textured with the live frame`;
+                if (readout) readout.textContent = `${f.model}: ${f.grid_w * f.grid_h} patch embeddings per frame, ${f.known_states} states remembered`;
                 const mt = document.getElementById("world-model-text");
                 if (mt) mt.textContent = f.model;
             } else {
@@ -5849,22 +5561,11 @@
 
     function worldSetMode(mode) {
         world.mode = mode;
-        world.shade = mode === "shaded" || mode === "predict";
         document.querySelectorAll(".world-mode-tab").forEach((b) => {
             const on = b.dataset.mode === mode;
             b.classList.toggle("active", on);
             b.setAttribute("aria-selected", on ? "true" : "false");
         });
-        if (world.field) worldUpdateMesh();
-    }
-
-    function worldSetView(name) {
-        if (name === "iso") { world.orbit.yaw = 0.55; world.orbit.pitch = 0.30; world.orbit.dist = 3.2; }
-        else if (name === "profile") { world.orbit.yaw = 1.30; world.orbit.pitch = 0.10; world.orbit.dist = 3.0; }
-        else if (name === "face") { world.orbit.yaw = 0.13; world.orbit.pitch = 0.06; world.orbit.dist = 2.25; }
-        document.querySelectorAll("#btn-world-view-iso,#btn-world-view-profile,#btn-world-view-face").forEach((b) => b.classList.remove("active"));
-        const active = document.getElementById(`btn-world-view-${name}`);
-        if (active) active.classList.add("active");
     }
 
     function worldDrawSpark() {
@@ -5973,13 +5674,12 @@
     }
 
     function setupWorld() {
+        const frameCanvas = document.getElementById("world-frame-canvas");
         const canvas = document.getElementById("world-canvas");
-        if (!canvas) return;
-        try {
-            if (!worldInitGl(canvas)) notify("WebGL is not available in this window; the world view cannot render.", "warning", 8000);
-        } catch (e) {
-            notify(`WebGL init failed: ${e.message}`, "error");
-        }
+        if (!frameCanvas || !canvas) return;
+        worldInitCanvases(frameCanvas, canvas);
+        // Only the latent panel rotates. The camera panel is a flat frame and there is
+        // nothing to orbit around.
         canvas.addEventListener("pointerdown", (e) => {
             world.orbit.dragging = true; world.orbit.lastX = e.clientX; world.orbit.lastY = e.clientY;
             canvas.setPointerCapture(e.pointerId);
@@ -5993,10 +5693,6 @@
         const stop = () => { world.orbit.dragging = false; };
         canvas.addEventListener("pointerup", stop);
         canvas.addEventListener("pointercancel", stop);
-        canvas.addEventListener("wheel", (e) => {
-            e.preventDefault();
-            world.orbit.dist = Math.max(0.9, Math.min(9, world.orbit.dist * (e.deltaY > 0 ? 1.1 : 0.9)));
-        }, { passive: false });
 
         const bind = (id, fn) => { const n = document.getElementById(id); if (n) n.addEventListener("click", fn); };
         bind("btn-world-camera", async () => {
@@ -6007,9 +5703,6 @@
         document.querySelectorAll(".world-mode-tab").forEach((b) => {
             b.addEventListener("click", () => worldSetMode(b.dataset.mode));
         });
-        bind("btn-world-view-iso", () => worldSetView("iso"));
-        bind("btn-world-view-profile", () => worldSetView("profile"));
-        bind("btn-world-view-face", () => worldSetView("face"));
         bind("btn-world-reset", async () => {
             try { await apiFetch("/api/world/reset", { method: "POST" }); world.spark = []; notify("World model reset: relearning the scene.", "info", 2500); }
             catch (e) { notify(`Reset failed: ${e.message}`, "error"); }
@@ -6040,48 +5733,21 @@
         });
         const spin = document.getElementById("toggle-world-spin");
         if (spin) { world.spin = spin.checked; spin.addEventListener("change", () => { world.spin = spin.checked; }); }
-        const hs = document.getElementById("slider-world-height");
-        if (hs) hs.addEventListener("input", () => {
-            world.heightScale = parseFloat(hs.value);
-            const v = document.getElementById("val-world-height"); if (v) v.textContent = `${world.heightScale.toFixed(1)}x`;
-            worldUpdateMesh();
+        const oa = document.getElementById("slider-world-overlay");
+        if (oa) oa.addEventListener("input", () => {
+            world.overlayAlpha = parseFloat(oa.value);
+            const v = document.getElementById("val-world-overlay"); if (v) v.textContent = `${Math.round(world.overlayAlpha * 100)}%`;
         });
+        const pg = document.getElementById("toggle-world-patchgrid");
+        if (pg) { world.showGrid = pg.checked; pg.addEventListener("change", () => { world.showGrid = pg.checked; }); }
         const rate = document.getElementById("slider-world-rate");
         if (rate) rate.addEventListener("input", () => {
             world.rateHz = parseInt(rate.value, 10);
             const v = document.getElementById("val-world-rate"); if (v) v.textContent = `${world.rateHz} Hz`;
             if (world.pollTimer) worldStartPoll();
         });
-        const glow = document.getElementById("slider-world-glow");
-        if (glow) glow.addEventListener("input", () => {
-            world.holoGlow = parseFloat(glow.value);
-            const v = document.getElementById("val-world-glow"); if (v) v.textContent = `${world.holoGlow.toFixed(1)}x`;
-        });
-        const wire = document.getElementById("toggle-world-wireframe");
-        if (wire) {
-            world.wireframe = wire.checked;
-            wire.addEventListener("change", () => { world.wireframe = wire.checked; });
-        }
-        function worldSetStyle(style) {
-            world.renderStyle = style;
-            const isPts = style === "points";
-            const btnPts = document.getElementById("btn-world-style-points");
-            const btnMesh = document.getElementById("btn-world-style-mesh");
-            if (btnPts) btnPts.classList.toggle("active", isPts);
-            if (btnMesh) btnMesh.classList.toggle("active", !isPts);
-            const ptRow = document.getElementById("row-world-point-size");
-            if (ptRow) ptRow.style.display = isPts ? "flex" : "none";
-        }
-        bind("btn-world-style-points", () => worldSetStyle("points"));
-        bind("btn-world-style-mesh", () => worldSetStyle("mesh"));
-        const ptSlider = document.getElementById("slider-world-point-size");
-        if (ptSlider) ptSlider.addEventListener("input", () => {
-            world.pointSize = parseFloat(ptSlider.value);
-            const v = document.getElementById("val-world-point-size");
-            if (v) v.textContent = `${world.pointSize.toFixed(1)}px`;
-        });
         bind("btn-api-world", () => {
-            showApiDialog("Reconstruct the scene", "Inference role. Embeds the current camera frame and returns, per ViT patch, a foreground relief (from JEPA's background separation) plus the aligned frame as a texture. The UI drapes the frame over the relief. Poll it while the camera runs.",
+            showApiDialog("Read the scene", "Inference role. Embeds the current camera frame and returns, per ViT patch, a foreground salience (distance to the learned background prototype) and a prediction error map, the aligned frame, and the scene as a point in the predictor's latent space together with its remembered states. The salience is semantic, not depth. Poll it while the camera runs.",
                 { method: "GET", path: "/api/world/frame" });
         });
     }

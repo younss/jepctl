@@ -48,6 +48,17 @@ pub struct SceneReport {
     pub recognized_conf: f32,
     /// Names of the saved snapshots, in save order.
     pub snapshots: Vec<String>,
+    /// The current pooled state under a fixed random projection to three dimensions.
+    /// This is an honest view of the latent space itself: unlike a per-patch relief it
+    /// claims no geometry, it is the same Johnson-Lindenstrauss projection the
+    /// predictor already works in, truncated to what a screen can show.
+    pub latent: [f32; 3],
+    /// Where the predictor expects the next state to land, same projection.
+    pub predicted_latent: [f32; 3],
+    /// Remembered states, same projection, in the order they were learned.
+    pub memory_latent: Vec<[f32; 3]>,
+    /// Named snapshots, same projection, aligned with `snapshots`.
+    pub snapshot_latent: Vec<[f32; 3]>,
 }
 
 /// Per-dimension online AR(1) predictor `x_next = a * x + c`, fit with decayed least
@@ -188,6 +199,21 @@ impl WorldScenePredictor {
         out
     }
 
+    /// The first three coordinates of `project`, computed without building the whole
+    /// 48-dimensional vector. Used for the display projection of the recognition
+    /// memory, which would otherwise cost a full projection per remembered state and
+    /// per frame.
+    fn project3(&self, pooled_unit: &[f32]) -> [f32; 3] {
+        let mut out = [0.0f32; 3];
+        for (i, &u) in pooled_unit.iter().enumerate() {
+            let base = i * PROJ_DIM;
+            for (k, o) in out.iter_mut().enumerate() {
+                *o += u * self.proj[base + k];
+            }
+        }
+        out
+    }
+
     /// Reset when the encoder (dimension) or the grid changes.
     fn ensure_shape(&mut self, dim: usize, grid_w: usize, grid_h: usize) {
         if self.dim != dim || self.grid_w != grid_w || self.grid_h != grid_h {
@@ -314,6 +340,7 @@ impl WorldScenePredictor {
         }
         self.pred_proj = Some(self.ar1.predict(&proj));
         self.pred_grid = predicted_next;
+        let latent = [proj[0], proj[1], proj[2]];
         self.prev_proj = Some(proj);
         self.prev_grid = self.last_grid.take();
         self.last_grid = Some(grid.clone());
@@ -353,6 +380,12 @@ impl WorldScenePredictor {
             recognized_label,
             recognized_conf,
             snapshots: self.snapshots.iter().map(|(n, _)| n.clone()).collect(),
+            // `proj` and `pred_proj` already live in the projected space, so their
+            // first three coordinates are exactly `project3` of the same vectors.
+            latent,
+            predicted_latent: self.pred_proj.as_ref().map(|p| [p[0], p[1], p[2]]).unwrap_or(latent),
+            memory_latent: self.memory.iter().map(|m| self.project3(m)).collect(),
+            snapshot_latent: self.snapshots.iter().map(|(_, v)| self.project3(v)).collect(),
         }
     }
 
@@ -394,6 +427,36 @@ mod tests {
 
     fn grid(vals: &[f32], dim: usize) -> Grid {
         vals.chunks(dim).map(|c| c.to_vec()).collect()
+    }
+
+    #[test]
+    fn latent_display_projection_is_consistent_with_the_memory() {
+        let mut p = WorldScenePredictor::new();
+        let dim = 4;
+        let mut base = vec![0.2f32, 0.1, 0.0, 0.3, 0.4, 0.2, 0.1, 0.0];
+        let mut last = SceneReport::default();
+        for step in 0..24 {
+            for (i, v) in base.iter_mut().enumerate() {
+                *v += 0.02 * ((i + step) % 3) as f32;
+            }
+            let g = grid(&base, dim);
+            let pooled: Vec<f32> = (0..dim).map(|k| g.iter().map(|q| q[k]).sum::<f32>()).collect();
+            last = p.step(&pooled, &g, 2, 1);
+        }
+        // One display point per remembered state, and one per named snapshot.
+        assert_eq!(last.memory_latent.len(), last.known_states);
+        assert_eq!(last.snapshot_latent.len(), last.snapshots.len());
+        // The reported point is the first three coordinates of the projection the
+        // predictor itself works in, not a separate projection that could drift.
+        let pu = unit(&p.last_pooled_unit.clone().unwrap());
+        let full = p.project(&pu);
+        assert!((full[0] - last.latent[0]).abs() < 1e-5);
+        assert!((full[1] - last.latent[1]).abs() < 1e-5);
+        assert!((full[2] - last.latent[2]).abs() < 1e-5);
+        // Every coordinate is finite, so the view never has to guard against NaN.
+        for v in last.latent.iter().chain(last.predicted_latent.iter()) {
+            assert!(v.is_finite(), "latent coordinate must be finite");
+        }
     }
 
     #[test]

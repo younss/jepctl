@@ -56,11 +56,15 @@ pub struct WorldFrame {
     pub colors: Vec<f32>,
     /// Actual average pixel colour per patch, same layout (recognisable tint).
     pub pixels: Vec<f32>,
-    /// Foreground relief per patch, `grid_w * grid_h` values in `[0, 1]`: how far the
-    /// patch is from the background prototype, smoothed. This is the geometry.
+    /// Foreground salience per patch, `grid_w * grid_h` values in `[0, 1]`: how far the
+    /// patch embedding sits from the background prototype, smoothed.
+    ///
+    /// This is **not** depth and not any other geometric quantity. It is a semantic
+    /// distance, so a poster on the far wall can score higher than a chair in front of
+    /// it. Rendering it as a displacement invites exactly the wrong reading, which is
+    /// why the interface draws it as an overlay on the flat frame instead.
     pub heights: Vec<f32>,
-    /// The camera frame as a JPEG data URI, aligned with the grid: the UI drapes it
-    /// over the relief as a texture, so the surface shows the real scene.
+    /// The camera frame as a JPEG data URI, aligned with the grid.
     pub image: String,
     /// Texture aspect ratio (width / height) so the UI mesh matches the real field of
     /// view instead of forcing a square.
@@ -84,6 +88,17 @@ pub struct WorldFrame {
     pub recognized_conf: f32,
     /// Names of the saved states.
     pub snapshots: Vec<String>,
+    // --- Latent space, projected to three dimensions for display ---
+    /// The current scene as a point in the predictor's own latent space, under a fixed
+    /// random projection to three dimensions. Unlike the per-patch salience this can
+    /// honestly be rotated: it is a real projection of a real vector space.
+    pub latent: [f32; 3],
+    /// Where the predictor expects the next frame to land, same projection.
+    pub predicted_latent: [f32; 3],
+    /// The recognition memory, same projection, in the order states were learned.
+    pub memory_latent: Vec<[f32; 3]>,
+    /// Named snapshots, same projection, aligned with `snapshots`.
+    pub snapshot_latent: Vec<[f32; 3]>,
     pub latency_ms: f64,
 }
 
@@ -229,6 +244,10 @@ pub async fn handle_world_frame(
         recognized_label: report.recognized_label,
         recognized_conf: report.recognized_conf,
         snapshots: report.snapshots,
+        latent: report.latent,
+        predicted_latent: report.predicted_latent,
+        memory_latent: report.memory_latent,
+        snapshot_latent: report.snapshot_latent,
         latency_ms,
     }))
 }

@@ -3089,6 +3089,25 @@ body.dark-theme { font-size: 13px; }
     max-height: 520px;
     object-fit: contain;
 }
+.world-latent-block {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(148, 163, 184, 0.14);
+}
+.world-latent-block canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    aspect-ratio: 12 / 5;
+    min-height: 220px;
+    max-height: 340px;
+    border-radius: 10px;
+    border: 1px solid rgba(56, 189, 248, 0.18);
+    background: #06080c;
+    cursor: grab;
+    touch-action: none;
+}
+.world-latent-block canvas:active { cursor: grabbing; }
 .world-canvas-wrap.alarm { outline: 3px solid #ef4444; outline-offset: -3px; animation: world-flash 0.8s ease-in-out infinite; border-radius: 12px; }
 @keyframes world-flash { 0%,100% { outline-color: rgba(239,68,68,0.35); } 50% { outline-color: rgba(239,68,68,1); } }
 .world-anomaly-badge {

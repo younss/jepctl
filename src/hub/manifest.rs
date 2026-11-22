@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::engine::vit::{Pooling, VitVariant};
-use crate::types::{AudioSpec, JepaError, ModelManifest, ModelModality, Normalization};
+use crate::types::{AudioFrontend, AudioSpec, JepaError, ModelManifest, ModelModality, Normalization};
 
 /// Parsable manifest file schema (Jepafile.json)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,6 +39,8 @@ pub struct JepafileConfig {
     pub audio: Option<AudioSpec>,
     #[serde(default)]
     pub pooling: Option<Pooling>,
+    #[serde(default)]
+    pub norm_eps: Option<f64>,
 }
 
 impl From<&ModelManifest> for JepafileConfig {
@@ -64,6 +66,7 @@ impl From<&ModelManifest> for JepafileConfig {
             in_chans: m.in_chans,
             audio: m.audio,
             pooling: m.pooling,
+            norm_eps: m.norm_eps,
         }
     }
 }
@@ -96,6 +99,7 @@ impl JepafileConfig {
             in_chans: self.in_chans,
             audio: self.audio,
             pooling: self.pooling,
+            norm_eps: self.norm_eps,
         })
     }
 
@@ -106,6 +110,21 @@ impl JepafileConfig {
         }
         if self.repo_id.trim().is_empty() {
             return Err(JepaError::InvalidPayload("Manifest 'repo_id' must not be empty".to_string()));
+        }
+        // Waveform encoders have no patch grid: `patch_size` is their hop in samples.
+        let waveform = self.variant == Some(VitVariant::SpeechJepa)
+            || self.audio.is_some_and(|a| a.frontend == AudioFrontend::Waveform);
+        if waveform {
+            if self.embed_dim == 0 || self.num_heads == 0 || !self.embed_dim.is_multiple_of(self.num_heads) {
+                return Err(JepaError::InvalidPayload(format!(
+                    "embed_dim ({}) must be divisible by num_heads ({})",
+                    self.embed_dim, self.num_heads
+                )));
+            }
+            if self.num_layers == 0 {
+                return Err(JepaError::InvalidPayload("num_layers must be greater than 0".to_string()));
+            }
+            return Ok(());
         }
         if self.patch_size != 14 && self.patch_size != 16 {
             return Err(JepaError::InvalidPayload(format!(
@@ -170,6 +189,7 @@ struct Verified {
     in_chans: Option<usize>,
     audio: Option<AudioSpec>,
     pooling: Pooling,
+    norm_eps: Option<f64>,
     architecture: &'static str,
     patch_size: usize,
     embed_dim: usize,
@@ -193,6 +213,7 @@ const VERIFIED: &[Verified] = &[
         in_chans: None,
         audio: None,
         pooling: Pooling::Mean,
+        norm_eps: None,
         architecture: "V-JEPA 2 ViT-L/16 (video, RoPE)",
         patch_size: 16,
         embed_dim: 1024,
@@ -212,8 +233,16 @@ const VERIFIED: &[Verified] = &[
         tubelet_size: None,
         input_width: Some(128),
         in_chans: Some(1),
-        audio: Some(AudioSpec { sample_rate: 16_000, n_mels: 128, frames: 1024, mean: -4.2677393, std: 4.5689974 }),
+        audio: Some(AudioSpec {
+            sample_rate: 16_000,
+            n_mels: 128,
+            frames: 1024,
+            mean: -4.2677393,
+            std: 4.5689974,
+            frontend: AudioFrontend::KaldiFbank,
+        }),
         pooling: Pooling::Mean,
+        norm_eps: None,
         architecture: "AudioMAE ViT-B/16 (log-mel 1024x128, AudioSet-2M)",
         patch_size: 16,
         embed_dim: 768,
@@ -226,6 +255,74 @@ const VERIFIED: &[Verified] = &[
         normalization: Normalization::ImageNet,
         mlp_ratio: 4.0,
     },
+    // Rows are mel bins (128), columns are 625-sample frames (256 = 10 s): the
+    // reference feeds `[B, 1, n_mels, T]`. PyTorch LayerNorm default epsilon.
+    Verified {
+        name: "ltuncay/Audio-JEPA-base",
+        modality: ModelModality::Audio,
+        frames: None,
+        tubelet_size: None,
+        input_width: Some(256),
+        in_chans: Some(1),
+        audio: Some(AudioSpec {
+            sample_rate: 16_000,
+            n_mels: 128,
+            frames: 256,
+            mean: 0.0,
+            std: 0.5,
+            frontend: AudioFrontend::TorchMelDb {
+                n_fft: 2048,
+                win_length: 2048,
+                hop_length: 625,
+                f_min: 0.0,
+                f_max: 8000.0,
+            },
+        }),
+        pooling: Pooling::Mean,
+        norm_eps: Some(1e-5),
+        architecture: "Audio-JEPA ViT-B/16 (log-mel 128x256, AudioSet)",
+        patch_size: 16,
+        embed_dim: 768,
+        num_layers: 12,
+        num_heads: 12,
+        image_size: 128,
+        parameter_count: "86M",
+        disk_size_bytes: 341_956_216,
+        variant: VitVariant::Plain,
+        normalization: Normalization::ImageNet,
+        mlp_ratio: 4.0,
+    },
+    // Raw waveform in, one token per 320 samples (20 ms) out: `patch_size` is that hop
+    // and `image_size` is unused. The spectrogram fields of `audio` are unused too.
+    Verified {
+        name: "labhamlet/speech-jepa-base",
+        modality: ModelModality::Audio,
+        frames: None,
+        tubelet_size: None,
+        input_width: None,
+        in_chans: Some(1),
+        audio: Some(AudioSpec {
+            sample_rate: 16_000,
+            n_mels: 0,
+            frames: 0,
+            mean: 0.0,
+            std: 1.0,
+            frontend: AudioFrontend::Waveform,
+        }),
+        pooling: Pooling::Mean,
+        norm_eps: Some(1e-6),
+        architecture: "Speech-JEPA base (wav2vec 2.0 conv + RoPE Transformer, LibriSpeech 960 h)",
+        patch_size: 320,
+        embed_dim: 768,
+        num_layers: 12,
+        num_heads: 12,
+        image_size: 1,
+        parameter_count: "90M",
+        disk_size_bytes: 358_632_360,
+        variant: VitVariant::SpeechJepa,
+        normalization: Normalization::ImageNet,
+        mlp_ratio: 4.0,
+    },
     Verified {
         name: "facebook/ijepa_vith14_1k",
         modality: ModelModality::Image,
@@ -235,6 +332,7 @@ const VERIFIED: &[Verified] = &[
         in_chans: None,
         audio: None,
         pooling: Pooling::Mean,
+        norm_eps: None,
         architecture: "I-JEPA ViT-H/14 (ImageNet-1k)",
         patch_size: 14,
         embed_dim: 1280,
@@ -256,6 +354,7 @@ const VERIFIED: &[Verified] = &[
         in_chans: None,
         audio: None,
         pooling: Pooling::Mean,
+        norm_eps: None,
         architecture: "I-JEPA ViT-H/14 (ImageNet-22k)",
         patch_size: 14,
         embed_dim: 1280,
@@ -277,6 +376,7 @@ const VERIFIED: &[Verified] = &[
         in_chans: None,
         audio: None,
         pooling: Pooling::Cls,
+        norm_eps: None,
         architecture: "DINOv2 ViT-S/14",
         patch_size: 14,
         embed_dim: 384,
@@ -298,6 +398,7 @@ const VERIFIED: &[Verified] = &[
         in_chans: None,
         audio: None,
         pooling: Pooling::Cls,
+        norm_eps: None,
         architecture: "DINOv2 ViT-B/14",
         patch_size: 14,
         embed_dim: 768,
@@ -319,6 +420,7 @@ const VERIFIED: &[Verified] = &[
         in_chans: None,
         audio: None,
         pooling: Pooling::Cls,
+        norm_eps: None,
         architecture: "ViT-B/16 (ImageNet-21k+1k)",
         patch_size: 16,
         embed_dim: 768,
@@ -340,6 +442,7 @@ const VERIFIED: &[Verified] = &[
         in_chans: None,
         audio: None,
         pooling: Pooling::Cls,
+        norm_eps: None,
         architecture: "ViT-B/16 AugReg (ImageNet-21k)",
         patch_size: 16,
         embed_dim: 768,
@@ -381,6 +484,7 @@ pub fn get_verified_manifests() -> Vec<ModelManifest> {
             in_chans: v.in_chans,
             audio: v.audio,
             pooling: Some(v.pooling),
+            norm_eps: v.norm_eps,
         })
         .collect()
 }

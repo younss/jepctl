@@ -33,6 +33,9 @@ pub enum VitVariant {
     /// 3D tubelet embedding + rotary attention, no CLS (V-JEPA 2). Not a 2D backbone:
     /// handled by [`crate::engine::vjepa2::VJepa2Model`].
     VJepa2,
+    /// wav2vec 2.0 conv feature encoder + post-norm RoPE Transformer over raw audio
+    /// (Speech-JEPA). Not a ViT: handled by [`crate::engine::speech_jepa::SpeechJepaModel`].
+    SpeechJepa,
 }
 
 impl VitVariant {
@@ -70,6 +73,8 @@ pub struct VitConfig {
     pub mlp_ratio: f64,
     pub variant: VitVariant,
     pub pooling: Pooling,
+    /// LayerNorm epsilon of every norm in the backbone.
+    pub norm_eps: f64,
 }
 
 /// 2D Patch embedding module using convolution
@@ -186,7 +191,14 @@ pub struct Block {
 }
 
 impl Block {
-    pub fn new(embed_dim: usize, num_heads: usize, mlp_ratio: f64, layer_scale: bool, vb: VarBuilder) -> Result<Self> {
+    pub fn new(
+        embed_dim: usize,
+        num_heads: usize,
+        mlp_ratio: f64,
+        layer_scale: bool,
+        norm_eps: f64,
+        vb: VarBuilder,
+    ) -> Result<Self> {
         let hidden_dim = (embed_dim as f64 * mlp_ratio) as usize;
         let (ls1, ls2) = if layer_scale {
             (
@@ -197,9 +209,9 @@ impl Block {
             (None, None)
         };
         Ok(Self {
-            norm1: layer_norm(embed_dim, 1e-6, vb.pp("norm1"))?,
+            norm1: layer_norm(embed_dim, norm_eps, vb.pp("norm1"))?,
             attn: Attention::new(embed_dim, num_heads, vb.pp("attn"))?,
-            norm2: layer_norm(embed_dim, 1e-6, vb.pp("norm2"))?,
+            norm2: layer_norm(embed_dim, norm_eps, vb.pp("norm2"))?,
             mlp: Mlp::new(embed_dim, hidden_dim, vb.pp("mlp"))?,
             ls1,
             ls2,
@@ -248,10 +260,17 @@ impl VitBackbone {
         let blocks_vb = vb.pp("blocks");
         let blocks = (0..cfg.depth)
             .map(|i| {
-                Block::new(cfg.embed_dim, cfg.num_heads, cfg.mlp_ratio, cfg.variant.has_layer_scale(), blocks_vb.pp(i))
+                Block::new(
+                    cfg.embed_dim,
+                    cfg.num_heads,
+                    cfg.mlp_ratio,
+                    cfg.variant.has_layer_scale(),
+                    cfg.norm_eps,
+                    blocks_vb.pp(i),
+                )
             })
             .collect::<Result<Vec<_>>>()?;
-        let norm = layer_norm(cfg.embed_dim, 1e-6, vb.pp("norm"))?;
+        let norm = layer_norm(cfg.embed_dim, cfg.norm_eps, vb.pp("norm"))?;
 
         let cls_token = if cfg.variant.has_cls() {
             Some(vb.get_with_hints((1, 1, cfg.embed_dim), "cls_token", candle_nn::Init::Const(0.0))?)
@@ -449,6 +468,24 @@ fn candidate_sources(target: &str) -> Vec<Source> {
             }
         }
     }
+    // Audio-JEPA exports (`AudioEmbeddingModel`) nest the timm encoder under
+    // `adapter.encoder.` and the timm patch embedding under `adapter.patch_embed.`.
+    let nested: Vec<Source> = out
+        .iter()
+        .filter_map(|s| match s {
+            Source::Named(n) if n.starts_with("blocks.") || n.starts_with("norm.") => {
+                Some(Source::Named(format!("adapter.encoder.{n}")))
+            }
+            Source::Named(n) if n.starts_with("patch_embed.") => {
+                Some(Source::Named(format!("adapter.patch_embed.{n}")))
+            }
+            Source::FusedQkv { name, index } => {
+                Some(Source::FusedQkv { name: format!("adapter.encoder.{name}"), index: *index })
+            }
+            _ => None,
+        })
+        .collect();
+    out.extend(nested);
     out
 }
 
@@ -581,6 +618,7 @@ pub fn load_safetensors_into_backbone(
         "embeddings.position_embeddings",
         "vit.embeddings.position_embeddings",
         "dinov2.embeddings.position_embeddings",
+        "adapter.encoder.pos_embed",
     ];
     let mut pos_embed_loaded = false;
     if let Some(ckpt_pos) = pos_names.iter().find_map(|n| mmap.load(n, device).ok()) {
@@ -674,6 +712,7 @@ mod tests {
             mlp_ratio: 4.0,
             variant,
             pooling: if variant.has_cls() { Pooling::Cls } else { Pooling::Mean },
+            norm_eps: 1e-6,
         }
     }
 
@@ -693,7 +732,7 @@ mod tests {
                 VitVariant::Plain => 2 + 2 + 16,
                 VitVariant::Cls => 2 + 2 + 16 + 1,
                 VitVariant::DinoV2 => 2 + 2 + 16 + 1 + 2,
-                VitVariant::VJepa2 => unreachable!("not a 2D backbone"),
+                VitVariant::VJepa2 | VitVariant::SpeechJepa => unreachable!("not a 2D backbone"),
             };
             assert_eq!(n_vars, expected, "{variant:?}");
         }

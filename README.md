@@ -5,7 +5,7 @@
 
 `jepctl` is to **representation-learning encoders** what Ollama is to LLMs: a single pure-Rust binary that pulls a checkpoint from Hugging Face, runs it locally (Metal, CUDA or CPU), and exposes it through a CLI, a REST/SSE API and an embedded desktop testbench.
 
-It targets *non-generative* encoders whose output is an embedding, not text: **I-JEPA**, **V-JEPA 2**, **DINOv2**, plain **ViT** for images and video, **AudioMAE** for audio. On top of raw embeddings it ships:
+It targets *non-generative* encoders whose output is an embedding, not text: **I-JEPA**, **V-JEPA 2**, **DINOv2**, plain **ViT** for images and video, **Audio-JEPA**, **Speech-JEPA** and **AudioMAE** for audio. On top of raw embeddings it ships:
 
 - an explainable **few-shot gesture sandbox**: register a few reference poses from your webcam, then watch, frame by frame, *why* the model does or does not recognise them;
 - a **robot twin**: a 6 DOF arm that learns a latent world model from what the camera sees and plans inside it, previewed in WebGL and gated before it touches hardware.
@@ -49,6 +49,8 @@ Every entry below has been loaded end-to-end with **100 % checkpoint coverage** 
 | Model | Family | Dim | Params | Input | Pooled output | Notes |
 |---|---|---|---|---|---|---|
 | `facebook/vjepa2-vitl-fpc64-256` | **V-JEPA 2** ViT-L/16 (video) | 1024 | 300M | 16 frames x 256 px, ImageNet norm | mean of space-time tokens | 3D tubelets + 3D RoPE; about 0.9 s per clip on Apple Silicon, about 10 s on CPU |
+| `ltuncay/Audio-JEPA-base` | **Audio-JEPA** ViT-B/16 (audio) | 768 | 86M | 10 s log-mel 128x256 @ 16 kHz | mean of patches | torchaudio mel front-end built in, checked against the filterbank stored in the checkpoint; **PyTorch parity** (see Verification); MIT |
+| `labhamlet/speech-jepa-base` | **Speech-JEPA** (speech) | 768 | 90M | raw 16 kHz waveform, up to 30 s | mean of 20 ms frames | wav2vec 2.0 conv encoder + RoPE Transformer, LibriSpeech; **PyTorch parity**; BSD-3-Clause |
 | `gaunernst/vit_base_patch16_1024_128.audiomae_as2m` | **AudioMAE** ViT-B/16 (audio) | 768 | 86M | 10.24 s log-mel 1024x128 @ 16 kHz | mean of patches | Kaldi fbank front-end built in; CC-BY-4.0 |
 | `facebook/ijepa_vith14_1k` | I-JEPA ViT-H/14 | 1280 | 632M | 224, ImageNet norm | mean of patches | the reference JEPA encoder |
 | `facebook/ijepa_vith14_22k` | I-JEPA ViT-H/14 | 1280 | 632M | 224, ImageNet norm | mean of patches | IN-22k pre-training |
@@ -61,11 +63,13 @@ DINOv2 checkpoints ship a 37×37 positional grid (518 px); it is bicubically res
 
 V-JEPA 2's predictor is ignored (encoder only). AudioMAE pools by **mean**: its CLS token was never trained as a summary and yields identical vectors for every input.
 
-Anything else can be tried through a custom [Jepafile](#jepafile-custom-models); if its layout is not one of the five the loader understands (HF ViT/I-JEPA, HF DINOv2, HF V-JEPA 2, timm/Meta fused-QKV, AudioMAE), loading fails with the list of missing tensors.
+Anything else can be tried through a custom [Jepafile](#jepafile-custom-models); if its layout is not one the loader understands (HF ViT/I-JEPA, HF DINOv2, HF V-JEPA 2, timm/Meta fused-QKV, AudioMAE, Audio-JEPA exports, Speech-JEPA), loading fails with the list of missing tensors.
 
 ### Verification
 
-Each catalog entry was pulled and loaded (`weights.loaded == weights.expected`), embedded twice for determinism, and compared across clearly different inputs. Implementations follow the reference code line by line (see `docs/ARCHITECTURE.md`), including V-JEPA 2's tiled-sin/interleaved-rotation quirk and Kaldi's Povey window. What has **not** been done: a bit-for-bit comparison with PyTorch outputs, because this repository has no Python dependency. If you run one, please open an issue with the numbers.
+Each catalog entry was pulled and loaded (`weights.loaded == weights.expected`), embedded twice for determinism, and compared across clearly different inputs. Implementations follow the reference code line by line (see `docs/ARCHITECTURE.md`), including V-JEPA 2's tiled-sin/interleaved-rotation quirk and Kaldi's Povey window. The two newest audio entries are also checked **numerically** against an independent PyTorch implementation written from the published model code (`scripts/parity/`, optional, needs `torch`): Speech-JEPA matches to a relative error of 2e-7 on speech; Audio-JEPA to cosine 0.999998 / relative error 2e-3 on 10 s of speech and 2e-6 on noise. The residual on Audio-JEPA comes from the dB scale amplifying float32 rounding in near-empty mel bands (torch float32 and float64 already differ by up to 0.12 dB there). The other entries have not been compared with PyTorch outputs yet; if you run one, please open an issue with the numbers.
+
+Audio input windows: Audio-JEPA embeds exactly 10 s (shorter clips are zero padded, longer ones cropped; the reference encodes only the real frames of a short clip and averages 10 s windows of a long one). Speech-JEPA embeds the clip at its own length, up to 30 s. Its mean-pooled vectors sit very close together (cosine about 0.99 between different sentences): it is a frame-level speech model, so for sounds prefer Audio-JEPA, and rely on the contrastive scoring for speech.
 
 ### Inputs
 
@@ -143,7 +147,7 @@ All endpoints live under `/api`. With authentication enabled (the default) send 
 
 ### Microphone and sounds
 
-An audio model (AudioMAE) loads into its own slot next to the vision model, so the camera and the microphone can be watched at the same time; `/api/status` reports both (`active_model`, `audio_model`). Sounds are few-shot prototypes exactly like gestures, embedded from the last 1.5 s of microphone audio (zero padded to the model window).
+An audio model (Audio-JEPA, Speech-JEPA or AudioMAE) loads into its own slot next to the vision model, so the camera and the microphone can be watched at the same time; `/api/status` reports both (`active_model`, `audio_model`). Sounds are few-shot prototypes exactly like gestures, embedded from the last 1.5 s of microphone audio (zero padded to the model window).
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
@@ -333,7 +337,7 @@ scope turns yellow when a taught sound fires. The steps below are the manual pat
 ### How it works
 
 - **Eyes**: the camera frame is embedded by the vision model (same centre crop, ROI and normalisation as the Gestures tab) and scored against every taught pose with the gesture matcher (contrastive scoring, threshold, margin), about 3 times a second.
-- **Ears**: the last 1.5 s of microphone audio are resampled to 16 kHz, turned into a log-mel spectrogram, zero padded to the model window and embedded by AudioMAE, then scored against the taught sounds, about 1.4 times a second. A registered neutral sound absorbs silence.
+- **Ears**: the last 1.5 s of microphone audio are resampled to 16 kHz, turned into the audio model's input (a log-mel spectrogram zero padded to the model window, or the raw waveform for Speech-JEPA) and embedded, then scored against the taught sounds, about 1.4 times a second. A registered neutral sound absorbs silence.
 - **Attention**: a 32x24 grayscale thumbnail of each frame is diffed with the previous one (10 Hz); the centroid of the changed pixels drives the head's pan and tilt.
 - **Mirror**: every pose lesson gets a softmax weight from its match score (temperature 0.06; more than 0.2 below the best gets nothing; under a score of 0.35 nothing moves). The body goes to the weighted average, so between "arm down" and "arm up" it passes through the middle as you raise yours. It interpolates between what you taught; it does not extrapolate.
 - **Body**: a 30 Hz loop moves the pose toward its target under a speed limit, runs animations as time envelopes (nod, shake, wave left/right, cheer, dance, startle, sleep, acknowledge), adds idle breathing and blinks, and publishes telemetry on `/api/companion/ws`; the WebGL view draws it.
@@ -448,8 +452,8 @@ src/
 
 ## Roadmap
 
-- **Audio-JEPA**: the audio modality is in place (front-end, rectangular ViT, catalog), but no Audio-JEPA checkpoint is published in a loadable format today (`ltuncay/Audio-JEPA` is a PyTorch Lightning pickle). AudioMAE is the verified audio encoder; an Audio-JEPA safetensors release would be a manifest entry away.
-- Numerical parity tests against PyTorch reference outputs (needs a contributor with a Python environment, see Verification).
+- Numerical parity scripts for the vision entries and AudioMAE, like the ones in `scripts/parity/` for Audio-JEPA and Speech-JEPA.
+- **H-JEPA** (hierarchical world model, arXiv 2610.06805) as a learned planner for the Robot Twin: see `docs/H-JEPA.md` for the study.
 - Larger V-JEPA 2 variants (`vith`, `vitg`) once someone can verify memory and latency on their hardware.
 - Native H.264 decoding without `ffmpeg`, if a dependable pure-Rust decoder appears.
 - Running the serial robot backend against a real SO-100 arm (the protocol is frame-tested only).

@@ -111,6 +111,32 @@ The front-end follows Kaldi `fbank` as used by AudioMAE/AST: 25 ms Povey window
 pre-training objective never trains as a summary; reading it out yields the same vector for
 every input (observed: cosine 1.000 between a tone, a chirp and noise). AudioMAE pools by mean.
 
+**Audio-JEPA** (`ltuncay/Audio-JEPA-base`) uses the same backbone (`Plain`, no CLS) with a
+different front-end, selected by `audio.frontend` in the manifest (`torch_mel_db`):
+`torchaudio.transforms.MelSpectrogram(normalized=True)` then `AmplitudeToDB`. 2048-point FFT
+with a periodic Hann window, centred reflect padding, 625-sample hop, 128 HTK mel bins
+(2595·log10(1 + f/700), no area normalisation) from 0 to 8 kHz, power divided by Σw²,
+`10·log10(max(x, 1e-10))`, no dataset statistics. The spectrogram is laid out with **mel bins
+on rows** (`[1, 1, 128, 256]`, 10 s), as the reference feeds it, and the sin-cos positional
+table is read from the checkpoint. LayerNorms use PyTorch's ε = 1e-5 (`norm_eps` in the
+manifest). The export nests the timm encoder under `adapter.`; the loader maps it.
+
+The export also stores the mel filterbank and the STFT window as buffers. At load time
+`check_frontend_against_checkpoint` recomputes both and refuses the model if they differ by
+more than 1e-4 (observed 1.4e-5, torch builds the filters in float32): the spectrogram is the
+one part the weight-coverage contract cannot see.
+
+### 2.5b Speech-JEPA (`engine/speech_jepa.rs`)
+
+Not a ViT: its own struct, dispatched on `variant: speechjepa`. The raw 16 kHz waveform is
+normalised per utterance (`(x − mean)/sqrt(var + 1e-7)`, as `Wav2Vec2FeatureExtractor`), goes
+through the wav2vec 2.0 conv encoder (7 bias-free Conv1d, GELU, per-channel GroupNorm after
+the first; one token per 320 samples), a `LayerNorm → Linear → LayerNorm` projection, then
+12 **post-norm** layers `LN(x + attn(x))`, `LN(h + ffn(h))` (ε = 1e-6) with interleaved-pair
+RoPE (θ = 10000) on queries and keys. No final norm; pooled = mean over frames. Clips keep
+their own length up to 30 s (attention is quadratic in frames). `masked_spec_embed` is a
+pre-training artefact and is not loaded (207 of the 208 tensors).
+
 ### 2.6 Clip and audio decoding (`media/video.rs`, `media/audio.rs`)
 
 GIF, animated WebP and WAV are decoded in Rust. MP4/WebM and MP3/FLAC/OGG are decoded by an
@@ -323,10 +349,12 @@ not download gigabytes of weights.
 
 ## 6. Known limitations
 
-- No numerical parity test against PyTorch: implementations follow the reference code and
-  are checked for determinism and discrimination on synthetic inputs. A contributor with a
-  Python environment can close this gap (CONTRIBUTING → verification).
+- Numerical parity with PyTorch is measured for Audio-JEPA and Speech-JEPA only
+  (`scripts/parity/`, see README → Verification). The other implementations follow the
+  reference code and are checked for determinism and discrimination on synthetic inputs.
 - V-JEPA 2 on CPU takes ≈10 s per 16-frame clip; the live stream then emits one event per
   clip. Metal/CUDA are the intended targets for video.
-- Audio has no live capture yet (files only); Audio-JEPA has no loadable public checkpoint.
+- Audio-JEPA zero-pads clips shorter than its 10 s window; the reference encodes only the
+  real frames (with a quirk: positions index the 8×16 grid as if it were 1D). Live sounds
+  (1.5 s) are therefore mostly padding for Audio-JEPA and AudioMAE.
 - The desktop window (`tao` + `wry`) is a thin WebView over the same HTTP UI.

@@ -216,24 +216,60 @@ pub struct ModelManifest {
     /// Pooled-output read-out (`cls` or `mean`). Default: `cls` for CLS backbones, else `mean`.
     #[serde(default)]
     pub pooling: Option<crate::engine::vit::Pooling>,
+    /// LayerNorm epsilon. Default 1e-6 (timm, HF ViT); PyTorch `nn.LayerNorm` uses 1e-5.
+    #[serde(default)]
+    pub norm_eps: Option<f64>,
 }
 
-/// Log-mel front-end parameters (Kaldi fbank conventions, as used by AudioMAE / AST).
+/// Which log-mel recipe turns a waveform into the model's input.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AudioFrontend {
+    /// Kaldi `fbank` (AudioMAE / AST): 25 ms Povey window, 10 ms hop, natural log,
+    /// `(x - mean) / (2 std)`. Input `[1, 1, frames, n_mels]` (time on rows).
+    #[default]
+    KaldiFbank,
+    /// `torchaudio.transforms.MelSpectrogram(normalized=True)` + `AmplitudeToDB`
+    /// (Audio-JEPA): periodic Hann window, centred reflect padding, HTK mel scale
+    /// without area normalisation, `10 log10(max(x, 1e-10))`, no dataset statistics.
+    /// Input `[1, 1, n_mels, frames]` (mel bins on rows).
+    TorchMelDb { n_fft: usize, win_length: usize, hop_length: usize, f_min: f32, f_max: f32 },
+    /// The raw waveform, normalised per utterance (Speech-JEPA). No spectrogram.
+    Waveform,
+}
+
+impl AudioFrontend {
+    /// Whether the spectrogram is laid out with mel bins on rows (`[n_mels, frames]`).
+    pub fn mel_rows(self) -> bool {
+        matches!(self, AudioFrontend::TorchMelDb { .. })
+    }
+}
+
+/// Log-mel front-end parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct AudioSpec {
     pub sample_rate: u32,
     pub n_mels: usize,
-    /// Number of 10 ms frames the model expects (time axis, rows).
+    /// Number of spectrogram frames the model expects (time axis).
     pub frames: usize,
-    /// Dataset mean/std applied as `(fbank - mean) / (2 * std)`.
+    /// Dataset mean/std applied as `(fbank - mean) / (2 * std)` (Kaldi front-end only).
     pub mean: f32,
     pub std: f32,
+    #[serde(default)]
+    pub frontend: AudioFrontend,
 }
 
 impl Default for AudioSpec {
     fn default() -> Self {
         // AudioMAE / AST defaults (AudioSet statistics).
-        Self { sample_rate: 16_000, n_mels: 128, frames: 1024, mean: -4.2677393, std: 4.5689974 }
+        Self {
+            sample_rate: 16_000,
+            n_mels: 128,
+            frames: 1024,
+            mean: -4.2677393,
+            std: 4.5689974,
+            frontend: AudioFrontend::KaldiFbank,
+        }
     }
 }
 
@@ -245,7 +281,9 @@ impl ModelManifest {
             return v;
         }
         let n = self.name.to_ascii_lowercase();
-        if n.contains("vjepa2") || self.modality == ModelModality::Video {
+        if n.contains("speech-jepa") || self.audio.is_some_and(|a| a.frontend == AudioFrontend::Waveform) {
+            VitVariant::SpeechJepa
+        } else if n.contains("vjepa2") || self.modality == ModelModality::Video {
             VitVariant::VJepa2
         } else if n.contains("audiomae") || n.contains("ast") && self.modality == ModelModality::Audio {
             VitVariant::Cls
@@ -275,6 +313,10 @@ impl ModelManifest {
 
     pub fn mlp_ratio(&self) -> f64 {
         self.mlp_ratio.unwrap_or(4.0)
+    }
+
+    pub fn norm_eps(&self) -> f64 {
+        self.norm_eps.unwrap_or(1e-6)
     }
 
     /// Pooling read-out, explicit or inferred. MAE-style encoders keep a CLS token that

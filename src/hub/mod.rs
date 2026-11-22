@@ -281,6 +281,7 @@ mod tests {
             in_chans: None,
             audio: None,
             pooling: None,
+            norm_eps: None,
         };
 
         catalog.register_jepafile(custom_jepafile).unwrap();

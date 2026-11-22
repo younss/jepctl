@@ -95,6 +95,7 @@ mod tests {
             in_chans: None,
             audio: None,
             pooling: None,
+            norm_eps: None,
         };
         let err = IJepaModel::load(manifest, Path::new("/nonexistent/model.safetensors"), Device::Cpu)
             .err()
@@ -127,6 +128,7 @@ mod tests {
             in_chans: None,
             audio: None,
             pooling: None,
+            norm_eps: None,
         };
 
         let device = Device::Cpu;

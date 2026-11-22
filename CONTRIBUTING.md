@@ -81,9 +81,10 @@ More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Verifying numerics against PyTorch (wanted)
 
-Nothing here depends on Python, so parity with the reference implementations is checked
-structurally, not bit-for-bit. If you have `torch` + `transformers`/`timm`, the most valuable
-contribution is a script that embeds the same file with both and reports max abs error for
+Nothing in the build depends on Python. `scripts/parity/` holds optional PyTorch reference
+implementations for Audio-JEPA and Speech-JEPA (they read the checkpoint and the JSON written
+by `jepctl embed --format json`, and print cosine and relative error). The same kind of
+script is still wanted, reporting max abs error, for
 I-JEPA, DINOv2, V-JEPA 2 (`VJEPA2Model(...).encoder` mean over tokens, 16 frames at 256 px)
 and AudioMAE (`torchaudio.compliance.kaldi.fbank` front-end). Open an issue with the numbers.
 

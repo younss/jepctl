@@ -4,6 +4,7 @@ pub mod audio;
 pub mod device;
 pub mod ijepa;
 pub mod scene_predictor;
+pub mod speech_jepa;
 pub mod vit;
 pub mod vjepa2;
 
@@ -16,7 +17,8 @@ use tokio::sync::RwLock;
 
 use crate::engine::audio::AudioModel;
 use crate::engine::ijepa::IJepaModel;
-use crate::engine::vit::{VitBackbone, VitConfig, load_safetensors_into_backbone};
+use crate::engine::speech_jepa::SpeechJepaModel;
+use crate::engine::vit::{VitBackbone, VitConfig, VitVariant, load_safetensors_into_backbone};
 use crate::engine::vjepa2::VJepa2Model;
 use crate::types::{HardwareInfo, JepaError, ModelManifest, ModelModality, Preprocessing, WeightReport};
 
@@ -33,6 +35,7 @@ pub(crate) fn vit_config(manifest: &ModelManifest) -> VitConfig {
         mlp_ratio: manifest.mlp_ratio(),
         variant: manifest.backbone_variant(),
         pooling: manifest.pooling(),
+        norm_eps: manifest.norm_eps(),
     }
 }
 
@@ -180,6 +183,45 @@ impl JepaModelTrait for AudioModel {
     }
 }
 
+impl JepaModelTrait for SpeechJepaModel {
+    fn name(&self) -> &str {
+        &self.manifest.name
+    }
+
+    fn modality(&self) -> ModelModality {
+        ModelModality::Audio
+    }
+
+    fn dimension(&self) -> usize {
+        self.manifest.embed_dim
+    }
+
+    fn weight_report(&self) -> WeightReport {
+        self.weights.clone()
+    }
+
+    fn preprocessing(&self) -> Preprocessing {
+        self.manifest.preprocessing()
+    }
+
+    fn clip_frames(&self) -> usize {
+        1
+    }
+
+    fn embed_image(&self, _img: &Tensor) -> Result<ImageEmbedding, JepaError> {
+        Err(JepaError::InvalidPayload(format!("'{}' is an audio model: send WAV/MP3/FLAC/OGG", self.manifest.name)))
+    }
+
+    fn embed_video(&self, _vid: &Tensor) -> Result<ImageEmbedding, JepaError> {
+        Err(JepaError::InvalidPayload(format!("'{}' is an audio model: send WAV/MP3/FLAC/OGG", self.manifest.name)))
+    }
+
+    fn embed_audio(&self, clip: &crate::media::audio::AudioClip) -> Result<ImageEmbedding, JepaError> {
+        let (pooled, frames, latency) = self.embed_clip(clip)?;
+        Ok((pooled, Some(frames), latency))
+    }
+}
+
 impl JepaModelTrait for IJepaModel {
     fn name(&self) -> &str {
         &self.manifest.name
@@ -299,6 +341,9 @@ impl EngineManager {
             tokio::task::spawn_blocking(move || -> Result<Box<dyn JepaModelTrait>, JepaError> {
                 Ok(match manifest.modality {
                     ModelModality::Video => Box::new(VJepa2Model::load(manifest, &path, device)?),
+                    ModelModality::Audio if manifest.backbone_variant() == VitVariant::SpeechJepa => {
+                        Box::new(SpeechJepaModel::load(manifest, &path, device)?)
+                    }
                     ModelModality::Audio => Box::new(AudioModel::load(manifest, &path, device)?),
                     ModelModality::Image => Box::new(IJepaModel::load(manifest, &path, device)?),
                     other => {

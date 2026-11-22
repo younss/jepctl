@@ -368,6 +368,7 @@ mod tests {
             in_chans: None,
             audio: None,
             pooling: None,
+            norm_eps: None,
         }
     }
 

@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Audio-JEPA** (`ltuncay/Audio-JEPA-base`, MIT) in the verified catalog: torchaudio mel front-end (`audio.frontend: torch_mel_db`, mel bins on rows), loader mapping for the `adapter.` export layout, and a load-time check that the computed filterbank and window match the buffers stored in the checkpoint.
+- **Speech-JEPA** (`labhamlet/speech-jepa-base`, BSD-3-Clause): new `engine/speech_jepa.rs` (wav2vec 2.0 conv encoder, post-norm RoPE Transformer) on the raw waveform (`audio.frontend: waveform`, `variant: speechjepa`).
+- `norm_eps` manifest field (LayerNorm ε; default 1e-6, Audio-JEPA uses 1e-5).
+- `scripts/parity/`: optional PyTorch reference implementations for both new models. Measured: Speech-JEPA relative error 2e-7; Audio-JEPA cosine 0.999998 on speech.
+- `docs/H-JEPA.md`: study of H-JEPA (hierarchical world models) as a planner for the Robot Twin.
+
+### Fixed
+- Docs no longer claim that no Audio-JEPA checkpoint can be loaded.
+
 ## [0.4.0]: 2026-09-22
 
 ### Changed

@@ -8,6 +8,9 @@
 //!   between 20 Hz and Nyquist, natural log with a floor of `f32::EPSILON`, then
 //!   dataset normalisation `(fbank - mean) / (2 * std)` after zero-padding to the
 //!   model's frame count.
+//! - Audio-JEPA uses `torchaudio.transforms.MelSpectrogram` + `AmplitudeToDB` instead
+//!   ([`torch_log_mel_db`]); its filterbank and window are checked against the copies
+//!   stored in the checkpoint when the model loads.
 //!
 //! Numerical parity with torchaudio has been checked structurally (same steps and
 //! constants), not bit-for-bit: see docs/ARCHITECTURE.md.
@@ -17,7 +20,7 @@ use std::process::Command;
 
 use candle_core::{Device, Tensor};
 
-use crate::types::{AudioSpec, JepaError};
+use crate::types::{AudioFrontend, AudioSpec, JepaError};
 
 /// Mono PCM samples in `[-1, 1]` at a known rate.
 #[derive(Debug, Clone)]
@@ -292,9 +295,114 @@ pub fn log_mel_fbank(samples: &[f32], sample_rate: u32, n_mels: usize) -> Vec<Ve
     out
 }
 
-/// Full front-end: resample, filterbank, zero-pad/crop to `spec.frames`, normalise,
-/// and return `[1, 1, frames, n_mels]`.
+fn hz_to_mel_htk(f: f64) -> f64 {
+    2595.0 * (1.0 + f / 700.0).log10()
+}
+
+fn mel_to_hz_htk(m: f64) -> f64 {
+    700.0 * (10f64.powf(m / 2595.0) - 1.0)
+}
+
+/// `torchaudio.functional.melscale_fbanks(norm=None, mel_scale="htk")`: triangular
+/// filters over `n_fft / 2 + 1` bins, laid out `[n_freqs][n_mels]` like torchaudio.
+pub fn htk_mel_filterbank(n_fft: usize, n_mels: usize, f_min: f32, f_max: f32, sample_rate: u32) -> Vec<Vec<f32>> {
+    let n_freqs = n_fft / 2 + 1;
+    // torchaudio: torch.linspace(0, sample_rate // 2, n_freqs)
+    let top = (sample_rate / 2) as f64;
+    let (m_min, m_max) = (hz_to_mel_htk(f_min as f64), hz_to_mel_htk(f_max as f64));
+    let f_pts: Vec<f64> =
+        (0..n_mels + 2).map(|i| mel_to_hz_htk(m_min + (m_max - m_min) * i as f64 / (n_mels + 1) as f64)).collect();
+    (0..n_freqs)
+        .map(|k| {
+            let f = top * k as f64 / (n_freqs - 1) as f64;
+            (0..n_mels)
+                .map(|m| {
+                    let down = (f - f_pts[m]) / (f_pts[m + 1] - f_pts[m]);
+                    let up = (f_pts[m + 2] - f) / (f_pts[m + 2] - f_pts[m + 1]);
+                    down.min(up).max(0.0) as f32
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// `torch.hann_window(n)` (periodic).
+pub fn periodic_hann(n: usize) -> Vec<f32> {
+    (0..n).map(|i| (0.5 - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / n as f64).cos()) as f32).collect()
+}
+
+/// `MelSpectrogram(center=True, pad_mode="reflect", normalized=True, power=2)` followed
+/// by `AmplitudeToDB()`: `[frames][n_mels]` in dB. `filters` is `[n_fft/2 + 1][n_mels]`.
+pub fn torch_log_mel_db(
+    samples: &[f32],
+    n_fft: usize,
+    hop: usize,
+    window: &[f32],
+    filters: &[Vec<f32>],
+) -> Result<Vec<Vec<f32>>, JepaError> {
+    let pad = n_fft / 2;
+    let n = samples.len();
+    if n <= pad {
+        return Err(JepaError::InvalidPayload(format!("Audio is shorter than {pad} samples (half an FFT window)")));
+    }
+    // Reflect padding excludes the edge sample, as torch.nn.functional.pad(mode="reflect").
+    let mut padded = Vec::with_capacity(n + 2 * pad);
+    padded.extend((0..pad).map(|i| samples[pad - i]));
+    padded.extend_from_slice(samples);
+    padded.extend((0..pad).map(|i| samples[n - 2 - i]));
+
+    // A window shorter than n_fft is centred in the frame (torch.stft).
+    let offset = (n_fft - window.len()) / 2;
+    let norm2: f32 = window.iter().map(|w| w * w).sum();
+    let num_frames = 1 + (padded.len() - n_fft) / hop;
+    let half = n_fft / 2;
+    let n_mels = filters.first().map_or(0, Vec::len);
+
+    let mut re = vec![0f32; n_fft];
+    let mut im = vec![0f32; n_fft];
+    let mut out = Vec::with_capacity(num_frames);
+    for f in 0..num_frames {
+        let frame = &padded[f * hop..f * hop + n_fft];
+        re.iter_mut().for_each(|v| *v = 0.0);
+        im.iter_mut().for_each(|v| *v = 0.0);
+        for (i, w) in window.iter().enumerate() {
+            re[offset + i] = frame[offset + i] * w;
+        }
+        fft(&mut re, &mut im);
+        let mut row = vec![0f32; n_mels];
+        for (k, taps) in filters.iter().enumerate().take(half + 1) {
+            let power = (re[k] * re[k] + im[k] * im[k]) / norm2;
+            for (acc, w) in row.iter_mut().zip(taps) {
+                *acc += power * w;
+            }
+        }
+        row.iter_mut().for_each(|v| *v = 10.0 * v.max(1e-10).log10());
+        out.push(row);
+    }
+    Ok(out)
+}
+
+/// Full front-end: resample, spectrogram, zero-pad/crop to `spec.frames`, normalise.
+/// Returns `[1, 1, frames, n_mels]` for the Kaldi front-end and `[1, 1, n_mels, frames]`
+/// for the torchaudio one (see [`crate::types::AudioFrontend`]).
 pub fn clip_to_spectrogram_tensor(clip: &AudioClip, spec: &AudioSpec, device: &Device) -> Result<Tensor, JepaError> {
+    if let AudioFrontend::TorchMelDb { n_fft, win_length, hop_length, f_min, f_max } = spec.frontend {
+        let clip = resample(clip, spec.sample_rate);
+        // `frames * hop` samples give `frames + 1` centred frames; the reference drops the
+        // incomplete last patch column, so the first `frames` are kept.
+        let mut samples = clip.samples;
+        samples.resize(spec.frames * hop_length, 0.0);
+        let filters = htk_mel_filterbank(n_fft, spec.n_mels, f_min, f_max, spec.sample_rate);
+        let mel = torch_log_mel_db(&samples, n_fft, hop_length, &periodic_hann(win_length), &filters)?;
+        let mut data = vec![0f32; spec.n_mels * spec.frames];
+        for (t, row) in mel.iter().take(spec.frames).enumerate() {
+            for (m, v) in row.iter().enumerate() {
+                data[m * spec.frames + t] = *v;
+            }
+        }
+        return Ok(Tensor::from_vec(data, (1, 1, spec.n_mels, spec.frames), device)?);
+    }
+
     let clip = resample(clip, spec.sample_rate);
     let fbank = log_mel_fbank(&clip.samples, clip.sample_rate, spec.n_mels);
     if fbank.is_empty() {
@@ -392,5 +500,31 @@ mod tests {
         let v: Vec<f32> = t.flatten_all().unwrap().to_vec1().unwrap();
         let pad = v[1023 * 128];
         assert!((pad - (0.0 - spec.mean) / (2.0 * spec.std)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn torch_mel_peaks_at_the_tone_with_mel_bins_on_rows() {
+        let filters = htk_mel_filterbank(2048, 128, 0.0, 8000.0, 16_000);
+        assert_eq!((filters.len(), filters[0].len()), (1025, 128));
+        // Triangles peak at 1 on their centre frequency; none is empty at 128 bins.
+        for m in 0..128 {
+            let top = filters.iter().map(|row| row[m]).fold(0.0, f32::max);
+            assert!(top > 0.5 && top <= 1.0, "filter {m} peaks at {top}");
+        }
+
+        let clip = decode_wav(&sine_wav(1000.0, 1.0, 16_000, 16)).unwrap();
+        let frontend =
+            AudioFrontend::TorchMelDb { n_fft: 2048, win_length: 2048, hop_length: 625, f_min: 0.0, f_max: 8000.0 };
+        let spec = AudioSpec { n_mels: 128, frames: 256, mean: 0.0, std: 0.5, frontend, ..AudioSpec::default() };
+        let t = clip_to_spectrogram_tensor(&clip, &spec, &Device::Cpu).unwrap();
+        assert_eq!(t.dims(), &[1, 1, 128, 256]);
+        let v: Vec<f32> = t.flatten_all().unwrap().to_vec1().unwrap();
+        // 1000 HTK mel out of 2840 at 8 kHz: centre of bin 1000 * 129 / 2840 - 1 ≈ 44.
+        let column = |t: usize| (0..128).map(|m| v[m * 256 + t]).collect::<Vec<_>>();
+        let col = column(10);
+        let peak = col.iter().enumerate().max_by(|a, b| a.1.partial_cmp(b.1).unwrap()).unwrap().0;
+        assert!((43..=46).contains(&peak), "peak bin {peak}");
+        // After the second of audio the clip is zero-padded: AmplitudeToDB's floor.
+        assert!(column(200).iter().all(|&x| x == -100.0));
     }
 }

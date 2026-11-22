@@ -49,6 +49,7 @@ fn test_manifest() -> ModelManifest {
         in_chans: None,
         audio: None,
         pooling: None,
+        norm_eps: None,
     }
 }
 
@@ -85,9 +86,17 @@ fn audio_manifest() -> ModelManifest {
         image_size: 64,
         input_width: Some(32),
         in_chans: Some(1),
-        audio: Some(crate::types::AudioSpec { sample_rate: 16_000, n_mels: 32, frames: 64, mean: 0.0, std: 1.0 }),
+        audio: Some(crate::types::AudioSpec {
+            sample_rate: 16_000,
+            n_mels: 32,
+            frames: 64,
+            mean: 0.0,
+            std: 1.0,
+            frontend: crate::types::AudioFrontend::KaldiFbank,
+        }),
         variant: Some(crate::engine::vit::VitVariant::Cls),
         pooling: Some(crate::engine::vit::Pooling::Mean),
+        norm_eps: None,
         ..test_manifest()
     }
 }
